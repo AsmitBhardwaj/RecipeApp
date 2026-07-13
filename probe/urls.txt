@@ -1,0 +1,40 @@
+# Instagram Reel URLs to probe — one per line.
+# Blank lines and lines starting with '#' are ignored.
+#
+# >>> REPLACE the examples below with your own ~30 real Reel URLs. <<<
+# Share-sheet links (with ?igsh=... or /share/ redirects) are fine — the
+# harness resolves redirects and strips query params automatically.
+
+https://www.instagram.com/reel/DZY5qjmTtoc/?igsh=Y25pNDFkYnBtNHJy
+https://www.instagram.com/reel/DXsvETmE3KW/?igsh=d2s0ODIzZzE2ZGdq
+https://www.instagram.com/reel/DYEgniWtGhb/?igsh=ZThxb3hmaTBnajRt
+https://www.instagram.com/reel/DZsnD1byC1o/?igsh=MTJ5NzRzOHRraWwyNA==
+https://www.instagram.com/reel/DU04g7gj4WK/?igsh=bW5hajF2bXh3YThr
+https://www.instagram.com/reel/DXORjoTDVJL/?igsh=MThudGN2cG5pOW1teA==
+https://www.instagram.com/reel/DZMwQLgNJrO/?igsh=MTlzdmUwczJ0Y3ZhNw==
+https://www.instagram.com/reel/DXCgi4QCWp4/?igsh=MXcyaXkzb2k4YjZsYQ==
+https://www.instagram.com/reel/DVCo6O1ka4G/?igsh=MWZjMjVtYTFpY3F2Yw==
+https://www.instagram.com/reel/DVHc4W1Ddny/?igsh=MXY2Z29reXVyZW04dQ==
+https://www.instagram.com/reel/DXmnrDWEbbY/?igsh=ZngwZmI5YXpscno3
+https://www.instagram.com/reel/DNFYO69MqyK/?igsh=MW1kOTJtY25pbHZzdQ==
+https://www.instagram.com/reel/DW1KINCgp7k/?igsh=MWZnOW81eXl6OXhlZQ==
+https://www.instagram.com/reel/DY9nogdzAQT/?igsh=eTRkYjcxbGJmMXRy
+https://www.instagram.com/reel/DXSCulHjSq0/?igsh=dGQ3NW8zaHpsd3Qz
+https://www.instagram.com/reel/DYXM8_wRTp5/?igsh=MXZiNTB6a2QxdmwyZA==
+https://www.instagram.com/reel/DUlFYI0CX9Y/?igsh=NnE4dWZ0dXI2MWd4
+https://www.instagram.com/reel/DWcZLiZEpK4/?igsh=MWgwanRzeWhxM2VwYg==
+https://www.instagram.com/reel/DXRWfWCkc2_/?igsh=OTc0eDMybnkxcTBo
+https://www.instagram.com/reel/DWZH0zFjSvR/?igsh=Y21kc291b28zdzU3
+https://www.instagram.com/reel/DXaLtkzk8ea/?igsh=MWR6cGZucXdzc24yaw==
+https://www.instagram.com/reel/DZwrNWFvC-j/?igsh=YXM0b3JsdmoxZHVu
+https://www.instagram.com/reel/DXcGmzwCdhn/?igsh=YmZmam1leW9jMmRx
+https://www.instagram.com/reel/DXbJhMbAZjK/?igsh=djZ3aDQ1aXFkbWR2
+https://www.instagram.com/reel/DTKnsZajwz9/?igsh=NGc0OW53cHU0bWRz
+https://www.instagram.com/reel/DVBmx5kAsa2/?igsh=Mzd2Y2phZW11eWtx
+https://www.instagram.com/reel/DWPg-qAF2-D/?igsh=ZmFvaWZuaTU0Zmpq
+https://www.instagram.com/reel/DXtSq9bjbk9/?igsh=cWZ2NTJwZDdrcGNp
+https://www.instagram.com/reel/DTq_4uAD-2r/?igsh=MXV6ZnExMnlkOGJkcA==
+https://www.instagram.com/reel/DXl56wzgYRY/?igsh=NW11bnA2bTM5Ymc5
+
+
+
