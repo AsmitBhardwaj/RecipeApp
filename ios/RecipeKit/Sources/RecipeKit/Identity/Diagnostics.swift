@@ -17,6 +17,12 @@ import Foundation
 
 public enum RecipeKitDiagnostics {
 
+    /// Deletes the stored anonymous ID so a subsequent read exercises the true
+    /// first-launch (generation) path. Test-only.
+    public static func resetForTesting() {
+        try? RecipeKit.keychain.removeValue(forKey: RecipeKit.userIDAccount)
+    }
+
     /// Runs the identity checks and returns a human-readable report. Also returns
     /// an overall pass/fail so a caller can set an exit code.
     public static func identityReport() -> (report: String, passed: Bool) {
