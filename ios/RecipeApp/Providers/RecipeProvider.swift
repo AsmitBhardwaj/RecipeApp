@@ -15,6 +15,7 @@
 //
 
 import Foundation
+import RecipeKit
 
 protocol RecipeProvider {
     /// The user's saved recipes. Backed by mock data today; will be a network

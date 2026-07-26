@@ -8,6 +8,7 @@
 //
 
 import SwiftUI
+import RecipeKit
 
 struct RecipeImageView: View {
     let imageUrl: String?

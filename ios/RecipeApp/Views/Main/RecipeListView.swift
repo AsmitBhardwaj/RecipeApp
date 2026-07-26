@@ -10,6 +10,7 @@
 //
 
 import SwiftUI
+import RecipeKit
 
 struct RecipeListView: View {
     let recipeProvider: RecipeProvider

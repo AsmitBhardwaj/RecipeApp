@@ -13,6 +13,7 @@
 //
 
 import Foundation
+import RecipeKit
 
 // MARK: - Sample recipes
 

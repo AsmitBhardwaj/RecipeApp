@@ -9,6 +9,7 @@
 //
 
 import SwiftUI
+import RecipeKit
 
 /// Marks a `source_type: "generated"` recipe. Distinct accent + icon.
 struct GeneratedBadge: View {
