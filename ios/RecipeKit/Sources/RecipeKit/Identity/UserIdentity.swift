@@ -21,7 +21,7 @@ import Foundation
 enum Identity {
     static func resolveUserID(in store: SecretStore, account: String) -> String {
         // 1. Fast path: an ID already exists.
-        if let existing = try? store.string(forKey: account), let existing, !existing.isEmpty {
+        if let existing = try? store.string(forKey: account), !existing.isEmpty {
             return existing
         }
         // 2. No ID yet — try to be the one who creates it.
@@ -30,7 +30,7 @@ enum Identity {
             return candidate
         }
         // 3. Someone else added first (or a transient error): adopt the stored value.
-        if let persisted = try? store.string(forKey: account), let persisted, !persisted.isEmpty {
+        if let persisted = try? store.string(forKey: account), !persisted.isEmpty {
             return persisted
         }
         // 4. Keychain genuinely unavailable — return a usable (non-persisted) ID
