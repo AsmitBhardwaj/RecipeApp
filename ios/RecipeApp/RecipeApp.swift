@@ -22,12 +22,21 @@ struct RecipeApp: App {
         // App Group Keychain identity self-check when launched with the flag.
         let args = ProcessInfo.processInfo.arguments
         if args.contains("-runIdentityCheck") {
+            var report = ""
             if args.contains("-resetIdentity") {
                 RecipeKitDiagnostics.resetForTesting()
-                print("\n[diagnostic] reset identity (cleared stored ID)")
+                report += "[diagnostic] reset identity (cleared stored ID)\n\n"
             }
             let result = RecipeKitDiagnostics.identityReport()
-            print("\n\(result.report)\n")
+            report += result.report
+            print("\n\(report)\n")
+            // Also write into the shared App Group container so the result can be
+            // read back reliably from disk (also proves the container is usable).
+            if let dir = FileManager.default.containerURL(
+                forSecurityApplicationGroupIdentifier: AppGroup.identifier) {
+                try? report.write(to: dir.appendingPathComponent("identity_report.txt"),
+                                  atomically: true, encoding: .utf8)
+            }
         }
         #endif
     }
