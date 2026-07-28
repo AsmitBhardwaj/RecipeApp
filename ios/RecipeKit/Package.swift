@@ -9,7 +9,10 @@ import PackageDescription
 // scoped to identity + one source of truth for the models.
 let package = Package(
     name: "RecipeKit",
-    platforms: [.iOS(.v17)],
+    // iOS 17 is the app's target. macOS 13 is declared only so the package's
+    // unit tests can run on the host toolchain (`swift test`) — the async
+    // URLSession / Duration APIs need macOS 13+.
+    platforms: [.iOS(.v17), .macOS(.v13)],
     products: [
         .library(name: "RecipeKit", targets: ["RecipeKit"]),
     ],

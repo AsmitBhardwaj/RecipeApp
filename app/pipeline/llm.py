@@ -10,13 +10,13 @@ thinking tokens would only add cost/latency (CLAUDE.md §7).
 from __future__ import annotations
 
 import json
-from typing import Type, TypeVar
+from typing import List, Optional, Type, TypeVar
 
 from openai import OpenAI, OpenAIError
 from pydantic import BaseModel, ValidationError
 
 from .. import config
-from ..models import DishIdentification, LLMRecipe
+from ..models import DishIdentification, Ingredient, LLMRecipe
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -206,8 +206,33 @@ def identify_dish(caption: str) -> DishIdentification:
     return _call_validated(DISH_ID_SYSTEM_PROMPT, user, DishIdentification)
 
 
-def generate_generic_recipe(dish: DishIdentification) -> LLMRecipe:
-    """Fallback step 2: generate a generic recipe for the identified dish."""
+def _ingredient_line(ing: Ingredient) -> str:
+    """Render one extracted ingredient back to a readable line for the prompt."""
+    parts: List[str] = []
+    if ing.quantity is not None:
+        q = ing.quantity
+        parts.append(str(int(q)) if float(q).is_integer() else str(q))
+    if ing.unit:
+        parts.append(ing.unit)
+    parts.append(ing.name)
+    line = " ".join(parts)
+    if ing.notes:
+        line += f" ({ing.notes})"
+    return f"- {line}"
+
+
+def generate_generic_recipe(
+    dish: DishIdentification,
+    known_ingredients: Optional[List[Ingredient]] = None,
+) -> LLMRecipe:
+    """Fallback step 2: generate a generic recipe for the identified dish.
+
+    When `known_ingredients` is passed (the "caption gave us ingredients but no
+    method" case in the orchestrator), the real ingredient list is handed to the
+    model so it writes a method for *those exact* ingredients instead of
+    inventing a dish from scratch. Called with no `known_ingredients`, behaviour
+    is identical to before (the existing fully-generated fallback path).
+    """
     details = ", ".join(dish.distinguishing_details) or "none"
     user = (
         f"{_RECIPE_SCHEMA_HINT}\n\n"
@@ -215,4 +240,12 @@ def generate_generic_recipe(dish: DishIdentification) -> LLMRecipe:
         f"Cuisine: {dish.cuisine or 'unspecified'}\n"
         f"Distinguishing details: {details}"
     )
+    if known_ingredients:
+        lines = "\n".join(_ingredient_line(i) for i in known_ingredients)
+        user += (
+            "\n\nThese ingredients were already extracted from the original "
+            "recipe. Write the method for these exact ingredients (do not add or "
+            "remove ingredients), and return this same ingredient list unchanged "
+            "in your JSON:\n" + lines
+        )
     return _call_validated(GENERIC_RECIPE_SYSTEM_PROMPT, user, LLMRecipe)

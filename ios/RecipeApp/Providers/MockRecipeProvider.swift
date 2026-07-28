@@ -130,10 +130,45 @@ extension Recipe {
 
 // MARK: - Mock provider
 
-/// Serves the hand-written sample recipes. Swap this for an `APIRecipeProvider`
-/// (same protocol) when wiring up the real backend.
+/// Serves the hand-written sample recipes. Kept for SwiftUI previews and offline
+/// testing; the live app uses `APIRecipeProvider`. Conforms to the same
+/// `RecipeProvider` contract, including `submitRecipe`.
 struct MockRecipeProvider: RecipeProvider {
     func fetchRecipes() async throws -> [Recipe] {
         Recipe.samples
+    }
+
+    /// Pretends to extract: waits briefly (to exercise the UI's processing
+    /// state) then returns a sample recipe. Never hits the network.
+    func submitRecipe(url: String) async throws -> Recipe {
+        try? await Task.sleep(for: .seconds(1))
+        return .spicyNoodles
+    }
+
+    /// Enqueue a fake job — returns immediately with a `queued` status and a
+    /// random id, mirroring the real POST /v1/jobs.
+    func submitJob(url: String) async throws -> Job {
+        Job(
+            jobId: "mock_\(UUID().uuidString.prefix(8))",
+            userId: "mock_user",
+            url: url,
+            status: .queued,
+            createdAt: ISO8601DateFormatter().string(from: Date())
+        )
+    }
+
+    /// Fake poll: pauses briefly so previews show a processing card, then
+    /// resolves the job to `complete` with a sample recipe.
+    func fetchJob(jobId: String) async throws -> JobEnvelope {
+        try? await Task.sleep(for: .seconds(2))
+        let job = Job(
+            jobId: jobId,
+            userId: "mock_user",
+            url: "https://example.com",
+            status: .complete,
+            createdAt: ISO8601DateFormatter().string(from: Date()),
+            recipeId: Recipe.spicyNoodles.recipeId
+        )
+        return JobEnvelope(job: job, recipe: .spicyNoodles)
     }
 }

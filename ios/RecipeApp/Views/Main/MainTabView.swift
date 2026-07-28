@@ -4,16 +4,28 @@
 //
 //  The two-tab shell (CLAUDE.md §2): Recipes and Account.
 //
+//  Owns the app-wide `PendingJobsModel` so in-flight jobs and finished recipes
+//  live above the tabs (surviving tab switches and the Add sheet), and drives
+//  foreground reconciliation: on launch and every time the app becomes active it
+//  re-polls the App Group's pending jobs to catch anything that resolved while
+//  backgrounded or killed (CLAUDE.md §6, layer 3).
+//
 
 import SwiftUI
+import RecipeKit
 
 struct MainTabView: View {
-    let recipeProvider: RecipeProvider
+    @StateObject private var jobs: PendingJobsModel
+    @Environment(\.scenePhase) private var scenePhase
+
+    init(recipeProvider: RecipeProvider) {
+        _jobs = StateObject(wrappedValue: PendingJobsModel(provider: recipeProvider))
+    }
 
     var body: some View {
         TabView {
             NavigationStack {
-                RecipeListView(recipeProvider: recipeProvider)
+                RecipeListView(jobs: jobs)
             }
             .tabItem {
                 Label("Recipes", systemImage: "book.closed.fill")
@@ -25,6 +37,10 @@ struct MainTabView: View {
             .tabItem {
                 Label("Account", systemImage: "person.crop.circle")
             }
+        }
+        .task { jobs.reconcile() }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active { jobs.reconcile() }
         }
     }
 }

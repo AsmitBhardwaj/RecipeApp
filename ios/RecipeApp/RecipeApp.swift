@@ -2,18 +2,19 @@
 //  RecipeApp.swift
 //  RecipeApp
 //
-//  App entry point. Constructs the single `RecipeProvider` (mock today) and
-//  hands it to the UI. This constructor call is the one place that changes
-//  when the real backend is wired up: swap `MockRecipeProvider()` for an
-//  `APIRecipeProvider(...)`.
+//  App entry point. Constructs the single `RecipeProvider` and hands it to the
+//  UI. The live app uses `APIRecipeProvider` (real backend); swap to
+//  `MockRecipeProvider()` for offline/preview work.
 //
 
 import SwiftUI
+import RecipeKit
 
 @main
 struct RecipeApp: App {
     /// The app-wide data source. Injected down into the views that need it.
-    private let recipeProvider: RecipeProvider = MockRecipeProvider()
+    /// Live networking against the Railway backend.
+    private let recipeProvider: RecipeProvider = APIRecipeProvider()
 
     var body: some Scene {
         WindowGroup {

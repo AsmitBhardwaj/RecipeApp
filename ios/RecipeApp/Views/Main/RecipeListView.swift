@@ -2,31 +2,32 @@
 //  RecipeListView.swift
 //  RecipeApp
 //
-//  The Recipes tab: the user's saved recipes, loaded through the injected
-//  `RecipeProvider`. Tapping a row navigates to the detail screen.
+//  The Recipes tab. Renders three kinds of rows from a single observable source
+//  (`PendingJobsModel`): failed-job cards needing attention, processing cards for
+//  in-flight jobs, and finished recipes. A processing card morphs into a recipe
+//  row the moment its job resolves (CLAUDE.md §3) — both are just different
+//  states of the same model, so no manual reload is needed.
 //
-//  Loading state is modeled explicitly so that when a real network fetch
-//  replaces the mock provider, the loading and error UI already exist.
+//  Pending state is sourced from the App Group store via the model, NOT from
+//  local view state, so it survives this view (and the app) coming and going.
 //
 
 import SwiftUI
 import RecipeKit
 
 struct RecipeListView: View {
-    let recipeProvider: RecipeProvider
+    @ObservedObject var jobs: PendingJobsModel
 
-    @State private var recipes: [Recipe] = []
-    @State private var loadState: LoadState = .loading
-
-    private enum LoadState: Equatable {
-        case loading
-        case loaded
-        case failed(String)
-    }
+    @State private var showingAdd = false
 
     var body: some View {
-        Group {
-            switch loadState {
+        // A stable container (not a transparent `Group`) so the `.task` below is
+        // hosted on an identity that persists across branch changes. Attaching it
+        // to a `Group` whose `switch` swaps between ProgressView / List / empty
+        // views made the branch's identity changes restart the task, re-running
+        // the one-time load and wiping the list.
+        ZStack {
+            switch jobs.loadState {
             case .loading:
                 ProgressView("Loading recipes…")
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -36,42 +37,56 @@ struct RecipeListView: View {
                 } description: {
                     Text(message)
                 } actions: {
-                    Button("Try again") { Task { await load() } }
+                    Button("Try again") { Task { await jobs.load() } }
                 }
-            case .loaded where recipes.isEmpty:
+            case .loaded where jobs.recipes.isEmpty && jobs.pending.isEmpty && jobs.failed.isEmpty:
                 ContentUnavailableView {
                     Label("No recipes yet", systemImage: "book.closed")
                 } description: {
-                    Text("Share a Reel or TikTok to RecipeApp and it'll show up here.")
+                    Text("Tap + and paste an Instagram Reel or TikTok link to add your first recipe.")
                 }
             case .loaded:
-                List(recipes) { recipe in
-                    NavigationLink(value: recipe) {
-                        RecipeRowView(recipe: recipe)
+                List {
+                    // Needs-attention first, then in-flight, then finished.
+                    ForEach(jobs.failed) { failedJob in
+                        FailedJobCardView(job: failedJob) {
+                            jobs.dismissFailed(jobId: failedJob.jobId)
+                        }
+                    }
+                    ForEach(jobs.pending) { pendingJob in
+                        ProcessingCardView(job: pendingJob)
+                    }
+                    ForEach(jobs.recipes) { recipe in
+                        NavigationLink(value: recipe) {
+                            RecipeRowView(recipe: recipe)
+                        }
                     }
                 }
                 .listStyle(.plain)
             }
         }
         .navigationTitle("Recipes")
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Button {
+                    showingAdd = true
+                } label: {
+                    Label("Add recipe", systemImage: "plus")
+                }
+                .disabled(jobs.loadState == .loading)
+            }
+        }
+        .sheet(isPresented: $showingAdd) {
+            AddRecipeView(jobs: jobs)
+        }
         .navigationDestination(for: Recipe.self) { recipe in
             RecipeDetailView(recipe: recipe)
         }
-        .task { await load() }
-    }
-
-    private func load() async {
-        loadState = .loading
-        do {
-            recipes = try await recipeProvider.fetchRecipes()
-            loadState = .loaded
-        } catch {
-            loadState = .failed(error.localizedDescription)
-        }
+        .task { await jobs.load() }
     }
 }
 
-// MARK: - Row
+// MARK: - Recipe row
 
 struct RecipeRowView: View {
     let recipe: Recipe
@@ -105,8 +120,86 @@ struct RecipeRowView: View {
     }
 }
 
+// MARK: - Processing card
+
+/// Skeleton/processing card for an in-flight job. Sits in the list where the
+/// finished recipe will appear and morphs into a `RecipeRowView` when the job
+/// completes.
+struct ProcessingCardView: View {
+    let job: PendingJob
+
+    var body: some View {
+        HStack(spacing: 14) {
+            RoundedRectangle(cornerRadius: 12)
+                .fill(.quaternary)
+                .frame(width: 64, height: 64)
+                .overlay { ProgressView() }
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Extracting recipe…")
+                    .font(.headline)
+                    .foregroundStyle(.secondary)
+
+                Text(displayURL)
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(1)
+
+                RoundedRectangle(cornerRadius: 4)
+                    .fill(.quaternary)
+                    .frame(width: 120, height: 10)
+            }
+        }
+        .padding(.vertical, 4)
+    }
+
+    private var displayURL: String {
+        URL(string: job.url)?.host ?? job.url
+    }
+}
+
+// MARK: - Failed card
+
+/// Error card for a job the backend couldn't complete. Shows the reason and a
+/// Dismiss action that removes it. The durable store no longer holds this job —
+/// dismissing just clears the in-memory card.
+struct FailedJobCardView: View {
+    let job: PendingJobsModel.FailedJob
+    let onDismiss: () -> Void
+
+    var body: some View {
+        HStack(spacing: 14) {
+            RoundedRectangle(cornerRadius: 12)
+                .fill(.red.opacity(0.12))
+                .frame(width: 64, height: 64)
+                .overlay {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.red)
+                        .font(.title3)
+                }
+
+            VStack(alignment: .leading, spacing: 5) {
+                Text("Couldn't extract this one")
+                    .font(.headline)
+
+                Text(job.message)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(3)
+            }
+
+            Spacer(minLength: 8)
+
+            Button("Dismiss", action: onDismiss)
+                .font(.caption.weight(.semibold))
+                .buttonStyle(.borderless)
+        }
+        .padding(.vertical, 4)
+    }
+}
+
 #Preview {
     NavigationStack {
-        RecipeListView(recipeProvider: MockRecipeProvider())
+        RecipeListView(jobs: PendingJobsModel(provider: MockRecipeProvider()))
     }
 }

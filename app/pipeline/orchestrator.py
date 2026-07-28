@@ -12,12 +12,34 @@ import uuid
 from datetime import datetime, timezone
 
 from .. import config, db
-from ..models import Job, Recipe, UserRecipe
+from ..models import Confidence, DishIdentification, Job, LLMRecipe, Recipe, UserRecipe
 from . import fetch, images, llm, signal, urls
 
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _with_generated_instructions(
+    extracted: LLMRecipe, generated: LLMRecipe
+) -> LLMRecipe:
+    """Merge for the "real ingredients, generated method" case.
+
+    Keeps the caption's real ingredients/title/times and swaps in the generated
+    instructions. The `Confidence` object carries the mixed nature (ingredients
+    stay complete since they're real; overall is capped to signal a generic
+    reference method; "instructions" is no longer a missing field).
+    """
+    old = extracted.confidence
+    conf = Confidence(
+        overall=min(old.overall, 0.5),
+        ingredients_complete=old.ingredients_complete,
+        instructions_complete=bool(generated.instructions),
+        missing_fields=[f for f in old.missing_fields if f != "instructions"],
+    )
+    return extracted.model_copy(
+        update={"instructions": generated.instructions, "confidence": conf}
+    )
 
 
 def _fail(job: Job, code: str, message: str) -> Job:
@@ -101,6 +123,20 @@ def process_job(job: Job) -> Job:
         if signal.has_recipe_signal(meta.caption):
             llm_recipe = llm.extract_recipe(meta.caption)
             source_type = "caption"
+            # Gap fix (CLAUDE.md §5): the strict extraction prompt is correctly
+            # forbidden from inventing steps, so an ingredients-only caption
+            # comes back with real ingredients but ZERO instructions. Rather
+            # than ship a stepless recipe, generate a method for those exact
+            # ingredients and flag the whole recipe as generated — the same
+            # treatment as the no-signal fallback. Scoped strictly to the
+            # empty-instructions case; captions with partial steps are untouched.
+            if llm_recipe.ingredients and not llm_recipe.instructions:
+                dish = DishIdentification(dish_name=llm_recipe.title)
+                generated = llm.generate_generic_recipe(
+                    dish, known_ingredients=llm_recipe.ingredients
+                )
+                llm_recipe = _with_generated_instructions(llm_recipe, generated)
+                source_type = "generated"
         else:
             dish = llm.identify_dish(meta.caption)
             if not dish.dish_name:

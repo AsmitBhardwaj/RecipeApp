@@ -7,6 +7,7 @@
 //
 
 import SwiftUI
+import RecipeKit
 
 struct RootView: View {
     let recipeProvider: RecipeProvider
