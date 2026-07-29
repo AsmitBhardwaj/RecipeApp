@@ -54,7 +54,7 @@ struct RecipeDetailView: View {
                 GeneratedBadge()
             }
             Text(recipe.title)
-                .font(.title.bold())
+                .font(.editorialTitle(size: 30, relativeTo: .largeTitle))
             if recipe.isGenerated {
                 Text("This recipe was generated from general culinary knowledge, not extracted from the video.")
                     .font(.footnote)
@@ -81,9 +81,8 @@ struct RecipeDetailView: View {
                         .frame(maxWidth: .infinity)
                     }
                 }
-                .padding(.vertical, 14)
                 .frame(maxWidth: .infinity)
-                .background(Color.borderWarm.opacity(0.6), in: RoundedRectangle(cornerRadius: 14))
+                .tornEdgeCard()
             }
         }
     }

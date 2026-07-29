@@ -18,6 +18,14 @@ struct DiscoverView: View {
         }
         .appBackground()
         .navigationTitle("Discover")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .principal) {
+                Text("Discover")
+                    .font(.editorialTitle(size: 22))
+                    .foregroundStyle(Color.textPrimary)
+            }
+        }
     }
 }
 

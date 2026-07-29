@@ -16,6 +16,11 @@ struct RecipeApp: App {
     /// Live networking against the Railway backend.
     private let recipeProvider: RecipeProvider = APIRecipeProvider()
 
+    init() {
+        // Register the bundled editorial display font before any UI renders.
+        AppFonts.register()
+    }
+
     var body: some Scene {
         WindowGroup {
             RootView(recipeProvider: recipeProvider)

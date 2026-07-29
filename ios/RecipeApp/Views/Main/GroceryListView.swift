@@ -17,6 +17,14 @@ struct GroceryListView: View {
         }
         .appBackground()
         .navigationTitle("Grocery List")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .principal) {
+                Text("Grocery List")
+                    .font(.editorialTitle(size: 22))
+                    .foregroundStyle(Color.textPrimary)
+            }
+        }
     }
 }
 

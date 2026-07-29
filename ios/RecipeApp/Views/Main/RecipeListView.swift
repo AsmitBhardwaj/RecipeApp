@@ -53,14 +53,17 @@ struct RecipeListView: View {
                         FailedJobCardView(job: failedJob) {
                             jobs.dismissFailed(jobId: failedJob.jobId)
                         }
+                        .tornEdgeCardRow()
                     }
                     ForEach(jobs.pending) { pendingJob in
                         ProcessingCardView(job: pendingJob)
+                            .tornEdgeCardRow()
                     }
                     ForEach(jobs.recipes) { recipe in
                         NavigationLink(value: recipe) {
                             RecipeRowView(recipe: recipe)
                         }
+                        .tornEdgeCardRow()
                     }
                 }
                 .listStyle(.plain)
@@ -76,7 +79,13 @@ struct RecipeListView: View {
             }
         }
         .navigationTitle("Recipes")
+        .navigationBarTitleDisplayMode(.inline)
         .toolbar {
+            ToolbarItem(placement: .principal) {
+                Text("Recipes")
+                    .font(.editorialTitle(size: 22))
+                    .foregroundStyle(Color.textPrimary)
+            }
             ToolbarItem(placement: .topBarTrailing) {
                 Button {
                     showingAccount = true
@@ -136,7 +145,7 @@ struct RecipeRowView: View {
 
             VStack(alignment: .leading, spacing: 5) {
                 Text(recipe.title)
-                    .font(.headline)
+                    .font(.editorialTitle(size: 19, relativeTo: .headline))
                     .lineLimit(2)
 
                 HStack(spacing: 8) {

@@ -31,6 +31,13 @@ struct MealPlanView: View {
         .appBackground()
         .navigationTitle("Meal Plan")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .principal) {
+                Text("Meal Plan")
+                    .font(.editorialTitle(size: 22))
+                    .foregroundStyle(Color.textPrimary)
+            }
+        }
         .sheet(item: $assigningDay) { day in
             RecipePickerSheet(recipes: jobs.recipes) { recipe in
                 plan.add(recipe: recipe, to: day.date)
@@ -48,9 +55,11 @@ struct MealPlanView: View {
                         Text("Nothing planned")
                             .font(.subheadline)
                             .foregroundStyle(Color.textSecondary)
+                            .tornEdgeCardRow()
                     } else {
                         ForEach(entries) { entry in
                             MealPlanEntryRow(entry: entry)
+                                .tornEdgeCardRow()
                                 .swipeActions(edge: .trailing) {
                                     Button(role: .destructive) {
                                         plan.remove(entry)
@@ -68,12 +77,14 @@ struct MealPlanView: View {
                             .font(.subheadline)
                             .foregroundStyle(.tint)
                     }
+                    .listRowSeparator(.hidden)
+                    .listRowBackground(Color.clear)
                 } header: {
                     DayHeader(date: day, isToday: plan.isToday(day))
                 }
             }
         }
-        .listStyle(.insetGrouped)
+        .listStyle(.plain)
     }
 }
 
