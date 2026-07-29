@@ -15,6 +15,7 @@ struct GroceryListView: View {
         } description: {
             Text("Coming soon — build a shopping list from your planned recipes.")
         }
+        .appBackground()
         .navigationTitle("Grocery List")
     }
 }

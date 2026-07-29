@@ -16,6 +16,7 @@ struct DiscoverView: View {
         } description: {
             Text("Coming soon — find recipes shared by the community.")
         }
+        .appBackground()
         .navigationTitle("Discover")
     }
 }
