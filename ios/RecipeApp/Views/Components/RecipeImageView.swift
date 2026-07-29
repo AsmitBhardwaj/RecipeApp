@@ -44,13 +44,13 @@ struct RecipeImageView: View {
             placeholderBackground
             Image(systemName: "fork.knife")
                 .font(.system(size: placeholderSymbolSize, weight: .light))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Color.textSecondary)
         }
     }
 
     private var placeholderBackground: some View {
         Rectangle()
-            .fill(.quaternary)
+            .fill(Color.borderWarm)
     }
 }
 

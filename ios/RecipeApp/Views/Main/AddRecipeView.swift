@@ -44,6 +44,7 @@ struct AddRecipeView: View {
                         .disabled(isSubmitting)
                 } footer: {
                     Text("We'll read the recipe from the video's caption. You can close this while it works — it'll appear in your list.")
+                        .foregroundStyle(Color.textSecondary)
                 }
 
                 if case .failed(let message) = phase {
@@ -68,8 +69,11 @@ struct AddRecipeView: View {
                         }
                     }
                     .disabled(isSubmitting || urlText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .foregroundStyle(.tint)
                 }
             }
+            .foregroundStyle(Color.textPrimary)
+            .appBackground()
             .navigationTitle("Add recipe")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

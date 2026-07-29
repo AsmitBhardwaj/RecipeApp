@@ -2,13 +2,16 @@
 //  MainTabView.swift
 //  RecipeApp
 //
-//  The two-tab shell (CLAUDE.md §2): Recipes and Account.
+//  The tab shell: Recipes, Meal Plan, Grocery List (placeholder), and Discover
+//  (placeholder). Account is reached from a toolbar icon on the Recipes screen,
+//  not a tab. Grocery List and Discover are "coming soon" shells for now.
 //
 //  Owns the app-wide `PendingJobsModel` so in-flight jobs and finished recipes
 //  live above the tabs (surviving tab switches and the Add sheet), and drives
 //  foreground reconciliation: on launch and every time the app becomes active it
 //  re-polls the App Group's pending jobs to catch anything that resolved while
-//  backgrounded or killed (CLAUDE.md §6, layer 3).
+//  backgrounded or killed (CLAUDE.md §6, layer 3). It also supplies the recipe
+//  list to the Meal Plan tab's assign-picker.
 //
 
 import SwiftUI
@@ -32,10 +35,24 @@ struct MainTabView: View {
             }
 
             NavigationStack {
-                AccountView()
+                MealPlanView(jobs: jobs)
             }
             .tabItem {
-                Label("Account", systemImage: "person.crop.circle")
+                Label("Meal Plan", systemImage: "calendar")
+            }
+
+            NavigationStack {
+                GroceryListView()
+            }
+            .tabItem {
+                Label("Grocery List", systemImage: "cart")
+            }
+
+            NavigationStack {
+                DiscoverView()
+            }
+            .tabItem {
+                Label("Discover", systemImage: "sparkles")
             }
         }
         .task { jobs.reconcile() }

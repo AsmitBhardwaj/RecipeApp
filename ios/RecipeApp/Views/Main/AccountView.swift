@@ -23,7 +23,7 @@ struct AccountView: View {
                             .font(.headline)
                         Text("Not signed in")
                             .font(.subheadline)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(Color.textSecondary)
                     }
                 }
                 .padding(.vertical, 6)
@@ -42,6 +42,8 @@ struct AccountView: View {
             }
             #endif
         }
+        .foregroundStyle(Color.textPrimary)
+        .appBackground()
         .navigationTitle("Account")
     }
 }

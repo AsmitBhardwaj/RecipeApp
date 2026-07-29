@@ -18,8 +18,8 @@ struct GeneratedBadge: View {
             .font(.caption.weight(.semibold))
             .padding(.horizontal, 10)
             .padding(.vertical, 5)
-            .foregroundStyle(.purple)
-            .background(.purple.opacity(0.15), in: Capsule())
+            .foregroundStyle(Color.badgeGenerated)
+            .background(Color.badgeGenerated.opacity(0.15), in: Capsule())
     }
 }
 

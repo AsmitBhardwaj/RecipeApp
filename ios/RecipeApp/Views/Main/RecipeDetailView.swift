@@ -27,6 +27,8 @@ struct RecipeDetailView: View {
             }
             .padding(.bottom, 32)
         }
+        .foregroundStyle(Color.textPrimary)
+        .appBackground()
         .navigationTitle(recipe.title)
         .navigationBarTitleDisplayMode(.inline)
     }
@@ -56,7 +58,7 @@ struct RecipeDetailView: View {
             if recipe.isGenerated {
                 Text("This recipe was generated from general culinary knowledge, not extracted from the video.")
                     .font(.footnote)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Color.textSecondary)
             }
         }
     }
@@ -74,14 +76,14 @@ struct RecipeDetailView: View {
                                 .font(.subheadline.weight(.semibold))
                             Text(item.label)
                                 .font(.caption2)
-                                .foregroundStyle(.secondary)
+                                .foregroundStyle(Color.textSecondary)
                         }
                         .frame(maxWidth: .infinity)
                     }
                 }
                 .padding(.vertical, 14)
                 .frame(maxWidth: .infinity)
-                .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 14))
+                .background(Color.borderWarm.opacity(0.6), in: RoundedRectangle(cornerRadius: 14))
             }
         }
     }
@@ -111,7 +113,7 @@ struct RecipeDetailView: View {
             if recipe.ingredients.isEmpty {
                 Text("No ingredients listed.")
                     .font(.subheadline)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Color.textSecondary)
             } else {
                 ForEach(Array(recipe.ingredients.enumerated()), id: \.offset) { _, ingredient in
                     HStack(alignment: .top, spacing: 12) {
@@ -136,7 +138,7 @@ struct RecipeDetailView: View {
             if recipe.instructions.isEmpty {
                 Text("No instructions listed.")
                     .font(.subheadline)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Color.textSecondary)
             } else {
                 ForEach(recipe.instructions) { step in
                     HStack(alignment: .top, spacing: 14) {

@@ -55,10 +55,13 @@ struct OnboardingView: View {
 
             Button("Skip", action: onFinish)
                 .font(.subheadline)
+                .foregroundStyle(Color.textSecondary)
                 .padding(.bottom, 8)
                 .opacity(isLastPage ? 0 : 1)
                 .disabled(isLastPage)
         }
+        .foregroundStyle(Color.textPrimary)
+        .appBackground()
     }
 
     private var isLastPage: Bool { page == pages.count - 1 }
@@ -96,7 +99,7 @@ private struct OnboardingPageView: View {
                     .multilineTextAlignment(.center)
                 Text(page.message)
                     .font(.body)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Color.textSecondary)
                     .multilineTextAlignment(.center)
             }
             .padding(.horizontal, 32)

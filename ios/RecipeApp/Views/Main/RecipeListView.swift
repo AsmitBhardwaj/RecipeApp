@@ -19,6 +19,7 @@ struct RecipeListView: View {
     @ObservedObject var jobs: PendingJobsModel
 
     @State private var showingAdd = false
+    @State private var showingAccount = false
 
     var body: some View {
         // A stable container (not a transparent `Group`) so the `.task` below is
@@ -65,24 +66,60 @@ struct RecipeListView: View {
                 .listStyle(.plain)
             }
         }
+        .foregroundStyle(Color.textPrimary)
+        .appBackground()
+        // Add is a floating button at the bottom-right (above the tab bar),
+        // shown once the list has loaded. Account lives in the top-right.
+        .overlay(alignment: .bottomTrailing) {
+            if jobs.loadState == .loaded {
+                addButton
+            }
+        }
         .navigationTitle("Recipes")
         .toolbar {
-            ToolbarItem(placement: .primaryAction) {
+            ToolbarItem(placement: .topBarTrailing) {
                 Button {
-                    showingAdd = true
+                    showingAccount = true
                 } label: {
-                    Label("Add recipe", systemImage: "plus")
+                    Image(systemName: "person.crop.circle")
                 }
-                .disabled(jobs.loadState == .loading)
+                .accessibilityLabel("Account")
             }
         }
         .sheet(isPresented: $showingAdd) {
             AddRecipeView(jobs: jobs)
         }
+        .sheet(isPresented: $showingAccount) {
+            NavigationStack {
+                AccountView()
+                    .toolbar {
+                        ToolbarItem(placement: .confirmationAction) {
+                            Button("Done") { showingAccount = false }
+                        }
+                    }
+            }
+        }
         .navigationDestination(for: Recipe.self) { recipe in
             RecipeDetailView(recipe: recipe)
         }
         .task { await jobs.load() }
+    }
+
+    /// Floating "+" action button (bottom-right), replacing the old toolbar item.
+    private var addButton: some View {
+        Button {
+            showingAdd = true
+        } label: {
+            Image(systemName: "plus")
+                .font(.title2.weight(.semibold))
+                .foregroundStyle(.white)
+                .frame(width: 56, height: 56)
+                .background(.tint, in: Circle())
+                .shadow(radius: 4, y: 2)
+        }
+        .padding(.trailing, 20)
+        .padding(.bottom, 20)
+        .accessibilityLabel("Add recipe")
     }
 }
 
@@ -109,7 +146,7 @@ struct RecipeRowView: View {
                     Label("\(recipe.ingredients.count) items", systemImage: "list.bullet")
                 }
                 .font(.caption)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Color.textSecondary)
 
                 if recipe.isGenerated {
                     GeneratedBadge()
@@ -131,22 +168,22 @@ struct ProcessingCardView: View {
     var body: some View {
         HStack(spacing: 14) {
             RoundedRectangle(cornerRadius: 12)
-                .fill(.quaternary)
+                .fill(Color.borderWarm)
                 .frame(width: 64, height: 64)
                 .overlay { ProgressView() }
 
             VStack(alignment: .leading, spacing: 6) {
                 Text("Extracting recipe…")
                     .font(.headline)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Color.textSecondary)
 
                 Text(displayURL)
                     .font(.caption)
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(Color.textSecondary)
                     .lineLimit(1)
 
                 RoundedRectangle(cornerRadius: 4)
-                    .fill(.quaternary)
+                    .fill(Color.borderWarm)
                     .frame(width: 120, height: 10)
             }
         }
@@ -184,7 +221,7 @@ struct FailedJobCardView: View {
 
                 Text(job.message)
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Color.textSecondary)
                     .lineLimit(3)
             }
 
@@ -193,6 +230,7 @@ struct FailedJobCardView: View {
             Button("Dismiss", action: onDismiss)
                 .font(.caption.weight(.semibold))
                 .buttonStyle(.borderless)
+                .foregroundStyle(.tint)
         }
         .padding(.vertical, 4)
     }
