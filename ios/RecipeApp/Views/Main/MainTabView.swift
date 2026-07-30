@@ -42,7 +42,7 @@ struct MainTabView: View {
             }
 
             NavigationStack {
-                GroceryListView()
+                GroceryListView(jobs: jobs)
             }
             .tabItem {
                 Label("Grocery List", systemImage: "cart")

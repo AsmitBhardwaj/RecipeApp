@@ -50,6 +50,9 @@ final class PendingJobsModel: ObservableObject {
 
     private let provider: RecipeProvider
     private let store: PendingJobStore
+    /// On-device cache of completed recipes so the list survives full relaunches
+    /// (the backend has no vault endpoint). Written in `handleComplete`.
+    private let recipeStore: RecipeStore
     /// Job ids with an in-flight poll task, so `reconcile()` and `submit()` never
     /// start a second poll for the same job.
     private var activePolls: Set<String> = []
@@ -62,12 +65,20 @@ final class PendingJobsModel: ObservableObject {
     private let pollInterval: Duration = .seconds(1.5)
     private let maxWait: Duration = .seconds(120)
 
-    init(provider: RecipeProvider, store: PendingJobStore = PendingJobStore()) {
+    init(
+        provider: RecipeProvider,
+        store: PendingJobStore = PendingJobStore(),
+        recipeStore: RecipeStore = RecipeStore()
+    ) {
         self.provider = provider
         self.store = store
+        self.recipeStore = recipeStore
         // Show any persisted jobs immediately (e.g. submitted last session, or by
         // the Share Extension while the app was closed) before the first re-poll.
         self.pending = store.all()
+        // Seed the list from the on-device cache so recipes extracted in earlier
+        // sessions are present the instant the app launches, before any network.
+        self.recipes = recipeStore.all()
     }
 
     // MARK: - Initial load
@@ -185,6 +196,8 @@ final class PendingJobsModel: ObservableObject {
         if let recipe = envelope.recipe {
             recipes.removeAll { $0.recipeId == recipe.recipeId }
             recipes.insert(recipe, at: 0)
+            // Persist to the on-device cache so it survives a full relaunch.
+            recipeStore.upsert(recipe)
         }
         store.remove(jobId: jobId)
         pending = store.all()
