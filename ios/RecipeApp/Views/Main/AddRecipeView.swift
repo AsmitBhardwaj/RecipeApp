@@ -37,13 +37,13 @@ struct AddRecipeView: View {
         NavigationStack {
             Form {
                 Section {
-                    TextField("Paste an Instagram Reel or TikTok link", text: $urlText, axis: .vertical)
+                    TextField("Paste a link — Instagram, TikTok, or a recipe website", text: $urlText, axis: .vertical)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
                         .keyboardType(.URL)
                         .disabled(isSubmitting)
                 } footer: {
-                    Text("We'll read the recipe from the video's caption. You can close this while it works — it'll appear in your list.")
+                    Text("We'll pull the recipe from the post or page. You can close this while it works — it'll appear in your list.")
                         .foregroundStyle(Color.textSecondary)
                 }
 

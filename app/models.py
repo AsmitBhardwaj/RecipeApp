@@ -89,9 +89,12 @@ class Recipe(BaseModel):
     ingredients: List[Ingredient] = Field(default_factory=list)
     instructions: List[Instruction] = Field(default_factory=list)
     confidence: Confidence = Field(default_factory=Confidence)
-    source_type: Literal["caption", "generated"]
+    # "caption"/"generated" = video tiers; "structured" = schema.org JSON-LD
+    # (ground truth, no LLM); "article" = LLM-extracted from blog article text.
+    source_type: Literal["caption", "generated", "structured", "article"]
     image_url: Optional[str] = None
-    image_source: Literal["video_thumbnail", "stock_photo", "none"] = "none"
+    # "web_image" = image pulled from the recipe page (JSON-LD image / og:image).
+    image_source: Literal["video_thumbnail", "stock_photo", "web_image", "none"] = "none"
 
     # Nullable placeholders for future features (CLAUDE.md §8) — cheap to add
     # now so no schema migration is needed when transcription / nutrition land.
@@ -104,7 +107,7 @@ class Job(BaseModel):
     user_id: str
     url: str
     canonical_video_id: Optional[str] = None
-    platform: Optional[Literal["instagram", "tiktok"]] = None
+    platform: Optional[Literal["instagram", "tiktok", "web"]] = None
     status: Literal["queued", "processing", "complete", "failed"] = "queued"
     # Explicit even though only "caption_only" exists now (CLAUDE.md §4).
     extraction_method: str = "caption_only"

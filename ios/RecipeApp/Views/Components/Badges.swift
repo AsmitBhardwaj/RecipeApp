@@ -42,6 +42,7 @@ struct ImageSourceBadge: View {
         switch source {
         case .videoThumbnail: return "video.fill"
         case .stockPhoto: return "photo.fill"
+        case .webImage: return "globe"
         case .none: return "photo"
         }
     }

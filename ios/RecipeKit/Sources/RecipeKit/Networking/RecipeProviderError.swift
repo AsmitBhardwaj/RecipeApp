@@ -44,7 +44,7 @@ public enum RecipeProviderError: Error, Equatable {
         case .jobFailed(_, let message):
             return message ?? "We couldn't read a recipe from that link."
         case .invalidURL:
-            return "That doesn't look like a valid link. Paste an Instagram Reel or TikTok URL."
+            return "That doesn't look like a valid link. Paste an Instagram, TikTok, or recipe-website URL."
         case .invalidResponse:
             return "We got an unexpected response from the server. Please try again."
         }

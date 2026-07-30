@@ -78,6 +78,37 @@ the specific dish being made. Respond with JSON only:
 Base this ONLY on what's stated or clearly implied. If too sparse to identify
 even a general dish, set dish_name to null."""
 
+ARTICLE_EXTRACTION_SYSTEM_PROMPT = """\
+You are a recipe extraction engine. You will be given the main article text
+scraped from a recipe web page (navigation, ads, and comments already removed).
+Your job is to extract a structured recipe from this text — nothing else.
+
+RULES:
+1. Output ONLY valid JSON matching the schema provided. No prose, no markdown
+   fences, no explanation.
+2. Never invent ingredients, quantities, or steps that are not stated or
+   strongly implied by the source text. If a quantity is not given, set
+   "quantity": null and "unit": null but still include the ingredient by name.
+3. Split every ingredient line into quantity, unit, and name separately.
+   Normalize units to standard abbreviations (tbsp, tsp, cup, oz, g, ml, lb).
+   If a unit is ambiguous or colloquial (e.g. "a splash", "a good glug"), keep
+   it as given in the "notes" field and leave "unit" null.
+4. Reconstruct instructions as a clean, numbered sequence even if the source
+   rambles or is out of order — infer logical cooking order from context.
+5. If title is not explicitly stated, generate a concise, descriptive title
+   from the dish being made — never a generic phrase like "Recipe."
+6. Populate the "confidence" object honestly:
+   - "ingredients_complete": false if items seem missing (e.g. instructions
+     reference an ingredient never listed)
+   - "instructions_complete": false if steps seem to skip logical stages
+   - List any fields you could not determine in "missing_fields"
+   - Lower "overall" confidence when the text is sparse or ambiguous
+7. If the source text contains no discernible recipe at all, return the JSON
+   with empty ingredients/instructions arrays and "overall": 0.
+
+Input will be provided as:
+ARTICLE: <text>"""
+
 GENERIC_RECIPE_SYSTEM_PROMPT = """\
 Generate a standard, reliable recipe for the dish named below, incorporating
 any distinguishing details provided. This is NOT based on a specific source —
@@ -198,6 +229,15 @@ def extract_recipe(caption: str) -> LLMRecipe:
     """Tier: caption has signal → full extraction."""
     user = f"{_RECIPE_SCHEMA_HINT}\n\nCAPTION: {caption}"
     return _call_validated(EXTRACTION_SYSTEM_PROMPT, user, LLMRecipe)
+
+
+def extract_recipe_from_article(text: str) -> LLMRecipe:
+    """Web tier: no JSON-LD → extract from readability-cleaned article text.
+
+    Reuses the same schema, validation, and retry-once path as the caption
+    extractor; only the prompt framing differs ("ARTICLE" vs "CAPTION")."""
+    user = f"{_RECIPE_SCHEMA_HINT}\n\nARTICLE: {text}"
+    return _call_validated(ARTICLE_EXTRACTION_SYSTEM_PROMPT, user, LLMRecipe)
 
 
 def identify_dish(caption: str) -> DishIdentification:

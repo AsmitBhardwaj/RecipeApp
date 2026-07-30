@@ -55,3 +55,17 @@ def resolve_image(thumbnail_url: Optional[str], title: str) -> _ImageResult:
         return stock, "stock_photo"
 
     return None, "none"
+
+
+def resolve_web_image(candidate_url: Optional[str], title: str) -> _ImageResult:
+    """Image resolution for the web tier. A page-sourced image (JSON-LD image or
+    og:image) is labeled `web_image` so the provenance badge reads "From the
+    site" rather than "From video". Falls back to the same stock-photo path."""
+    if candidate_url:
+        return candidate_url, "web_image"
+
+    stock = _search_pexels(title)
+    if stock:
+        return stock, "stock_photo"
+
+    return None, "none"

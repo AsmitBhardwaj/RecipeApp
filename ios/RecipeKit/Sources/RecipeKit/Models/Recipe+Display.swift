@@ -73,6 +73,7 @@ public extension ImageSource {
         switch self {
         case .videoThumbnail: return "From video"
         case .stockPhoto: return "Stock photo"
+        case .webImage: return "From the site"
         case .none: return nil
         }
     }

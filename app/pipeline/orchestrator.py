@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 
 from .. import config, db
 from ..models import Confidence, DishIdentification, Job, LLMRecipe, Recipe, UserRecipe
-from . import fetch, images, llm, signal, urls
+from . import fetch, images, jsonld, llm, netguard, signal, urls, web
 
 
 def _now() -> str:
@@ -106,6 +106,11 @@ def process_job(job: Job) -> Job:
     if cached is not None:
         return _finalize(job, cached)
 
+    # 2b. Generic web / blog tier — its own fetch + JSON-LD/article flow. Kept
+    #     entirely separate from the IG/TikTok video path below.
+    if resolved.platform == "web":
+        return _process_web(job, resolved)
+
     # 3. Fetch caption / metadata / thumbnail. Instagram uses the embed-endpoint
     #    scrape; everything else (TikTok) goes through yt-dlp.
     try:
@@ -156,6 +161,74 @@ def process_job(job: Job) -> Job:
     image_url, image_source = images.resolve_image(meta.thumbnail_url, title)
 
     # 6. Assemble the full, cacheable Recipe.
+    recipe = Recipe(
+        recipe_id=str(uuid.uuid4()),
+        canonical_video_id=resolved.canonical_video_id,
+        title=title,
+        servings=llm_recipe.servings,
+        prep_time_minutes=llm_recipe.prep_time_minutes,
+        cook_time_minutes=llm_recipe.cook_time_minutes,
+        total_time_minutes=llm_recipe.total_time_minutes,
+        ingredients=llm_recipe.ingredients,
+        instructions=llm_recipe.instructions,
+        confidence=llm_recipe.confidence,
+        source_type=source_type,  # type: ignore[arg-type]
+        image_url=image_url,
+        image_source=image_source,  # type: ignore[arg-type]
+    )
+
+    return _finalize(job, recipe)
+
+
+def _process_web(job: Job, resolved: urls.ResolvedUrl) -> Job:
+    """Generic-web extraction: SSRF-guarded fetch → JSON-LD (structured) → else
+    article text + LLM (article). Reuses image resolution and _finalize as-is.
+    """
+    # SSRF-guarded fetch (the guard runs inside web.safe_get, per hop).
+    try:
+        html, _final_url = web.safe_get(resolved.url)
+    except netguard.BlockedURLError as exc:
+        return _fail(job, exc.code, exc.message)
+    except web.WebFetchError as exc:
+        return _fail(job, exc.code, exc.message)
+
+    # Tier 1: complete schema.org Recipe JSON-LD → ground truth, no LLM.
+    parsed = jsonld.parse_recipe_jsonld(html)
+    if parsed is not None:
+        llm_recipe = parsed.recipe
+        source_type = "structured"
+        image_candidate = parsed.image_url
+    else:
+        # Tier 2: no (complete) JSON-LD → extract from readability article text.
+        text = web.extract_article_text(html)
+        if not text.strip():
+            return _fail(job, "no_recipe_found", "We couldn't find a recipe on this page.")
+        try:
+            llm_recipe = llm.extract_recipe_from_article(text)
+        except llm.LLMError as exc:
+            return _fail(job, exc.code, exc.message)
+        if not llm_recipe.ingredients and not llm_recipe.instructions:
+            return _fail(job, "no_recipe_found", "We couldn't find a recipe on this page.")
+
+        source_type = "article"
+        image_candidate = web.og_image(html)
+
+        # Same gap fix as the caption path: real ingredients but zero steps →
+        # generate a method for those ingredients and flag the recipe generated.
+        if llm_recipe.ingredients and not llm_recipe.instructions:
+            try:
+                dish = DishIdentification(dish_name=llm_recipe.title)
+                generated = llm.generate_generic_recipe(
+                    dish, known_ingredients=llm_recipe.ingredients
+                )
+            except llm.LLMError as exc:
+                return _fail(job, exc.code, exc.message)
+            llm_recipe = _with_generated_instructions(llm_recipe, generated)
+            source_type = "generated"
+
+    title = llm_recipe.title or "Untitled recipe"
+    image_url, image_source = images.resolve_web_image(image_candidate, title)
+
     recipe = Recipe(
         recipe_id=str(uuid.uuid4()),
         canonical_video_id=resolved.canonical_video_id,

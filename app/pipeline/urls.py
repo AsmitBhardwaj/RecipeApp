@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from urllib.parse import urlparse
+from urllib.parse import parse_qsl, urlencode, urlparse, urlsplit, urlunsplit
 
 import requests
 
@@ -32,9 +32,41 @@ class UrlError(ValueError):
 @dataclass
 class ResolvedUrl:
     url: str  # expanded, normalized URL
-    platform: str  # "instagram" | "tiktok"
-    video_id: str  # platform-native id/shortcode
-    canonical_video_id: str  # "<platform>:<video_id>" — the cache key
+    platform: str  # "instagram" | "tiktok" | "web"
+    video_id: str  # platform-native id/shortcode ("" for generic web)
+    canonical_video_id: str  # "<platform>:<video_id>" or "web:<url>" — cache key
+
+
+# Query params that are tracking noise, stripped when normalizing a blog URL so
+# the same recipe shared with different UTM tags maps to one cache entry.
+_TRACKING_PREFIXES = ("utm_",)
+_TRACKING_KEYS = {"fbclid", "gclid", "mc_cid", "mc_eid", "igshid", "ref", "ref_src"}
+
+
+def _normalize_web_url(url: str) -> str:
+    """Canonicalize a blog URL into a stable cache key: lowercase scheme+host,
+    drop default port + fragment, strip tracking params, drop trailing slash."""
+    parts = urlsplit(url)
+    scheme = parts.scheme.lower()
+    host = (parts.hostname or "").lower()
+
+    netloc = host
+    if parts.port and not (
+        (scheme == "http" and parts.port == 80)
+        or (scheme == "https" and parts.port == 443)
+    ):
+        netloc = f"{host}:{parts.port}"
+
+    path = parts.path.rstrip("/") or "/"
+
+    kept = [
+        (k, v)
+        for k, v in parse_qsl(parts.query, keep_blank_values=True)
+        if not k.lower().startswith(_TRACKING_PREFIXES) and k.lower() not in _TRACKING_KEYS
+    ]
+    query = urlencode(kept)
+
+    return urlunsplit((scheme, netloc, path, query, ""))
 
 
 def _expand(url: str) -> str:
@@ -80,4 +112,9 @@ def resolve(url: str) -> ResolvedUrl:
         vid = m.group(1)
         return ResolvedUrl(url, "instagram", vid, f"instagram:{vid}")
 
-    raise UrlError(f"unsupported platform for host: {host or 'unknown'}")
+    # Generic web / blog: no video id. The normalized URL is the cache key.
+    # A parseable host is still required — a hostless URL is genuinely invalid.
+    if not host:
+        raise UrlError("could not parse a host from URL")
+    normalized = _normalize_web_url(url)
+    return ResolvedUrl(normalized, "web", "", f"web:{normalized}")

@@ -176,12 +176,19 @@ public struct Confidence: Codable, Hashable {
 
 // MARK: - Enums (decode defensively)
 
-/// Backend `source_type` (Literal["caption", "generated"]). Decodes an unknown
-/// string to `.caption` rather than throwing, so a future backend value can't
-/// crash decoding of the whole recipe.
+/// Backend `source_type` (Literal["caption", "generated", "structured",
+/// "article"]). Decodes an unknown string to `.caption` rather than throwing,
+/// so a future backend value can't crash decoding of the whole recipe.
+///
+/// - `caption`    : extracted from a video caption.
+/// - `generated`  : AI-generated (no reliable source, or method-only fallback).
+/// - `structured` : parsed from a page's schema.org JSON-LD — ground truth.
+/// - `article`    : LLM-extracted from a blog article's body text.
 public enum SourceType: String, Codable, Hashable {
     case caption
     case generated
+    case structured
+    case article
 
     public init(from decoder: Decoder) throws {
         let raw = try decoder.singleValueContainer().decode(String.self)
@@ -189,11 +196,13 @@ public enum SourceType: String, Codable, Hashable {
     }
 }
 
-/// Backend `image_source` (Literal["video_thumbnail", "stock_photo", "none"]).
-/// Decodes an unknown string to `.none`.
+/// Backend `image_source` (Literal["video_thumbnail", "stock_photo",
+/// "web_image", "none"]). Decodes an unknown string to `.none`.
 public enum ImageSource: String, Codable, Hashable {
     case videoThumbnail = "video_thumbnail"
     case stockPhoto = "stock_photo"
+    /// Image taken from the recipe web page itself (JSON-LD image / og:image).
+    case webImage = "web_image"
     case none
 
     public init(from decoder: Decoder) throws {

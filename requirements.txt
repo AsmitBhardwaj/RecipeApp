@@ -5,3 +5,6 @@ yt-dlp
 python-dotenv
 requests
 pydantic
+beautifulsoup4
+lxml
+trafilatura
