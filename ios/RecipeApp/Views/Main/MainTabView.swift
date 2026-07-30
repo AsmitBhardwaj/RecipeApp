@@ -59,6 +59,21 @@ struct MainTabView: View {
         .onChange(of: scenePhase) { _, phase in
             if phase == .active { jobs.reconcile() }
         }
+        // One-time failure alert, app-wide so it surfaces over whatever tab the
+        // user is on when a live poll or foreground reconcile detects a failure.
+        // The failed card in the Recipes list remains for detailed review.
+        .alert(
+            "Couldn't add recipe",
+            isPresented: Binding(
+                get: { jobs.failureAlert != nil },
+                set: { presented in if !presented { jobs.clearFailureAlert() } }
+            ),
+            presenting: jobs.failureAlert
+        ) { _ in
+            Button("OK", role: .cancel) { }
+        } message: { alert in
+            Text(alert.message)
+        }
     }
 }
 

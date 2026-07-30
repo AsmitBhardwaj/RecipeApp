@@ -32,6 +32,11 @@ final class PendingJobsModel: ObservableObject {
     /// Jobs that failed, held in memory until the user dismisses the card. Not
     /// persisted: the durable store only holds not-yet-resolved jobs.
     @Published private(set) var failed: [FailedJob] = []
+    /// Set once when a job first transitions to failed while the app is active,
+    /// driving a one-time alert *in addition to* the persistent failed card.
+    /// Cleared on dismiss. Not persisted — failed jobs aren't persisted, so
+    /// there's nothing to re-alert about on relaunch.
+    @Published private(set) var failureAlert: FailureAlert?
     /// Initial recipe-fetch state for the list screen.
     @Published private(set) var loadState: LoadState = .loading
 
@@ -48,6 +53,13 @@ final class PendingJobsModel: ObservableObject {
         var id: String { jobId }
     }
 
+    /// A one-shot failure surfaced as an alert. Identifiable by job id so
+    /// `.alert(isPresented:presenting:)` keys on the specific failure.
+    struct FailureAlert: Identifiable, Equatable {
+        let id: String   // jobId
+        let message: String
+    }
+
     private let provider: RecipeProvider
     private let store: PendingJobStore
     /// On-device cache of completed recipes so the list survives full relaunches
@@ -56,6 +68,9 @@ final class PendingJobsModel: ObservableObject {
     /// Job ids with an in-flight poll task, so `reconcile()` and `submit()` never
     /// start a second poll for the same job.
     private var activePolls: Set<String> = []
+    /// Job ids we've already surfaced the failure alert for this session, so the
+    /// same failure never pops the alert twice. Not persisted (resets each launch).
+    private var alertedJobIds: Set<String> = []
     /// Whether the one-time recipe seed has succeeded. Guards `load()` so a
     /// re-fired `.task` can never re-run it and clobber recipes resolved this
     /// session (see `load()`).
@@ -148,6 +163,12 @@ final class PendingJobsModel: ObservableObject {
         failed.removeAll { $0.jobId == jobId }
     }
 
+    /// Dismiss the one-time failure alert. The failed card stays in the list for
+    /// detailed review.
+    func clearFailureAlert() {
+        failureAlert = nil
+    }
+
     // MARK: - Polling
 
     private func startPolling(jobId: String) {
@@ -207,6 +228,15 @@ final class PendingJobsModel: ObservableObject {
         let jobURL = url ?? pending.first(where: { $0.jobId == jobId })?.url ?? ""
         if !failed.contains(where: { $0.jobId == jobId }) {
             failed.append(FailedJob(jobId: jobId, url: jobURL, message: message))
+        }
+        // Surface a one-time alert on the transition to failed. Once per jobId
+        // per session; a second concurrent failure keeps its card but doesn't
+        // stomp an unacknowledged alert.
+        if !alertedJobIds.contains(jobId) {
+            alertedJobIds.insert(jobId)
+            if failureAlert == nil {
+                failureAlert = FailureAlert(id: jobId, message: message)
+            }
         }
         store.remove(jobId: jobId)
         pending = store.all()
