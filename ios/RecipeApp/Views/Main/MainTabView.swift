@@ -59,21 +59,22 @@ struct MainTabView: View {
         .onChange(of: scenePhase) { _, phase in
             if phase == .active { jobs.reconcile() }
         }
-        // One-time failure alert, app-wide so it surfaces over whatever tab the
+        // One-time failure modal, app-wide so it surfaces over whatever tab the
         // user is on when a live poll or foreground reconcile detects a failure.
-        // The failed card in the Recipes list remains for detailed review.
-        .alert(
-            "Couldn't add recipe",
-            isPresented: Binding(
-                get: { jobs.failureAlert != nil },
-                set: { presented in if !presented { jobs.clearFailureAlert() } }
-            ),
-            presenting: jobs.failureAlert
-        ) { _ in
-            Button("OK", role: .cancel) { }
-        } message: { alert in
-            Text(alert.message)
+        // Custom overlay (not a native .alert) so the OK button can be a filled
+        // sage rectangle — native alerts only tint button text. The failed card
+        // in the Recipes list remains for detailed review.
+        .overlay {
+            if let alert = jobs.failureAlert {
+                FailureAlertView(
+                    title: "Couldn't add recipe 😔",
+                    message: alert.message,
+                    onDismiss: { jobs.clearFailureAlert() }
+                )
+                .transition(.opacity.combined(with: .scale(scale: 0.96)))
+            }
         }
+        .animation(.easeOut(duration: 0.2), value: jobs.failureAlert)
     }
 }
 
