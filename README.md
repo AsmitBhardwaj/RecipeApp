@@ -130,4 +130,88 @@ To build the Share Extension target, you'll need:
 
 ## License
 
+_Add a license here before making this repository public._│   │       ├── llm.py            LLM-based extraction (OpenAI)
+│   │       ├── images.py         Thumbnail / stock photo resolution
+│   │       └── orchestrator.py   Ties the pipeline together
+│   └── tests/
+└── ios/
+    ├── RecipeApp/            Main SwiftUI app target
+    │   ├── Views/                Tab views: Recipes, Meal Plan, Grocery List, Discover
+    │   └── Providers/             App-side state coordinators
+    ├── RecipeKit/             Shared Swift package (models, networking, local storage)
+    │   ├── Models/
+    │   ├── Networking/            API client, typed error handling
+    │   └── Storage/               App Group–backed local persistence
+    └── ShareExtension/        iOS Share Extension (share a link directly from Instagram/TikTok)
+```
+
+### Backend
+
+- **FastAPI** serving a small async job API: submit a URL, poll for status, get back a structured recipe.
+- **SQLite** with WAL mode, persisted on a Railway volume — chosen deliberately over Postgres for zero operational overhead at this scale.
+- Recipes are **cached by canonical source** (video ID or normalized URL) — resubmitting the same link never re-extracts or re-spends an LLM call.
+- Outbound fetches to arbitrary user-submitted URLs are protected against SSRF: private/loopback/link-local IP ranges are blocked before every fetch and every redirect hop.
+
+### iOS app
+
+- **SwiftUI**, targeting iOS 17+.
+- **RecipeKit** is a local Swift package shared between the main app and the Share Extension — it owns the data models, the API client, and local persistence, so both targets stay in sync without duplicated logic.
+- All local state (pending jobs, meal plan entries, grocery checklist state, saved recipes) is persisted via an **App Group–backed store**, so data survives app relaunches and is shared correctly between the app and the Share Extension.
+- An anonymous per-device user identity is generated once and stored in the shared Keychain access group.
+
+---
+
+## Status
+
+This is an actively developed personal project, not a finished product. Current state, roughly:
+
+**Working:**
+- Recipe extraction from Instagram, TikTok, and general recipe blogs
+- Async job processing with background persistence
+- Meal Plan (7-day view, recipe assignment)
+- Grocery List (day/week toggle, category grouping, manual items)
+- Local recipe/job persistence across app relaunches
+
+**In progress / known gaps:**
+- Share Extension is fully implemented but requires a paid Apple Developer account to test on a physical device (App Groups isn't available on free accounts)
+- No backend authentication yet — protected only by a lightweight rate limit
+- Discover tab is a placeholder — no accounts or public recipe visibility yet
+- No support yet for adding a recipe via photo (OCR) or manual typing — blog/Instagram/TikTok import only, for now
+
+---
+
+## Running it locally
+
+### Backend
+
+```bash
+cd backend
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+uvicorn app.main:app --reload
+```
+
+You'll need an OpenAI API key set as an environment variable for the extraction pipeline to work.
+
+### iOS app
+
+Open `ios/RecipeApp.xcodeproj` in Xcode. Requires Xcode 16+ (uses synchronized folder groups) and iOS 17+ as a deployment target.
+
+To build the Share Extension target, you'll need:
+- A paid Apple Developer Program membership (required for the App Groups capability)
+- The same App Group identifier configured on both the main app and extension targets
+
+---
+
+## Tech stack
+
+**Backend:** Python, FastAPI, SQLite, OpenAI API, BeautifulSoup, trafilatura
+**iOS:** Swift, SwiftUI, Swift Package Manager
+**Infrastructure:** Railway (hosting + persistent volume)
+
+---
+
+## License
+
 _Add a license here before making this repository public._
