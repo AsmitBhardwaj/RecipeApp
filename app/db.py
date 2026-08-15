@@ -77,6 +77,16 @@ def init_db() -> None:
                 saved_at    TEXT NOT NULL,
                 PRIMARY KEY (user_id, recipe_id)
             );
+
+            -- Persistent fixed-window rate-limit counters (app/ratelimit.py).
+            -- One row per (identity+scope+window-size, window-start); survives
+            -- restarts/redeploys, unlike the old in-memory limiter.
+            CREATE TABLE IF NOT EXISTS rate_limits (
+                bucket_key   TEXT    NOT NULL,
+                window_start INTEGER NOT NULL,
+                count        INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (bucket_key, window_start)
+            );
             """
         )
 
@@ -149,3 +159,30 @@ def save_user_recipe(link: UserRecipe) -> None:
             "ON CONFLICT(user_id, recipe_id) DO NOTHING",
             (link.user_id, link.recipe_id, link.custom_name, link.sort_key, link.saved_at),
         )
+
+
+# --------------------------------------------------------------------------- #
+# Rate-limit counters
+# --------------------------------------------------------------------------- #
+
+
+def rate_limit_incr(bucket_key: str, window_start: int) -> int:
+    """Atomically bump the counter for (bucket_key, window_start) and return the
+    new value. A single UPSERT ... RETURNING keeps the read-modify-write inside
+    one statement, so concurrent workers can't lose increments."""
+    with _tx() as conn:
+        row = conn.execute(
+            "INSERT INTO rate_limits (bucket_key, window_start, count) "
+            "VALUES (?, ?, 1) "
+            "ON CONFLICT(bucket_key, window_start) DO UPDATE SET count = count + 1 "
+            "RETURNING count",
+            (bucket_key, window_start),
+        ).fetchone()
+    return int(row["count"])
+
+
+def rate_limit_cleanup(older_than: int) -> None:
+    """Delete counter rows whose window ended before `older_than` (epoch secs).
+    Only the current window is ever read, so anything older is dead weight."""
+    with _tx() as conn:
+        conn.execute("DELETE FROM rate_limits WHERE window_start < ?", (older_than,))

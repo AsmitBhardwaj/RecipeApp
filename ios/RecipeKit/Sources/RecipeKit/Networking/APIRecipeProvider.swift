@@ -10,10 +10,12 @@
 //  until the job reaches `complete`. `submitRecipe(url:)` enqueues then polls to
 //  a terminal state so callers can just `await` a finished `Recipe`.
 //
-//  Every request carries `X-User-Id: RecipeKit.currentUserID`. The backend does
-//  not read it yet (auth is stubbed to a single default user), but sending it now
-//  means the client is ready the day the backend starts honoring it — and it is
-//  harmlessly ignored until then.
+//  Every request carries two abuse-prevention headers:
+//    * `X-User-Id: RecipeKit.currentUserID` — the anonymous per-device UUID the
+//      backend now rate-limits on (spoofable, so a deterrence signal, not auth).
+//    * `X-App-Key: AppConfig.appKey` — a static shared secret the backend
+//      requires on every request (401 otherwise). Sent only when configured for
+//      this build; see AppConfig for why this is deterrence, not real auth.
 //
 
 import Foundation
@@ -28,6 +30,9 @@ public struct APIRecipeProvider: RecipeProvider {
     /// How the provider resolves the anonymous user id per request. Injectable so
     /// tests don't touch the real Keychain.
     let userID: () -> String
+    /// How the provider resolves the shared app key per request. Injectable for
+    /// tests; defaults to the build-time value in the app bundle.
+    let appKey: () -> String
     /// Poll cadence and total budget for `submitRecipe`.
     let pollInterval: Duration
     let maxWait: Duration
@@ -36,12 +41,14 @@ public struct APIRecipeProvider: RecipeProvider {
         baseURL: URL = APIRecipeProvider.defaultBaseURL,
         session: URLSession = .shared,
         userID: @escaping () -> String = { RecipeKit.currentUserID },
+        appKey: @escaping () -> String = { AppConfig.appKey },
         pollInterval: Duration = .seconds(1.5),
         maxWait: Duration = .seconds(120)
     ) {
         self.baseURL = baseURL
         self.session = session
         self.userID = userID
+        self.appKey = appKey
         self.pollInterval = pollInterval
         self.maxWait = maxWait
     }
@@ -129,6 +136,13 @@ public struct APIRecipeProvider: RecipeProvider {
     private func applyCommonHeaders(_ request: inout URLRequest) {
         request.setValue(userID(), forHTTPHeaderField: "X-User-Id")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
+        // Only attach the app key when this build actually has one — an empty
+        // header would just be a wrong key. Dev builds without Secrets.xcconfig
+        // send no key (and a backend without APP_KEY configured accepts them).
+        let key = appKey()
+        if !key.isEmpty {
+            request.setValue(key, forHTTPHeaderField: "X-App-Key")
+        }
     }
 
     private func send<T: Decodable>(_ request: URLRequest) async throws -> T {

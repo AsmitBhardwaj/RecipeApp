@@ -1,5 +1,7 @@
 # Secrets — never commit
 .env
+# iOS app secret (shared app key). Commit only Secrets.example.xcconfig.
+ios/Secrets.xcconfig
 
 # Python
 __pycache__/
