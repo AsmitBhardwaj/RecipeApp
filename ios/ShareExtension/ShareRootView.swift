@@ -98,7 +98,7 @@ struct ShareRootView: View {
 
         do {
             // Same provider + store the main app uses. PendingJobStore defaults to
-            // the shared App Group suite (group.com.recipeapp.shared).
+            // the shared App Group suite (group.com.recipeapp.shared2).
             let job = try await APIRecipeProvider().submitJob(url: raw)
             PendingJobStore().upsert(
                 PendingJob(jobId: job.jobId, url: raw, submittedAt: Date(), lastStatus: job.status)
