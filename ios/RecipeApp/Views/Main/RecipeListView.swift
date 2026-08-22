@@ -148,14 +148,11 @@ struct RecipeRowView: View {
                     .font(.editorialTitle(size: 19, relativeTo: .headline))
                     .lineLimit(2)
 
-                HStack(spacing: 8) {
-                    if let total = recipe.totalTimeMinutes ?? recipe.cookTimeMinutes {
-                        Label(total.minutesString, systemImage: "clock")
-                    }
-                    Label("\(recipe.ingredients.count) items", systemImage: "list.bullet")
+                if let total = recipe.totalTimeMinutes ?? recipe.cookTimeMinutes {
+                    Label(total.minutesString, systemImage: "clock")
+                        .font(.caption)
+                        .foregroundStyle(Color.textSecondary)
                 }
-                .font(.caption)
-                .foregroundStyle(Color.textSecondary)
 
                 if recipe.isGenerated {
                     GeneratedBadge()

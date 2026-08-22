@@ -12,6 +12,14 @@ import RecipeKit
 
 struct RecipeDetailView: View {
     let recipe: Recipe
+    @StateObject private var scaler: ServingScaler
+
+    init(recipe: Recipe) {
+        self.recipe = recipe
+        // Base is only meaningful when scalable; when it isn't, the scaler is
+        // never surfaced, so a placeholder of 1 is harmless.
+        _scaler = StateObject(wrappedValue: ServingScaler(baseServings: recipe.baseServings ?? 1))
+    }
 
     var body: some View {
         ScrollView {
@@ -19,6 +27,12 @@ struct RecipeDetailView: View {
                 hero
                 VStack(alignment: .leading, spacing: 24) {
                     header
+                    if recipe.canScaleServings {
+                        HStack {
+                            Spacer(minLength: 0)
+                            servingAdjuster
+                        }
+                    }
                     metaRow
                     ingredientsSection
                     instructionsSection
@@ -31,6 +45,50 @@ struct RecipeDetailView: View {
         .appBackground()
         .navigationTitle(recipe.title)
         .navigationBarTitleDisplayMode(.inline)
+    }
+
+    // MARK: Serving-size adjuster
+
+    /// +/- control that scales ingredient quantities. Shown only when
+    /// `recipe.canScaleServings` (numeric base + at least one numeric quantity);
+    /// see ServingScaler / RecipeKit's `Recipe.canScaleServings`. When shown, it
+    /// OWNS the servings display, so `metaItems` drops its static "Servings" cell
+    /// to avoid showing the count twice.
+    ///
+    /// Deliberately a lightweight inline stepper — no torn-edge card — so it
+    /// reads as a small utility next to the title, not a boxed feature.
+    private var servingAdjuster: some View {
+        HStack(spacing: 10) {
+            stepButton("minus", enabled: scaler.canDecrement, action: scaler.decrement)
+            VStack(spacing: 0) {
+                Text("\(scaler.currentServings.quantityString) \(scaler.currentServings == 1 ? "serving" : "servings")")
+                    .font(.subheadline.weight(.medium))
+                    .monospacedDigit()
+                if scaler.isScaled {
+                    Text("originally \(scaler.baseServings.quantityString)")
+                        .font(.caption2)
+                        .foregroundStyle(Color.textSecondary)
+                }
+            }
+            stepButton("plus", enabled: scaler.canIncrement, action: scaler.increment)
+        }
+    }
+
+    /// A small sage circular +/- button. Lighter than the instruction step
+    /// numbers — this is an inline utility control, not content.
+    private func stepButton(_ symbol: String, enabled: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(.caption.weight(.bold))
+                .foregroundStyle(.white)
+                .frame(width: 26, height: 26)
+                .background(
+                    enabled ? Color.accentColor : Color.textSecondary.opacity(0.3),
+                    in: Circle()
+                )
+        }
+        .buttonStyle(.plain)
+        .disabled(!enabled)
     }
 
     // MARK: Hero image
@@ -89,7 +147,9 @@ struct RecipeDetailView: View {
 
     private var metaItems: [(label: String, value: String)] {
         var items: [(String, String)] = []
-        if let servings = recipe.servings.displayString {
+        // When the adjuster is shown it owns the servings display, so skip the
+        // static cell here to avoid showing the count twice.
+        if !recipe.canScaleServings, let servings = recipe.servings.displayString {
             items.append(("Servings", servings))
         }
         if let prep = recipe.prepTimeMinutes {
@@ -120,13 +180,22 @@ struct RecipeDetailView: View {
                             .fill(.tint)
                             .frame(width: 6, height: 6)
                             .padding(.top, 7)
-                        Text(ingredient.displayString)
+                        Text(ingredientLine(for: ingredient))
                             .font(.body)
                         Spacer(minLength: 0)
                     }
                 }
             }
         }
+    }
+
+    /// Scales the ingredient line when the adjuster is active; otherwise the
+    /// plain line. Ingredients without a numeric quantity are unchanged either
+    /// way (handled inside `displayString(scaledBy:)`).
+    private func ingredientLine(for ingredient: Ingredient) -> String {
+        recipe.canScaleServings
+            ? ingredient.displayString(scaledBy: scaler.ratio)
+            : ingredient.displayString
     }
 
     // MARK: Instructions
