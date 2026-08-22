@@ -4,5 +4,16 @@
 <dict>
 	<key>APP_KEY</key>
 	<string>$(APP_KEY)</string>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>com.recipeapp.RecipeApp2</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>recipeapp</string>
+			</array>
+		</dict>
+	</array>
 </dict>
 </plist>

@@ -17,8 +17,12 @@ import RecipeKit
 struct ShareRootView: View {
     /// URL string extracted from the share context (nil if none was found).
     let sharedURL: String?
-    /// Called to complete the extension request and dismiss the sheet.
+    /// Called to complete the extension request and dismiss the sheet
+    /// (returns to Instagram/TikTok) — the "Keep browsing" action.
     let onFinish: () -> Void
+    /// Called to launch the main app via `recipeapp://` — the "Open RecipeApp"
+    /// action. The host controller opens the URL and then completes the request.
+    let onOpenApp: () -> Void
 
     @State private var phase: Phase = .working
 
@@ -67,6 +71,14 @@ struct ShareRootView: View {
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
 
+            VStack(spacing: 10) {
+                // Primary: sage. Launches the main app on the Recipes tab.
+                filledButton("Open RecipeApp", color: Color.accentColor, action: onOpenApp)
+                // Secondary: clay. Dismisses the extension back to Instagram.
+                filledButton("Keep browsing", color: Color.secondaryAccent, action: onFinish)
+            }
+            .padding(.top, 6)
+
         case .failure(let message):
             Image(systemName: "exclamationmark.triangle.fill")
                 .font(.largeTitle)
@@ -79,6 +91,20 @@ struct ShareRootView: View {
                 .buttonStyle(.borderedProminent)
                 .padding(.top, 4)
         }
+    }
+
+    /// Full-width filled button matching the app's convention (filled accent
+    /// rectangle, cream text) — used for both success-state actions.
+    private func filledButton(_ title: String, color: Color, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(.headline)
+                .foregroundStyle(.white)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 12)
+                .background(color, in: RoundedRectangle(cornerRadius: 12))
+        }
+        .buttonStyle(.plain)
     }
 
     // MARK: - Submit
@@ -103,9 +129,9 @@ struct ShareRootView: View {
             PendingJobStore().upsert(
                 PendingJob(jobId: job.jobId, url: raw, submittedAt: Date(), lastStatus: job.status)
             )
+            // No auto-dismiss: the user now chooses "Open RecipeApp" or
+            // "Keep browsing" from the success state.
             phase = .success
-            try? await Task.sleep(for: .seconds(1.2))
-            onFinish()
         } catch let error as RecipeProviderError {
             phase = .failure(error.userMessage)
         } catch {

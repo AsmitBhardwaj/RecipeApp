@@ -20,19 +20,28 @@ import RecipeKit
 struct MainTabView: View {
     @StateObject private var jobs: PendingJobsModel
     @Environment(\.scenePhase) private var scenePhase
+    /// Which tab is showing. Bound so `onOpenURL` (launch via `recipeapp://`
+    /// from the Share Extension) can force the Recipes tab, where the new
+    /// processing card lives.
+    @State private var selectedTab: Tab = .recipes
+
+    private enum Tab: Hashable {
+        case recipes, mealPlan, grocery, discover
+    }
 
     init(recipeProvider: RecipeProvider) {
         _jobs = StateObject(wrappedValue: PendingJobsModel(provider: recipeProvider))
     }
 
     var body: some View {
-        TabView {
+        TabView(selection: $selectedTab) {
             NavigationStack {
                 RecipeListView(jobs: jobs)
             }
             .tabItem {
                 Label("Recipes", systemImage: "book.closed.fill")
             }
+            .tag(Tab.recipes)
 
             NavigationStack {
                 MealPlanView(jobs: jobs)
@@ -40,6 +49,7 @@ struct MainTabView: View {
             .tabItem {
                 Label("Meal Plan", systemImage: "calendar")
             }
+            .tag(Tab.mealPlan)
 
             NavigationStack {
                 GroceryListView(jobs: jobs)
@@ -47,6 +57,7 @@ struct MainTabView: View {
             .tabItem {
                 Label("Grocery List", systemImage: "cart")
             }
+            .tag(Tab.grocery)
 
             NavigationStack {
                 DiscoverView()
@@ -54,10 +65,20 @@ struct MainTabView: View {
             .tabItem {
                 Label("Discover", systemImage: "sparkles")
             }
+            .tag(Tab.discover)
         }
         .task { jobs.reconcile() }
         .onChange(of: scenePhase) { _, phase in
             if phase == .active { jobs.reconcile() }
+        }
+        // Launched via `recipeapp://` (Share Extension "Open RecipeApp"): bring
+        // the user to the Recipes tab so the just-submitted job's processing card
+        // is visible. The `.active` reconcile above then refreshes it.
+        .onOpenURL { url in
+            if url.scheme == "recipeapp" {
+                selectedTab = .recipes
+                jobs.reconcile()
+            }
         }
         // One-time failure modal, app-wide so it surfaces over whatever tab the
         // user is on when a live poll or foreground reconcile detects a failure.

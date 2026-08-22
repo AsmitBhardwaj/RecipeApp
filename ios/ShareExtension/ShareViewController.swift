@@ -29,7 +29,8 @@ final class ShareViewController: UIViewController {
     private func presentRoot(with urlString: String?) {
         let root = ShareRootView(
             sharedURL: urlString,
-            onFinish: { [weak self] in self?.finish() }
+            onFinish: { [weak self] in self?.finish() },
+            onOpenApp: { [weak self] in self?.openHostApp() }
         )
         let host = UIHostingController(rootView: root)
         host.view.backgroundColor = .clear
@@ -48,6 +49,15 @@ final class ShareViewController: UIViewController {
 
     private func finish() {
         extensionContext?.completeRequest(returningItems: [], completionHandler: nil)
+    }
+
+    /// Launches the main app via its custom scheme, then completes the request so
+    /// the extension dismisses behind the foregrounded app.
+    private func openHostApp() {
+        guard let url = URL(string: "recipeapp://") else { finish(); return }
+        extensionContext?.open(url) { [weak self] _ in
+            self?.finish()
+        }
     }
 
     // MARK: - URL extraction
