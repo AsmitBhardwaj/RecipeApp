@@ -13,8 +13,12 @@
 //
 //  Because this repo is public, the literal value is NOT committed. It is
 //  injected at build time from a gitignored `ios/Secrets.xcconfig`
-//  (`APP_KEY = ...`) into the generated Info.plist via the build setting
-//  `INFOPLIST_KEY_APP_KEY = $(APP_KEY)`, and read here at runtime. When unset
+//  (`APP_KEY = ...`), which is wired as the RecipeApp target's base
+//  configuration. The committed `ios/RecipeApp-Info.plist` (INFOPLIST_FILE)
+//  carries `APP_KEY = $(APP_KEY)`, which Xcode expands from that build setting
+//  and merges into the app's Info.plist, where this reads it at runtime.
+//  (A custom `INFOPLIST_KEY_APP_KEY` build setting does NOT work — Xcode only
+//  maps its own known INFOPLIST_KEY_* keys into a generated plist.) When unset
 //  (dev builds with no Secrets.xcconfig), `appKey` is empty and the networking
 //  layer simply omits the header.
 //
