@@ -74,7 +74,9 @@ public extension ImageSource {
         case .videoThumbnail: return "From video"
         case .stockPhoto: return "Stock photo"
         case .webImage: return "From the site"
-        case .none: return nil
+        // No real image for this recipe — the client shows a bundled generic
+        // photo, so the badge makes clear it isn't the actual dish.
+        case .none: return "No photo available"
         }
     }
 }

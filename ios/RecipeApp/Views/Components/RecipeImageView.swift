@@ -3,8 +3,12 @@
 //  RecipeApp
 //
 //  Loads a recipe image with graceful fallbacks. When `imageUrl` is nil, the
-//  URL is malformed, or the load fails, it shows a tasteful placeholder rather
-//  than a broken-image icon or a crash (CLAUDE.md: never show a broken image).
+//  URL is malformed, or the load fails, it shows a bundled generic food photo
+//  rather than a broken-image icon or a crash (CLAUDE.md: never show a broken
+//  image). The generic photo is chosen deterministically from `fallbackSeed`
+//  (the recipe id) so a given recipe always shows the same one — see
+//  DefaultRecipeImage. Callers pair `image_source == .none` with a
+//  "No photo available" badge so it's clear this isn't the real dish.
 //
 
 import SwiftUI
@@ -12,7 +16,11 @@ import RecipeKit
 
 struct RecipeImageView: View {
     let imageUrl: String?
-    /// Point size for the placeholder glyph, scaled to the usage site.
+    /// Stable seed (recipe id) for picking the bundled generic fallback photo.
+    /// When nil, the first bundled image is used (previews / id-less contexts).
+    var fallbackSeed: String? = nil
+    /// Point size for the placeholder glyph, scaled to the usage site. Only used
+    /// for the icon fallback when no bundled image can be loaded.
     var placeholderSymbolSize: CGFloat = 34
 
     var body: some View {
@@ -24,27 +32,36 @@ struct RecipeImageView: View {
                         .resizable()
                         .scaledToFill()
                 case .failure:
-                    placeholder
+                    fallback
                 case .empty:
                     ZStack {
                         placeholderBackground
                         ProgressView()
                     }
                 @unknown default:
-                    placeholder
+                    fallback
                 }
             }
         } else {
-            placeholder
+            fallback
         }
     }
 
-    private var placeholder: some View {
-        ZStack {
+    /// The deterministic bundled generic photo. Falls back to a plain icon only
+    /// if the asset can't be found (should not happen in a correct build).
+    private var fallback: some View {
+        let name = DefaultRecipeImage.assetName(for: fallbackSeed)
+        return ZStack {
             placeholderBackground
-            Image(systemName: "fork.knife")
-                .font(.system(size: placeholderSymbolSize, weight: .light))
-                .foregroundStyle(Color.textSecondary)
+            if let uiImage = UIImage(named: name) {
+                Image(uiImage: uiImage)
+                    .resizable()
+                    .scaledToFill()
+            } else {
+                Image(systemName: "fork.knife")
+                    .font(.system(size: placeholderSymbolSize, weight: .light))
+                    .foregroundStyle(Color.textSecondary)
+            }
         }
     }
 

@@ -94,7 +94,7 @@ struct RecipeDetailView: View {
     // MARK: Hero image
 
     private var hero: some View {
-        RecipeImageView(imageUrl: recipe.imageUrl, placeholderSymbolSize: 52)
+        RecipeImageView(imageUrl: recipe.imageUrl, fallbackSeed: recipe.recipeId, placeholderSymbolSize: 52)
             .frame(height: 240)
             .frame(maxWidth: .infinity)
             .clipped()
