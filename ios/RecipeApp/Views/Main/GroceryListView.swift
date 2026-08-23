@@ -38,6 +38,7 @@ struct GroceryListView: View {
     @State private var selectedDayKey: String = ""
     @State private var showingAddItem = false
     @State private var newItemText = ""
+    @State private var showingShareToday = false
 
     enum Scope: String, CaseIterable, Identifiable {
         case day = "Day"
@@ -76,6 +77,15 @@ struct GroceryListView: View {
                     .font(.editorialTitle(size: 22))
                     .foregroundStyle(Color.textPrimary)
             }
+            ToolbarItem(placement: .topBarLeading) {
+                Button {
+                    showingShareToday = true
+                } label: {
+                    Image(systemName: "square.and.arrow.up")
+                }
+                .disabled(!canShareToday)
+                .accessibilityLabel("Share today's grocery list")
+            }
             ToolbarItem(placement: .primaryAction) {
                 Button {
                     showingAddItem = true
@@ -84,6 +94,9 @@ struct GroceryListView: View {
                 }
                 .accessibilityLabel("Add item")
             }
+        }
+        .sheet(isPresented: $showingShareToday) {
+            ActivityView(items: [todayShareText])
         }
         .onAppear(perform: syncSelectedDay)
         .onChange(of: plan.weekStart) { _, _ in syncSelectedDay() }
@@ -255,6 +268,46 @@ struct GroceryListView: View {
         guard !keys.contains(selectedDayKey) else { return }
         let todayKey = plan.dayKey(for: Date())
         selectedDayKey = keys.contains(todayKey) ? todayKey : (keys.first ?? "")
+    }
+
+    // MARK: - Share today's list
+
+    /// Today's recipe-derived grocery items, EXCLUDING checked-off (already-bought)
+    /// items. Always keyed to the real calendar day (`dayKey(for: Date())`),
+    /// independent of the Day/Week scope the user is currently viewing. Reuses the
+    /// same derivation as the list: entries → recipes → GroceryAggregator, and the
+    /// same period-scoped checked-state key ("day:<todayKey>|<stableKey>").
+    private var todayPeriodKey: String { "day:\(plan.dayKey(for: Date()))" }
+
+    private var todayUncheckedItems: [GroceryLineItem] {
+        let todayKey = plan.dayKey(for: Date())
+        let entries = mealStore.entries(on: todayKey)
+        let byId = Dictionary(jobs.recipes.map { ($0.recipeId, $0) }, uniquingKeysWith: { first, _ in first })
+        let recipes = entries.compactMap { byId[$0.recipeId] }
+        let items = GroceryAggregator.aggregate(recipes: recipes)
+        return items.filter { !model.isChecked("\(todayPeriodKey)|\($0.stableKey)") }
+    }
+
+    /// Today's hand-added ("Added by you") item names, excluding checked-off ones.
+    private var todayUncheckedManualNames: [String] {
+        model.manualItems(inPeriod: todayPeriodKey)
+            .filter { !model.isChecked($0.checkKey) }
+            .map(\.name)
+    }
+
+    /// Enabled when there's anything to share for today — a recipe-derived item OR
+    /// a hand-added one — after excluding checked-off (already-bought) items.
+    private var canShareToday: Bool {
+        !todayUncheckedItems.isEmpty || !todayUncheckedManualNames.isEmpty
+    }
+
+    /// The plain-text list handed to the native share sheet.
+    private var todayShareText: String {
+        GroceryShareText.build(
+            items: todayUncheckedItems,
+            for: Date(),
+            manualItems: todayUncheckedManualNames
+        )
     }
 }
 
