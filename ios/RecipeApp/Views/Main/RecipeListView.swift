@@ -83,7 +83,7 @@ struct RecipeRowView: View {
 
     var body: some View {
         HStack(spacing: 14) {
-            RecipeImageView(imageUrl: recipe.imageUrl, fallbackSeed: recipe.recipeId, placeholderSymbolSize: 22)
+            RecipeImageView(imageUrl: recipe.imageUrl, fallbackSeed: recipe.recipeId, fallbackTitle: recipe.title, placeholderSymbolSize: 22)
                 .frame(width: 64, height: 64)
                 .clipShape(RoundedRectangle(cornerRadius: 12))
 

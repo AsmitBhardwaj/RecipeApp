@@ -2,23 +2,25 @@
 //  DefaultRecipeImage.swift
 //  RecipeApp
 //
-//  Last-resort image fallback: when a recipe has no usable image (image_source
-//  == "none") or its remote image fails to load, we show one of a few bundled,
-//  generic food photos instead of a plain icon. The choice is deterministic per
-//  recipe (stable hash of its id) so a given recipe always shows the SAME
-//  fallback — never re-randomizing on each render.
+//  Last-resort image fallback when a recipe has no usable image (image_source ==
+//  "none") or its remote image fails to load. Resolution order:
+//    1. Category-matched pool — match the recipe TITLE to a food category
+//       (RecipeImageCategorizer) and pick from that category's bundled photos.
+//    2. Random pool — a generic bundled photo, used only when no category matches.
 //
-//  These are generic stock photos, NOT the recipe's actual dish, so callers pair
-//  them with a "No photo available" badge (see ImageSource.none) for honesty.
+//  In both tiers the pick is deterministic per recipe (stable hash of its id), so
+//  a given recipe always shows the SAME image. These are generic stock photos,
+//  NOT the recipe's actual dish, so callers pair them with a "No photo available"
+//  badge for honesty.
 //
 
 import SwiftUI
 import RecipeKit
 
 enum DefaultRecipeImage {
-    /// The bundled generic food photos (see Assets.xcassets/defaultRecipeImageN).
-    /// Kept varied across cuisine/course so repeats across recipes don't feel samey.
-    static let assetNames = [
+
+    /// Generic photos used only when no category matches (the last resort).
+    static let randomPool = [
         "defaultRecipeImage1",
         "defaultRecipeImage2",
         "defaultRecipeImage3",
@@ -26,11 +28,38 @@ enum DefaultRecipeImage {
         "defaultRecipeImage5",
     ]
 
-    /// Deterministic asset name for `seed` (a recipe id). Same seed → same image
-    /// across launches. `nil`/empty seed falls back to the first image so
-    /// previews and id-less contexts still render a photo.
-    static func assetName(for seed: String?) -> String {
-        guard let seed, !seed.isEmpty else { return assetNames[0] }
-        return assetNames[stableIndex(for: seed, modulo: assetNames.count)]
+    /// Category-matched photo pools (6 each), keyed by the food category the
+    /// recipe title resolves to. See Assets.xcassets/cat<Category>N.
+    static let categoryPools: [RecipeImageCategory: [String]] = [
+        .chicken: names("catChicken"),
+        .beef: names("catBeef"),
+        .pork: names("catPork"),
+        .seafood: names("catSeafood"),
+        .fish: names("catFish"),
+        .pasta: names("catPasta"),
+        .rice: names("catRice"),
+        .soup: names("catSoup"),
+        .salad: names("catSalad"),
+        .dessert: names("catDessert"),
+        .breakfastBaked: names("catBreakfast"),
+    ]
+
+    private static func names(_ prefix: String, count: Int = 6) -> [String] {
+        (1...count).map { "\(prefix)\($0)" }
+    }
+
+    /// Deterministic asset name for a recipe: a category-matched photo when the
+    /// title matches a category, otherwise a generic one. Same seed → same image
+    /// within whichever pool is chosen. A nil/empty seed still renders a photo.
+    static func assetName(for seed: String?, title: String?) -> String {
+        let seedValue = (seed?.isEmpty == false) ? seed! : "default"
+
+        if let title,
+           let category = RecipeImageCategorizer.category(for: title),
+           let pool = categoryPools[category], !pool.isEmpty {
+            return pool[stableIndex(for: seedValue, modulo: pool.count)]
+        }
+
+        return randomPool[stableIndex(for: seedValue, modulo: randomPool.count)]
     }
 }

@@ -16,9 +16,12 @@ import RecipeKit
 
 struct RecipeImageView: View {
     let imageUrl: String?
-    /// Stable seed (recipe id) for picking the bundled generic fallback photo.
-    /// When nil, the first bundled image is used (previews / id-less contexts).
+    /// Stable seed (recipe id) for picking the bundled fallback photo.
+    /// When nil, a default seed is used (previews / id-less contexts).
     var fallbackSeed: String? = nil
+    /// Recipe title, used to pick a category-matched fallback pool before the
+    /// generic random one. When nil, the random pool is used.
+    var fallbackTitle: String? = nil
     /// Point size for the placeholder glyph, scaled to the usage site. Only used
     /// for the icon fallback when no bundled image can be loaded.
     var placeholderSymbolSize: CGFloat = 34
@@ -50,7 +53,7 @@ struct RecipeImageView: View {
     /// The deterministic bundled generic photo. Falls back to a plain icon only
     /// if the asset can't be found (should not happen in a correct build).
     private var fallback: some View {
-        let name = DefaultRecipeImage.assetName(for: fallbackSeed)
+        let name = DefaultRecipeImage.assetName(for: fallbackSeed, title: fallbackTitle)
         return ZStack {
             placeholderBackground
             if let uiImage = UIImage(named: name) {

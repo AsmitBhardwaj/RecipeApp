@@ -262,7 +262,7 @@ private struct MealPlanEntryRow: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            RecipeImageView(imageUrl: entry.recipeImageURL, fallbackSeed: entry.recipeId, placeholderSymbolSize: 16)
+            RecipeImageView(imageUrl: entry.recipeImageURL, fallbackSeed: entry.recipeId, fallbackTitle: entry.recipeTitle, placeholderSymbolSize: 16)
                 .frame(width: 44, height: 44)
                 .clipShape(RoundedRectangle(cornerRadius: 8))
 
