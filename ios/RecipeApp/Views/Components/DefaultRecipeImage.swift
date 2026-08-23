@@ -44,7 +44,7 @@ enum DefaultRecipeImage {
         .breakfastBaked: names("catBreakfast"),
     ]
 
-    private static func names(_ prefix: String, count: Int = 6) -> [String] {
+    private static func names(_ prefix: String, count: Int = 5) -> [String] {
         (1...count).map { "\(prefix)\($0)" }
     }
 
