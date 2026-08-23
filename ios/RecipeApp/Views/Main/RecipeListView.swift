@@ -2,14 +2,14 @@
 //  RecipeListView.swift
 //  RecipeApp
 //
-//  The Recipes tab. Renders three kinds of rows from a single observable source
-//  (`PendingJobsModel`): failed-job cards needing attention, processing cards for
-//  in-flight jobs, and finished recipes. A processing card morphs into a recipe
-//  row the moment its job resolves (CLAUDE.md §3) — both are just different
-//  states of the same model, so no manual reload is needed.
+//  A scoped list of finished recipes. `cookbook == nil` renders "All Recipes"
+//  (every finished recipe); a non-nil cookbook renders only that cookbook's
+//  members. It is navigated to from `CookbooksGridView` (the Recipes-tab home).
 //
-//  Pending state is sourced from the App Group store via the model, NOT from
-//  local view state, so it survives this view (and the app) coming and going.
+//  In-flight (processing) and failed job cards are NOT shown here — they live on
+//  the grid home so a share is acknowledged there immediately (CLAUDE.md §6).
+//  This view is finished recipes only; membership is read live from
+//  `CookbooksModel`, so it reflects edits made in the recipe detail screen.
 //
 
 import SwiftUI
@@ -17,49 +17,25 @@ import RecipeKit
 
 struct RecipeListView: View {
     @ObservedObject var jobs: PendingJobsModel
+    @ObservedObject var cookbooks: CookbooksModel
+    /// nil = "All Recipes"; non-nil = a specific cookbook's members.
+    var cookbook: Cookbook? = nil
 
-    @State private var showingAdd = false
-    @State private var showingAccount = false
+    private var title: String { cookbook?.name ?? "All Recipes" }
+
+    private var displayedRecipes: [Recipe] {
+        guard let cookbook else { return jobs.recipes }
+        let ids = cookbooks.recipeIds(in: cookbook.id)
+        return jobs.recipes.filter { ids.contains($0.recipeId) }
+    }
 
     var body: some View {
-        // A stable container (not a transparent `Group`) so the `.task` below is
-        // hosted on an identity that persists across branch changes. Attaching it
-        // to a `Group` whose `switch` swaps between ProgressView / List / empty
-        // views made the branch's identity changes restart the task, re-running
-        // the one-time load and wiping the list.
         ZStack {
-            switch jobs.loadState {
-            case .loading:
-                ProgressView("Loading recipes…")
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            case .failed(let message):
-                ContentUnavailableView {
-                    Label("Couldn't load recipes", systemImage: "exclamationmark.triangle")
-                } description: {
-                    Text(message)
-                } actions: {
-                    Button("Try again") { Task { await jobs.load() } }
-                }
-            case .loaded where jobs.recipes.isEmpty && jobs.pending.isEmpty && jobs.failed.isEmpty:
-                ContentUnavailableView {
-                    Label("No recipes yet", systemImage: "book.closed")
-                } description: {
-                    Text("Tap + and paste an Instagram Reel or TikTok link to add your first recipe.")
-                }
-            case .loaded:
+            if displayedRecipes.isEmpty {
+                emptyState
+            } else {
                 List {
-                    // Needs-attention first, then in-flight, then finished.
-                    ForEach(jobs.failed) { failedJob in
-                        FailedJobCardView(job: failedJob) {
-                            jobs.dismissFailed(jobId: failedJob.jobId)
-                        }
-                        .tornEdgeCardRow()
-                    }
-                    ForEach(jobs.pending) { pendingJob in
-                        ProcessingCardView(job: pendingJob)
-                            .tornEdgeCardRow()
-                    }
-                    ForEach(jobs.recipes) { recipe in
+                    ForEach(displayedRecipes) { recipe in
                         NavigationLink(value: recipe) {
                             RecipeRowView(recipe: recipe)
                         }
@@ -71,64 +47,32 @@ struct RecipeListView: View {
         }
         .foregroundStyle(Color.textPrimary)
         .appBackground()
-        // Add is a floating button at the bottom-right (above the tab bar),
-        // shown once the list has loaded. Account lives in the top-right.
-        .overlay(alignment: .bottomTrailing) {
-            if jobs.loadState == .loaded {
-                addButton
-            }
-        }
-        .navigationTitle("Recipes")
+        .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .principal) {
-                Text("Recipes")
+                Text(title)
                     .font(.editorialTitle(size: 22))
                     .foregroundStyle(Color.textPrimary)
             }
-            ToolbarItem(placement: .topBarTrailing) {
-                Button {
-                    showingAccount = true
-                } label: {
-                    Image(systemName: "person.crop.circle")
-                }
-                .accessibilityLabel("Account")
-            }
         }
-        .sheet(isPresented: $showingAdd) {
-            AddRecipeView(jobs: jobs)
-        }
-        .sheet(isPresented: $showingAccount) {
-            NavigationStack {
-                AccountView()
-                    .toolbar {
-                        ToolbarItem(placement: .confirmationAction) {
-                            Button("Done") { showingAccount = false }
-                        }
-                    }
-            }
-        }
-        .navigationDestination(for: Recipe.self) { recipe in
-            RecipeDetailView(recipe: recipe)
-        }
-        .task { await jobs.load() }
     }
 
-    /// Floating "+" action button (bottom-right), replacing the old toolbar item.
-    private var addButton: some View {
-        Button {
-            showingAdd = true
-        } label: {
-            Image(systemName: "plus")
-                .font(.title2.weight(.semibold))
-                .foregroundStyle(.white)
-                .frame(width: 56, height: 56)
-                .background(.tint, in: Circle())
-                .shadow(radius: 4, y: 2)
+    @ViewBuilder
+    private var emptyState: some View {
+        if cookbook == nil {
+            ContentUnavailableView {
+                Label("No recipes yet", systemImage: "book.closed")
+            } description: {
+                Text("Tap + on the Recipes screen and paste an Instagram Reel or TikTok link to add your first recipe.")
+            }
+        } else {
+            ContentUnavailableView {
+                Label("Nothing here yet", systemImage: "books.vertical")
+            } description: {
+                Text("Add recipes to this cookbook from a recipe's detail screen.")
+            }
         }
-        .padding(.trailing, 20)
-        .padding(.bottom, 20)
-        .accessibilityLabel("Add recipe")
     }
 }
 
@@ -149,9 +93,15 @@ struct RecipeRowView: View {
                     .lineLimit(2)
 
                 if let total = recipe.totalTimeMinutes ?? recipe.cookTimeMinutes {
+                    // Pill chip: subtle fill + hairline border, muted text —
+                    // reuses the existing editorial tokens (textSecondary/cardEdge).
                     Label(total.minutesString, systemImage: "clock")
                         .font(.caption)
                         .foregroundStyle(Color.textSecondary)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 3)
+                        .background(Color.textSecondary.opacity(0.10), in: Capsule())
+                        .overlay(Capsule().strokeBorder(Color.cardEdge, lineWidth: 1))
                 }
 
                 if recipe.isGenerated {
@@ -165,7 +115,7 @@ struct RecipeRowView: View {
 
 // MARK: - Processing card
 
-/// Skeleton/processing card for an in-flight job. Sits in the list where the
+/// Skeleton/processing card for an in-flight job. Sits on the grid home where the
 /// finished recipe will appear and morphs into a `RecipeRowView` when the job
 /// completes.
 struct ProcessingCardView: View {
@@ -244,6 +194,9 @@ struct FailedJobCardView: View {
 
 #Preview {
     NavigationStack {
-        RecipeListView(jobs: PendingJobsModel(provider: MockRecipeProvider()))
+        RecipeListView(
+            jobs: PendingJobsModel(provider: MockRecipeProvider()),
+            cookbooks: CookbooksModel()
+        )
     }
 }

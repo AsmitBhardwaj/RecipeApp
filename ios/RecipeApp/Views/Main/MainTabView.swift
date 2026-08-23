@@ -2,9 +2,10 @@
 //  MainTabView.swift
 //  RecipeApp
 //
-//  The tab shell: Recipes, Meal Plan, Grocery List (placeholder), and Discover
-//  (placeholder). Account is reached from a toolbar icon on the Recipes screen,
-//  not a tab. Grocery List and Discover are "coming soon" shells for now.
+//  The tab shell: Recipes (with Cookbooks folded in), Meal Plan, and Grocery
+//  List. Account is reached from a toolbar icon on the Recipes screen, not a tab.
+//  Grocery List is a "coming soon" shell for now. DiscoverView still exists but
+//  is intentionally not in the tab bar yet — re-add a tab for it once built out.
 //
 //  Owns the app-wide `PendingJobsModel` so in-flight jobs and finished recipes
 //  live above the tabs (surviving tab switches and the Add sheet), and drives
@@ -19,6 +20,7 @@ import RecipeKit
 
 struct MainTabView: View {
     @StateObject private var jobs: PendingJobsModel
+    @StateObject private var cookbooks = CookbooksModel()
     @Environment(\.scenePhase) private var scenePhase
     /// Which tab is showing. Bound so `onOpenURL` (launch via `recipeapp://`
     /// from the Share Extension) can force the Recipes tab, where the new
@@ -26,7 +28,7 @@ struct MainTabView: View {
     @State private var selectedTab: Tab = .recipes
 
     private enum Tab: Hashable {
-        case recipes, mealPlan, grocery, discover
+        case recipes, mealPlan, grocery
     }
 
     init(recipeProvider: RecipeProvider) {
@@ -36,7 +38,7 @@ struct MainTabView: View {
     var body: some View {
         TabView(selection: $selectedTab) {
             NavigationStack {
-                RecipeListView(jobs: jobs)
+                CookbooksGridView(jobs: jobs, cookbooks: cookbooks)
             }
             .tabItem {
                 Label("Recipes", systemImage: "book.closed.fill")
@@ -58,14 +60,6 @@ struct MainTabView: View {
                 Label("Grocery List", systemImage: "cart")
             }
             .tag(Tab.grocery)
-
-            NavigationStack {
-                DiscoverView()
-            }
-            .tabItem {
-                Label("Discover", systemImage: "sparkles")
-            }
-            .tag(Tab.discover)
         }
         .task { jobs.reconcile() }
         .onChange(of: scenePhase) { _, phase in

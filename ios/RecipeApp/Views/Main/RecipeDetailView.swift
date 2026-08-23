@@ -12,10 +12,13 @@ import RecipeKit
 
 struct RecipeDetailView: View {
     let recipe: Recipe
+    @ObservedObject var cookbooks: CookbooksModel
     @StateObject private var scaler: ServingScaler
+    @State private var showingCookbookPicker = false
 
-    init(recipe: Recipe) {
+    init(recipe: Recipe, cookbooks: CookbooksModel) {
         self.recipe = recipe
+        self.cookbooks = cookbooks
         // Base is only meaningful when scalable; when it isn't, the scaler is
         // never surfaced, so a placeholder of 1 is harmless.
         _scaler = StateObject(wrappedValue: ServingScaler(baseServings: recipe.baseServings ?? 1))
@@ -34,6 +37,7 @@ struct RecipeDetailView: View {
                         }
                     }
                     metaRow
+                    cookbooksSection
                     ingredientsSection
                     instructionsSection
                 }
@@ -164,6 +168,50 @@ struct RecipeDetailView: View {
         return items
     }
 
+    // MARK: Cookbooks
+
+    /// Post-hoc cookbook assignment — the single place membership is edited
+    /// (import flows never prompt). Shows the recipe's current cookbooks as chips
+    /// and opens the multi-select picker.
+    private var cookbooksSection: some View {
+        let assignedIds = cookbooks.cookbookIds(for: recipe.recipeId)
+        let assigned = cookbooks.cookbooks.filter { assignedIds.contains($0.id) }
+        return VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                sectionHeader("Cookbooks", systemImage: "books.vertical")
+                Spacer()
+                Button {
+                    showingCookbookPicker = true
+                } label: {
+                    Label(assigned.isEmpty ? "Add" : "Edit", systemImage: "plus.circle")
+                        .font(.subheadline.weight(.semibold))
+                }
+            }
+            if assigned.isEmpty {
+                Text("In All Recipes only — tap Add to file it into a cookbook.")
+                    .font(.subheadline)
+                    .foregroundStyle(Color.textSecondary)
+            } else {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(assigned) { cookbook in
+                            Text(cookbook.name)
+                                .font(.caption.weight(.medium))
+                                .foregroundStyle(Color.textSecondary)
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 5)
+                                .background(Color.textSecondary.opacity(0.10), in: Capsule())
+                                .overlay(Capsule().strokeBorder(Color.cardEdge, lineWidth: 1))
+                        }
+                    }
+                }
+            }
+        }
+        .sheet(isPresented: $showingCookbookPicker) {
+            CookbookPickerSheet(recipeId: recipe.recipeId, cookbooks: cookbooks)
+        }
+    }
+
     // MARK: Ingredients
 
     private var ingredientsSection: some View {
@@ -232,12 +280,12 @@ struct RecipeDetailView: View {
 
 #Preview("Full recipe") {
     NavigationStack {
-        RecipeDetailView(recipe: .spicyNoodles)
+        RecipeDetailView(recipe: .spicyNoodles, cookbooks: CookbooksModel())
     }
 }
 
 #Preview("Generated, no image") {
     NavigationStack {
-        RecipeDetailView(recipe: .margheritaPizza)
+        RecipeDetailView(recipe: .margheritaPizza, cookbooks: CookbooksModel())
     }
 }
