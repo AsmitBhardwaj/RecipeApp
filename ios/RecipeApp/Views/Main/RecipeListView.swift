@@ -89,7 +89,7 @@ struct RecipeRowView: View {
 
             VStack(alignment: .leading, spacing: 5) {
                 Text(recipe.title)
-                    .font(.editorialTitle(size: 19, relativeTo: .headline))
+                    .font(.appRowTitle)
                     .lineLimit(2)
 
                 if let total = recipe.totalTimeMinutes ?? recipe.cookTimeMinutes {
