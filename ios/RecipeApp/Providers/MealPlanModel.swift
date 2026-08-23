@@ -59,6 +59,11 @@ final class MealPlanModel: ObservableObject {
         entriesByDay[dayKey(for: date)] ?? []
     }
 
+    /// A day's entries for one meal slot, time-ordered (multiple allowed).
+    func entries(for date: Date, slot: MealSlot) -> [MealPlanEntry] {
+        entries(for: date).filter { $0.mealSlot == slot }
+    }
+
     // MARK: - Navigation
 
     func goToPreviousWeek() { shiftWeek(by: -7) }
@@ -77,10 +82,27 @@ final class MealPlanModel: ObservableObject {
 
     // MARK: - Mutations
 
-    func add(recipe: Recipe, to date: Date) {
+    func add(recipe: Recipe, to date: Date, slot: MealSlot) {
         store.add(
             MealPlanEntry(
                 dayKey: dayKey(for: date),
+                mealSlot: slot,
+                recipeId: recipe.recipeId,
+                recipeTitle: recipe.title,
+                recipeImageURL: recipe.imageUrl
+            )
+        )
+        reload()
+    }
+
+    /// Swap the recipe on an existing assignment, keeping its day and meal slot
+    /// (the "Change" action). Implemented as remove-then-add at the store level.
+    func replace(_ entry: MealPlanEntry, with recipe: Recipe) {
+        store.remove(id: entry.id)
+        store.add(
+            MealPlanEntry(
+                dayKey: entry.dayKey,
+                mealSlot: entry.mealSlot,
                 recipeId: recipe.recipeId,
                 recipeTitle: recipe.title,
                 recipeImageURL: recipe.imageUrl

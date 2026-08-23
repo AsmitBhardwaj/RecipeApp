@@ -46,7 +46,7 @@ struct MainTabView: View {
             .tag(Tab.recipes)
 
             NavigationStack {
-                MealPlanView(jobs: jobs)
+                MealPlanView(jobs: jobs, cookbooks: cookbooks)
             }
             .tabItem {
                 Label("Meal Plan", systemImage: "calendar")
