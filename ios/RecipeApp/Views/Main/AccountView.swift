@@ -10,6 +10,17 @@ import SwiftUI
 
 struct AccountView: View {
     @AppStorage("hasCompletedOnboarding") private var hasCompletedOnboarding = false
+    @AppStorage(AppAppearance.storageKey, store: .appGroup) private var appearance: AppAppearance = .system
+
+    /// Drives the single "Dark Mode" switch. The stored preference keeps three
+    /// states so first launch (`.system`) follows the OS; the toggle only ever
+    /// writes an explicit override — ON → dark, OFF → light.
+    private var darkModeBinding: Binding<Bool> {
+        Binding(
+            get: { appearance == .dark },
+            set: { appearance = $0 ? .dark : .light }
+        )
+    }
 
     var body: some View {
         List {
@@ -27,6 +38,20 @@ struct AccountView: View {
                     }
                 }
                 .padding(.vertical, 6)
+            }
+
+            Section("Appearance") {
+                Toggle(isOn: darkModeBinding) {
+                    HStack(spacing: 12) {
+                        Image(systemName: "moon.stars")
+                            .foregroundStyle(.tint)
+                            .frame(width: 26)
+                        Text("Dark Mode")
+                            .foregroundStyle(Color.textPrimary)
+                    }
+                }
+                .tint(Color.accentColor)
+                .tornEdgeCardRow()
             }
 
             Section("About") {
