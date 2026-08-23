@@ -26,6 +26,12 @@ struct ShareRootView: View {
 
     @State private var phase: Phase = .working
 
+    // Named lookups (NOT Color.accentColor): the extension has no designated
+    // global accent, so Color.accentColor resolves to system blue. These read
+    // the copied colorsets in ShareExtension/Assets.xcassets directly.
+    private let sage = Color("AccentColor")
+    private let cream = Color("AppBackground")
+
     private enum Phase: Equatable {
         case working
         case success
@@ -33,16 +39,24 @@ struct ShareRootView: View {
     }
 
     var body: some View {
-        ZStack {
-            Color.black.opacity(0.15).ignoresSafeArea()
+        ZStack(alignment: .bottom) {
+            Color.black.opacity(0.25).ignoresSafeArea()
 
+            // Bottom-anchored sheet (like a native action sheet), cream surface
+            // with rounded top corners, flush to the screen's bottom edge.
             VStack(spacing: 14) {
                 content
             }
-            .padding(24)
-            .frame(maxWidth: 280)
-            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 20))
-            .shadow(radius: 20, y: 8)
+            .frame(maxWidth: .infinity)
+            .padding(.horizontal, 22)
+            .padding(.top, 24)
+            .padding(.bottom, 20)
+            .background(
+                UnevenRoundedRectangle(topLeadingRadius: 22, topTrailingRadius: 22, style: .continuous)
+                    .fill(cream)
+                    .ignoresSafeArea(edges: .bottom)
+                    .shadow(color: .black.opacity(0.18), radius: 18, y: -3)
+            )
         }
         .task { await run() }
     }
@@ -72,10 +86,10 @@ struct ShareRootView: View {
                 .multilineTextAlignment(.center)
 
             VStack(spacing: 10) {
-                // Primary: sage. Launches the main app on the Recipes tab.
-                filledButton("Open RecipeApp", color: Color.accentColor, action: onOpenApp)
-                // Secondary: clay. Dismisses the extension back to Instagram.
-                filledButton("Keep browsing", color: Color.secondaryAccent, action: onFinish)
+                // Both sage (both are forward actions). Differentiated by fill,
+                // not hue: solid launches the app, outlined dismisses.
+                filledButton("Open RecipeApp", action: onOpenApp)
+                outlinedButton("Keep browsing", action: onFinish)
             }
             .padding(.top, 6)
 
@@ -93,16 +107,31 @@ struct ShareRootView: View {
         }
     }
 
-    /// Full-width filled button matching the app's convention (filled accent
-    /// rectangle, cream text) — used for both success-state actions.
-    private func filledButton(_ title: String, color: Color, action: @escaping () -> Void) -> some View {
+    /// Solid sage button, cream/white text — the primary "Open RecipeApp" action.
+    private func filledButton(_ title: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Text(title)
                 .font(.headline)
                 .foregroundStyle(.white)
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 12)
-                .background(color, in: RoundedRectangle(cornerRadius: 12))
+                .background(sage, in: RoundedRectangle(cornerRadius: 12))
+        }
+        .buttonStyle(.plain)
+    }
+
+    /// Sage-outlined button (same hue, lighter weight) — "Keep browsing".
+    private func outlinedButton(_ title: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(.headline)
+                .foregroundStyle(sage)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 12)
+                .background(
+                    RoundedRectangle(cornerRadius: 12)
+                        .strokeBorder(sage, lineWidth: 1.5)
+                )
         }
         .buttonStyle(.plain)
     }

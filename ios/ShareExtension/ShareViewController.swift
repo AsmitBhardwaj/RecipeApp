@@ -53,11 +53,40 @@ final class ShareViewController: UIViewController {
 
     /// Launches the main app via its custom scheme, then completes the request so
     /// the extension dismisses behind the foregrounded app.
+    ///
+    /// `NSExtensionContext.open` is unreliable for *share* extensions (it can
+    /// return false and do nothing), so we honor its result and, on failure, fall
+    /// back to the responder-chain `UIApplication` workaround. We only dismiss if
+    /// we actually opened the app — otherwise the success screen stays up so the
+    /// tap isn't a silent no-op.
     private func openHostApp() {
-        guard let url = URL(string: "recipeapp://") else { finish(); return }
-        extensionContext?.open(url) { [weak self] _ in
-            self?.finish()
+        guard let url = URL(string: "recipeapp://") else { return }
+        extensionContext?.open(url) { [weak self] opened in
+            guard let self else { return }
+            if opened {
+                self.finish()
+            } else if self.openViaResponderChain(url) {
+                self.finish()
+            }
+            // If both paths failed, deliberately do NOT finish(): leave the
+            // success state visible so the user can retry or "Keep browsing".
         }
+    }
+
+    /// Walks the responder chain to a `UIApplication` and opens `url` through it.
+    /// Uses the `openURL:` selector to bypass the app-extension availability guard
+    /// on `UIApplication.open`. Returns whether an opener was found.
+    private func openViaResponderChain(_ url: URL) -> Bool {
+        let selector = NSSelectorFromString("openURL:")
+        var responder: UIResponder? = self
+        while let current = responder {
+            if current !== self, current.responds(to: selector) {
+                _ = current.perform(selector, with: url)
+                return true
+            }
+            responder = current.next
+        }
+        return false
     }
 
     // MARK: - URL extraction
