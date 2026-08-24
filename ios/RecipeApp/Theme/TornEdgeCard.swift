@@ -17,32 +17,40 @@ import SwiftUI
 struct TornEdgeCard: ViewModifier {
     var cornerRadius: CGFloat = 14
     var padding: CGFloat = 14
+    /// When false, the solid card is drawn WITHOUT the dashed torn-edge border
+    /// (fill/radius/padding are unchanged). Defaults to true so every existing
+    /// caller keeps the torn-edge look.
+    var bordered: Bool = true
 
     func body(content: Content) -> some View {
         content
             .padding(padding)
             .background(Color.appBackground, in: RoundedRectangle(cornerRadius: cornerRadius))
             .overlay {
-                RoundedRectangle(cornerRadius: cornerRadius)
-                    .strokeBorder(
-                        Color.cardEdge,
-                        style: StrokeStyle(lineWidth: 1.2, dash: [5, 4])
-                    )
+                if bordered {
+                    RoundedRectangle(cornerRadius: cornerRadius)
+                        .strokeBorder(
+                            Color.cardEdge,
+                            style: StrokeStyle(lineWidth: 1.2, dash: [5, 4])
+                        )
+                }
             }
     }
 }
 
 extension View {
-    /// Wraps content in the torn-edge cream card (see `TornEdgeCard`).
-    func tornEdgeCard(cornerRadius: CGFloat = 14, padding: CGFloat = 14) -> some View {
-        modifier(TornEdgeCard(cornerRadius: cornerRadius, padding: padding))
+    /// Wraps content in the cream card. `bordered: false` drops the dashed
+    /// torn-edge stroke, leaving a plain solid-background card.
+    func tornEdgeCard(cornerRadius: CGFloat = 14, padding: CGFloat = 14, bordered: Bool = true) -> some View {
+        modifier(TornEdgeCard(cornerRadius: cornerRadius, padding: padding, bordered: bordered))
     }
 
-    /// Torn-edge card for use as a `List` row: floats the card on the textured
-    /// background by hiding the default separator/row fill and adding a gap.
-    func tornEdgeCardRow(cornerRadius: CGFloat = 14) -> some View {
+    /// Card for use as a `List` row: floats the card on the textured background by
+    /// hiding the default separator/row fill and adding a gap. `bordered: false`
+    /// drops the dashed torn-edge stroke.
+    func tornEdgeCardRow(cornerRadius: CGFloat = 14, bordered: Bool = true) -> some View {
         self
-            .tornEdgeCard(cornerRadius: cornerRadius)
+            .tornEdgeCard(cornerRadius: cornerRadius, bordered: bordered)
             .listRowSeparator(.hidden)
             .listRowBackground(Color.clear)
             .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))

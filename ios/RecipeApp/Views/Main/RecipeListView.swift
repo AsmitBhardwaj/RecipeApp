@@ -39,7 +39,9 @@ struct RecipeListView: View {
                         NavigationLink(value: recipe) {
                             RecipeRowView(recipe: recipe)
                         }
-                        .tornEdgeCardRow()
+                        // Recipes list uses plain solid cards (no dashed border);
+                        // the torn-edge border stays the default elsewhere.
+                        .tornEdgeCardRow(bordered: false)
                     }
                 }
                 .listStyle(.plain)
@@ -95,13 +97,18 @@ struct RecipeRowView: View {
                 if let total = recipe.totalTimeMinutes ?? recipe.cookTimeMinutes {
                     // Pill chip: subtle fill + hairline border, muted text —
                     // reuses the existing editorial tokens (textSecondary/cardEdge).
-                    Label(total.minutesString, systemImage: "clock")
-                        .font(.caption)
-                        .foregroundStyle(Color.textSecondary)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 3)
-                        .background(Color.textSecondary.opacity(0.10), in: Capsule())
-                        .overlay(Capsule().strokeBorder(Color.cardEdge, lineWidth: 1))
+                    // Explicit tight HStack instead of Label, whose default
+                    // icon-to-text spacing left a large gap inside the pill.
+                    HStack(spacing: 4) {
+                        Image(systemName: "clock")
+                        Text(total.minutesString)
+                    }
+                    .font(.caption)
+                    .foregroundStyle(Color.textSecondary)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 3)
+                    .background(Color.textSecondary.opacity(0.10), in: Capsule())
+                    .overlay(Capsule().strokeBorder(Color.cardEdge, lineWidth: 1))
                 }
 
                 if recipe.isGenerated {
