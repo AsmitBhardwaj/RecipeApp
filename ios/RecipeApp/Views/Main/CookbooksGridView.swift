@@ -197,11 +197,11 @@ private struct CookbookCard: View {
                 .foregroundStyle(Color.textSecondary)
         }
         .frame(maxWidth: .infinity, minHeight: 132, alignment: .leading)
-        .tornEdgeCard()
+        .tornEdgeCard(bordered: false)
     }
 }
 
-/// The dashed "+ New Cookbook" tile.
+/// The "+ New Cookbook" tile — a solid card matching the others (no dashed border).
 private struct NewCookbookCard: View {
     let action: () -> Void
 
@@ -216,10 +216,7 @@ private struct NewCookbookCard: View {
                     .foregroundStyle(Color.textSecondary)
             }
             .frame(maxWidth: .infinity, minHeight: 132)
-            .background(
-                RoundedRectangle(cornerRadius: 14)
-                    .strokeBorder(Color.cardEdge, style: StrokeStyle(lineWidth: 1.2, dash: [5, 4]))
-            )
+            .background(Color.appBackground, in: RoundedRectangle(cornerRadius: 14))
         }
         .buttonStyle(.plain)
     }

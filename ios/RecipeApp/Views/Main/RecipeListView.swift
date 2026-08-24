@@ -89,7 +89,7 @@ struct RecipeRowView: View {
                 .frame(width: 64, height: 64)
                 .clipShape(RoundedRectangle(cornerRadius: 12))
 
-            VStack(alignment: .leading, spacing: 5) {
+            VStack(alignment: .leading, spacing: 3) {
                 Text(recipe.title)
                     .font(.appRowTitle)
                     .lineLimit(2)
