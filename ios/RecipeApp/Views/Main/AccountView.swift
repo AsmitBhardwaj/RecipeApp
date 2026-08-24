@@ -2,8 +2,11 @@
 //  AccountView.swift
 //  RecipeApp
 //
-//  The Account tab. A placeholder shell for this pass — real user identity,
-//  settings, and auth are out of scope until networking is wired up.
+//  The Account/Settings screen. Deliberately uses NATIVE iOS settings styling
+//  (inset-grouped List, system section headers, default row colors, gray SF
+//  Symbols, native green Toggle) rather than the app's custom sage/cream/clay
+//  card identity — this one screen is meant to read like Apple's Settings.
+//  Functionality is unchanged; only the styling differs from the rest of the app.
 //
 
 import SwiftUI
@@ -28,13 +31,13 @@ struct AccountView: View {
                 HStack(spacing: 14) {
                     Image(systemName: "person.crop.circle.fill")
                         .font(.system(size: 44))
-                        .foregroundStyle(.tint)
+                        .foregroundStyle(.secondary)
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Guest")
                             .font(.headline)
                         Text("Not signed in")
                             .font(.subheadline)
-                            .foregroundStyle(Color.textSecondary)
+                            .foregroundStyle(.secondary)
                     }
                 }
                 .padding(.vertical, 6)
@@ -42,31 +45,25 @@ struct AccountView: View {
 
             Section("Appearance") {
                 Toggle(isOn: darkModeBinding) {
-                    HStack(spacing: 12) {
-                        Image(systemName: "moon.stars")
-                            .foregroundStyle(.tint)
-                            .frame(width: 26)
+                    Label {
                         Text("Dark Mode")
-                            .foregroundStyle(Color.textPrimary)
+                    } icon: {
+                        Image(systemName: "moon.stars").foregroundStyle(.secondary)
                     }
                 }
-                .tint(Color.accentColor)
-                .tornEdgeCardRow()
+                .tint(.green)  // native switch green, not the app's sage
             }
 
             Section("Feedback") {
                 NavigationLink {
                     FeedbackView()
                 } label: {
-                    HStack(spacing: 12) {
-                        Image(systemName: "bubble.left.and.bubble.right")
-                            .foregroundStyle(.tint)
-                            .frame(width: 26)
+                    Label {
                         Text("Send Feedback")
-                            .foregroundStyle(Color.textPrimary)
+                    } icon: {
+                        Image(systemName: "bubble.left.and.bubble.right").foregroundStyle(.secondary)
                     }
                 }
-                .tornEdgeCardRow()
             }
 
             Section("About") {
@@ -82,8 +79,7 @@ struct AccountView: View {
             }
             #endif
         }
-        .foregroundStyle(Color.textPrimary)
-        .appBackground()
+        .listStyle(.insetGrouped)
         .navigationTitle("Account")
     }
 }
