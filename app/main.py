@@ -6,11 +6,14 @@ in one request/response cycle (no background worker yet).
 from __future__ import annotations
 
 import hmac
+import html
+from datetime import datetime, timezone
 from typing import Optional
 
-from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
-from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request
+from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.security import HTTPBasic, HTTPBasicCredentials
+from pydantic import BaseModel, field_validator, model_validator
 
 from . import config, db, ratelimit
 from .models import Job, Recipe
@@ -34,7 +37,10 @@ def _startup() -> None:
 # --------------------------------------------------------------------------- #
 @app.middleware("http")
 async def _require_app_key(request: Request, call_next):
-    if config.APP_KEY and request.url.path != "/":
+    # `/` (healthcheck) and `/admin/*` (browser page, guarded by its own Basic
+    # Auth instead — a browser can't send X-App-Key) are exempt.
+    path = request.url.path
+    if config.APP_KEY and path != "/" and not path.startswith("/admin"):
         presented = request.headers.get("X-App-Key", "")
         # Constant-time compare to avoid leaking the key via response timing.
         if not hmac.compare_digest(presented, config.APP_KEY):
@@ -121,3 +127,128 @@ def get_job(job_id: str) -> JobResponse:
     if job is None:
         raise HTTPException(status_code=404, detail="job not found")
     return _with_recipe(job)
+
+
+# --------------------------------------------------------------------------- #
+# Feedback
+# --------------------------------------------------------------------------- #
+
+
+class FeedbackRequest(BaseModel):
+    rating: Optional[int] = None
+    message: Optional[str] = None
+    contact_email: Optional[str] = None
+    app_version: Optional[str] = None
+    platform: Optional[str] = None
+
+    @field_validator("message", "contact_email", "app_version", "platform")
+    @classmethod
+    def _blank_to_none(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return None
+        v = v.strip()
+        return v or None
+
+    @field_validator("rating")
+    @classmethod
+    def _rating_range(cls, v: Optional[int]) -> Optional[int]:
+        if v is not None and not (1 <= v <= 5):
+            raise ValueError("rating must be between 1 and 5")
+        return v
+
+    @model_validator(mode="after")
+    def _require_rating_or_message(self) -> "FeedbackRequest":
+        if self.rating is None and not self.message:
+            raise ValueError("provide a rating or a message")
+        return self
+
+
+@app.post("/feedback")
+def submit_feedback(req: FeedbackRequest, request: Request) -> dict:
+    # Same abuse-prevention as the job endpoint: APP_KEY (middleware) + the
+    # persistent per-user/per-IP rate limiter.
+    user_id = _resolve_user_id(request)
+    try:
+        ratelimit.check(user_id, _client_ip(request))
+    except ratelimit.RateLimitExceeded as exc:
+        raise HTTPException(status_code=429, detail=str(exc))
+
+    feedback_id = db.save_feedback(
+        rating=req.rating,
+        message=req.message,
+        contact_email=req.contact_email,
+        app_version=req.app_version,
+        platform=req.platform,
+        created_at=datetime.now(timezone.utc).isoformat(),
+    )
+    return {"status": "ok", "id": feedback_id}
+
+
+# --------------------------------------------------------------------------- #
+# Admin page (HTTP Basic Auth; exempt from the app-key gate above)
+# --------------------------------------------------------------------------- #
+
+_basic = HTTPBasic()
+
+
+def _require_admin(credentials: HTTPBasicCredentials = Depends(_basic)) -> None:
+    if not config.ADMIN_PASSWORD:
+        # Never expose feedback without a configured password.
+        raise HTTPException(status_code=503, detail="admin page not configured")
+    ok_user = hmac.compare_digest(credentials.username, "admin")
+    ok_pass = hmac.compare_digest(credentials.password, config.ADMIN_PASSWORD)
+    if not (ok_user and ok_pass):
+        raise HTTPException(
+            status_code=401,
+            detail="unauthorized",
+            headers={"WWW-Authenticate": "Basic"},
+        )
+
+
+@app.get("/admin/feedback", response_class=HTMLResponse)
+def admin_feedback(_: None = Depends(_require_admin)) -> str:
+    rows = db.get_all_feedback()
+
+    def esc(value) -> str:
+        return html.escape(str(value)) if value not in (None, "") else "—"
+
+    def stars(rating) -> str:
+        if rating is None:
+            return "—"
+        r = max(0, min(5, int(rating)))
+        return "★" * r + "☆" * (5 - r)
+
+    body_rows = "".join(
+        "<tr>"
+        f"<td class='when'>{esc(row['created_at'])}</td>"
+        f"<td class='rating'>{stars(row['rating'])}</td>"
+        f"<td class='msg'>{esc(row['message'])}</td>"
+        f"<td>{esc(row['contact_email'])}</td>"
+        f"<td>{esc(row['app_version'])}</td>"
+        f"<td>{esc(row['platform'])}</td>"
+        "</tr>"
+        for row in rows
+    )
+    if not body_rows:
+        body_rows = "<tr><td colspan='6' class='empty'>No feedback yet.</td></tr>"
+
+    return f"""<!doctype html>
+<html><head><meta charset="utf-8"><title>Feedback ({len(rows)})</title>
+<style>
+  body {{ font-family: -apple-system, system-ui, sans-serif; margin: 24px; color: #2b2320; }}
+  h1 {{ font-size: 20px; }}
+  table {{ border-collapse: collapse; width: 100%; font-size: 14px; }}
+  th, td {{ text-align: left; padding: 8px 10px; border-bottom: 1px solid #e5ddcf; vertical-align: top; }}
+  th {{ background: #f4f1e8; }}
+  td.when {{ white-space: nowrap; color: #7a6f63; font-variant-numeric: tabular-nums; }}
+  td.rating {{ white-space: nowrap; color: #8a5a2b; letter-spacing: 1px; }}
+  td.msg {{ max-width: 520px; white-space: pre-wrap; }}
+  td.empty {{ text-align: center; color: #7a6f63; padding: 24px; }}
+</style></head>
+<body>
+  <h1>Feedback — {len(rows)} total</h1>
+  <table>
+    <thead><tr><th>When (UTC)</th><th>Rating</th><th>Message</th><th>Email</th><th>Version</th><th>Platform</th></tr></thead>
+    <tbody>{body_rows}</tbody>
+  </table>
+</body></html>"""

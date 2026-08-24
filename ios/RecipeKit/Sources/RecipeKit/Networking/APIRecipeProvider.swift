@@ -97,6 +97,34 @@ public struct APIRecipeProvider: RecipeProvider {
         return try await send(request)
     }
 
+    // MARK: - Feedback
+
+    /// POST /feedback — send user feedback (a rating and/or a message, plus an
+    /// optional contact email). Carries the same abuse-prevention headers as the
+    /// job endpoints (X-User-Id / X-App-Key). Throws on network/HTTP failure.
+    public func submitFeedback(
+        rating: Int?,
+        message: String?,
+        contactEmail: String?,
+        appVersion: String?,
+        platform: String = "ios"
+    ) async throws {
+        var request = URLRequest(url: baseURL.appendingPathComponent("feedback"))
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        applyCommonHeaders(&request)
+        request.httpBody = try JSONEncoder().encode(
+            FeedbackBody(
+                rating: rating,
+                message: message,
+                contactEmail: contactEmail,
+                appVersion: appVersion,
+                platform: platform
+            )
+        )
+        let _: FeedbackAck = try await send(request)
+    }
+
     // MARK: - Polling
 
     private func pollUntilRecipe(jobId: String) async throws -> Recipe {
@@ -179,4 +207,22 @@ public struct APIRecipeProvider: RecipeProvider {
 
 private struct JobRequestBody: Encodable {
     let url: String
+}
+
+private struct FeedbackBody: Encodable {
+    let rating: Int?
+    let message: String?
+    let contactEmail: String?
+    let appVersion: String?
+    let platform: String
+
+    enum CodingKeys: String, CodingKey {
+        case rating, message, platform
+        case contactEmail = "contact_email"
+        case appVersion = "app_version"
+    }
+}
+
+private struct FeedbackAck: Decodable {
+    let status: String
 }

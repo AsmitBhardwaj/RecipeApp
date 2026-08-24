@@ -87,6 +87,22 @@ def init_db() -> None:
                 count        INTEGER NOT NULL DEFAULT 0,
                 PRIMARY KEY (bucket_key, window_start)
             );
+
+            -- User feedback (POST /feedback), shown on the /admin/feedback page.
+            -- At least one of rating/message is enforced at the API level.
+            CREATE TABLE IF NOT EXISTS feedback (
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                rating        INTEGER,
+                message       TEXT,
+                contact_email TEXT,
+                app_version   TEXT,
+                platform      TEXT,
+                created_at    TEXT NOT NULL
+            );
+
+            -- Admin page lists newest-first; index keeps that ordering cheap.
+            CREATE INDEX IF NOT EXISTS idx_feedback_created_at
+                ON feedback (created_at DESC);
             """
         )
 
@@ -186,3 +202,38 @@ def rate_limit_cleanup(older_than: int) -> None:
     Only the current window is ever read, so anything older is dead weight."""
     with _tx() as conn:
         conn.execute("DELETE FROM rate_limits WHERE window_start < ?", (older_than,))
+
+
+# --------------------------------------------------------------------------- #
+# Feedback
+# --------------------------------------------------------------------------- #
+
+
+def save_feedback(
+    *,
+    rating: Optional[int],
+    message: Optional[str],
+    contact_email: Optional[str],
+    app_version: Optional[str],
+    platform: Optional[str],
+    created_at: str,
+) -> int:
+    """Insert one feedback row; returns its new id."""
+    with _tx() as conn:
+        cur = conn.execute(
+            "INSERT INTO feedback "
+            "(rating, message, contact_email, app_version, platform, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (rating, message, contact_email, app_version, platform, created_at),
+        )
+        return int(cur.lastrowid)
+
+
+def get_all_feedback() -> list[sqlite3.Row]:
+    """Every feedback row, newest first (for the admin page)."""
+    with _tx() as conn:
+        rows = conn.execute(
+            "SELECT id, rating, message, contact_email, app_version, platform, "
+            "created_at FROM feedback ORDER BY created_at DESC, id DESC"
+        ).fetchall()
+    return list(rows)

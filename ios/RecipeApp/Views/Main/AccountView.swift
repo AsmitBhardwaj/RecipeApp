@@ -54,6 +54,21 @@ struct AccountView: View {
                 .tornEdgeCardRow()
             }
 
+            Section("Feedback") {
+                NavigationLink {
+                    FeedbackView()
+                } label: {
+                    HStack(spacing: 12) {
+                        Image(systemName: "bubble.left.and.bubble.right")
+                            .foregroundStyle(.tint)
+                            .frame(width: 26)
+                        Text("Send Feedback")
+                            .foregroundStyle(Color.textPrimary)
+                    }
+                }
+                .tornEdgeCardRow()
+            }
+
             Section("About") {
                 LabeledContent("Version", value: "1.0 (mock)")
                 LabeledContent("Recipes are", value: "Free & unlimited")

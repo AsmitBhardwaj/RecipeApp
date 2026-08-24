@@ -33,6 +33,11 @@ DEFAULT_USER_ID: str = "00000000-0000-0000-0000-000000000001"
 # (fail-open) so local dev / tests work without the header.
 APP_KEY: str | None = os.getenv("APP_KEY")
 
+# Password for the /admin/feedback page (HTTP Basic Auth, username "admin").
+# Set in Railway's env vars (and locally in .env). If unset, the admin page is
+# disabled (503) rather than exposing feedback. NEVER commit a real value.
+ADMIN_PASSWORD: str | None = os.getenv("ADMIN_PASSWORD")
+
 # Persistent (SQLite) rate limits — two identity dimensions x two windows.
 # Generous for a real TestFlight beta user, tight enough to bound cost abuse
 # (~$0.002-0.005 per extraction; caching by video id makes repeats ~free).
