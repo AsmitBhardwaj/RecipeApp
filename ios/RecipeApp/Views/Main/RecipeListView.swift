@@ -6,10 +6,13 @@
 //  (every finished recipe); a non-nil cookbook renders only that cookbook's
 //  members. It is navigated to from `CookbooksGridView` (the Recipes-tab home).
 //
-//  In-flight (processing) and failed job cards are NOT shown here — they live on
-//  the grid home so a share is acknowledged there immediately (CLAUDE.md §6).
-//  This view is finished recipes only; membership is read live from
-//  `CookbooksModel`, so it reflects edits made in the recipe detail screen.
+//  For the "All Recipes" scope (cookbook == nil) this also surfaces in-flight
+//  (processing) and failed job cards at the top of the list, so a share is
+//  acknowledged the moment the user opens their recipes — even on a first share
+//  when there are no finished recipes yet (CLAUDE.md §6). Cookbook-scoped lists
+//  stay finished-recipes-only, since a queued job isn't assigned to a cookbook.
+//  Membership is read live from `CookbooksModel`, so it reflects edits made in
+//  the recipe detail screen.
 //
 
 import SwiftUI
@@ -29,12 +32,40 @@ struct RecipeListView: View {
         return jobs.recipes.filter { ids.contains($0.recipeId) }
     }
 
+    /// Whether this is the synthetic "All Recipes" scope. Only there do we surface
+    /// in-flight / failed job cards — a queued job has no cookbook membership yet.
+    private var isAllRecipes: Bool { cookbook == nil }
+
+    private var pendingJobs: [PendingJob] { isAllRecipes ? jobs.pending : [] }
+    private var failedJobs: [PendingJobsModel.FailedJob] { isAllRecipes ? jobs.failed : [] }
+
+    /// Empty state must not swallow processing/failed cards (see RecipeListLayout).
+    private var showsEmptyState: Bool {
+        RecipeListLayout.showsEmptyState(
+            recipeCount: displayedRecipes.count,
+            pendingCount: pendingJobs.count,
+            failedCount: failedJobs.count
+        )
+    }
+
     var body: some View {
         ZStack {
-            if displayedRecipes.isEmpty {
+            if showsEmptyState {
                 emptyState
             } else {
                 List {
+                    // Failed then in-flight cards first, so a just-submitted share
+                    // (and anything that couldn't extract) sits at the top.
+                    ForEach(failedJobs) { failedJob in
+                        FailedJobCardView(job: failedJob) {
+                            jobs.dismissFailed(jobId: failedJob.jobId)
+                        }
+                        .tornEdgeCardRow(bordered: false)
+                    }
+                    ForEach(pendingJobs) { pendingJob in
+                        ProcessingCardView(job: pendingJob)
+                            .tornEdgeCardRow(bordered: false)
+                    }
                     ForEach(displayedRecipes) { recipe in
                         NavigationLink(value: recipe) {
                             RecipeRowView(recipe: recipe)
@@ -140,10 +171,15 @@ struct ProcessingCardView: View {
                     .font(.headline)
                     .foregroundStyle(Color.textSecondary)
 
-                Text(displayURL)
-                    .font(.caption)
-                    .foregroundStyle(Color.textSecondary)
-                    .lineLimit(1)
+                // Source platform icon + host, so the card shows where the shared
+                // link came from at queue time (before the backend resolves it).
+                HStack(spacing: 5) {
+                    Image(systemName: platformSymbol)
+                    Text(displayURL)
+                        .lineLimit(1)
+                }
+                .font(.caption)
+                .foregroundStyle(Color.textSecondary)
 
                 RoundedRectangle(cornerRadius: 4)
                     .fill(Color.borderWarm)
@@ -155,6 +191,17 @@ struct ProcessingCardView: View {
 
     private var displayURL: String {
         URL(string: job.url)?.host ?? job.url
+    }
+
+    /// SF Symbol standing in for the source platform. Apple ships no Instagram /
+    /// TikTok brand glyphs, so these are neutral approximations mapped from the
+    /// RecipeKit-derived `SharePlatform`.
+    private var platformSymbol: String {
+        switch job.platform {
+        case .instagram: return "camera"
+        case .tiktok: return "music.note"
+        case .web: return "globe"
+        }
     }
 }
 
