@@ -20,9 +20,6 @@ struct ShareRootView: View {
     /// Called to complete the extension request and dismiss the sheet
     /// (returns to Instagram/TikTok) — the "Keep browsing" action.
     let onFinish: () -> Void
-    /// Called to launch the main app via `recipeapp://` — the "Open RecipeApp"
-    /// action. The host controller opens the URL and then completes the request.
-    let onOpenApp: () -> Void
 
     @State private var phase: Phase = .working
 
@@ -78,20 +75,18 @@ struct ShareRootView: View {
             Image(systemName: "checkmark.circle.fill")
                 .font(.largeTitle)
                 .foregroundStyle(.green)
-            Text("Added to RecipeApp")
+            Text("Saved — find it in the app")
                 .font(.headline)
-            Text("Open the app to watch it turn into a recipe.")
+            Text("Open RecipeApp whenever you like to watch it turn into a recipe.")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
 
-            VStack(spacing: 10) {
-                // Both sage (both are forward actions). Differentiated by fill,
-                // not hue: solid launches the app, outlined dismisses.
-                filledButton("Open RecipeApp", action: onOpenApp)
-                outlinedButton("Keep browsing", action: onFinish)
-            }
-            .padding(.top, 6)
+            // Single action: dismiss and return to Instagram/TikTok. The job is
+            // already queued in the shared PendingJobStore, so there's nothing to
+            // wait on here.
+            filledButton("Keep browsing", action: onFinish)
+                .padding(.top, 6)
 
         case .failure(let message):
             Image(systemName: "exclamationmark.triangle.fill")
@@ -107,7 +102,7 @@ struct ShareRootView: View {
         }
     }
 
-    /// Solid sage button, cream/white text — the primary "Open RecipeApp" action.
+    /// Solid sage button, cream/white text — the success screen's single action.
     private func filledButton(_ title: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Text(title)
@@ -116,22 +111,6 @@ struct ShareRootView: View {
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 12)
                 .background(sage, in: RoundedRectangle(cornerRadius: 12))
-        }
-        .buttonStyle(.plain)
-    }
-
-    /// Sage-outlined button (same hue, lighter weight) — "Keep browsing".
-    private func outlinedButton(_ title: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Text(title)
-                .font(.headline)
-                .foregroundStyle(sage)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 12)
-                .background(
-                    RoundedRectangle(cornerRadius: 12)
-                        .strokeBorder(sage, lineWidth: 1.5)
-                )
         }
         .buttonStyle(.plain)
     }
@@ -158,8 +137,8 @@ struct ShareRootView: View {
             PendingJobStore().upsert(
                 PendingJob(jobId: job.jobId, url: raw, submittedAt: Date(), lastStatus: job.status)
             )
-            // No auto-dismiss: the user now chooses "Open RecipeApp" or
-            // "Keep browsing" from the success state.
+            // No auto-dismiss: the user taps "Keep browsing" to return to
+            // Instagram/TikTok from the success state.
             phase = .success
         } catch let error as RecipeProviderError {
             phase = .failure(error.userMessage)
