@@ -25,6 +25,7 @@ from sqlalchemy import (
     BigInteger,
     Boolean,
     Column,
+    Index,
     Integer,
     MetaData,
     String,
@@ -133,6 +134,38 @@ refresh_tokens = Table(
     Column("issued_at", Text, nullable=False),
     Column("expires_at", Text, nullable=False),
     Column("revoked", Boolean, nullable=False, default=False),
+)
+
+# --- Sync (Stage 2) -------------------------------------------------------- #
+
+# One generic table for every synced collection (meal plan, grocery checks,
+# grocery manual items, cookbooks, memberships, library entries). The client
+# owns each `payload` shape; the server treats it as opaque JSON and only
+# arbitrates convergence:
+#   * `updated_at` — client wall-clock ms; the last-writer-wins comparison key.
+#   * `deleted`    — tombstone (a delete is just an update with a newer ts).
+#   * `seq`        — a per-user monotonic version the server assigns on every
+#                    write, so a device can pull "everything since cursor N".
+sync_items = Table(
+    "sync_items",
+    metadata,
+    Column("user_id", String, primary_key=True),
+    Column("collection", String, primary_key=True),
+    Column("item_id", String, primary_key=True),
+    Column("seq", BigInteger, nullable=False),
+    Column("updated_at", BigInteger, nullable=False),
+    Column("deleted", Boolean, nullable=False, default=False),
+    Column("payload", Text),
+    Index("idx_sync_user_seq", "user_id", "seq"),
+)
+
+# Per-user monotonic counter that allocates `seq` values (kept separate so
+# allocation is a single atomic UPSERT, not a MAX() scan racing under load).
+sync_state = Table(
+    "sync_state",
+    metadata,
+    Column("user_id", String, primary_key=True),
+    Column("seq", BigInteger, nullable=False, default=0),
 )
 
 # --------------------------------------------------------------------------- #
@@ -319,3 +352,147 @@ def get_all_feedback() -> list:
             select(feedback).order_by(feedback.c.created_at.desc(), feedback.c.id.desc())
         ).mappings().all()
     return list(rows)
+
+
+# --------------------------------------------------------------------------- #
+# Sync (Stage 2) — generic per-user, last-writer-wins record store
+# --------------------------------------------------------------------------- #
+
+# The collections the client is allowed to sync. Kept as an allowlist so a
+# compromised/buggy client can't spray arbitrary collection names into the table.
+SYNC_COLLECTIONS = frozenset(
+    {"library", "meal_plan", "grocery_check", "grocery_manual", "cookbook", "cookbook_membership"}
+)
+
+
+def _allocate_seq(conn, user_id: str, n: int) -> int:
+    """Atomically reserve `n` consecutive seq values for a user and return the
+    FIRST one. The single UPSERT + RETURNING makes concurrent pushes safe: each
+    gets a disjoint block."""
+    stmt = _insert(sync_state).values(user_id=user_id, seq=n)
+    stmt = stmt.on_conflict_do_update(
+        index_elements=["user_id"], set_={"seq": sync_state.c.seq + n}
+    ).returning(sync_state.c.seq)
+    new_max = int(conn.execute(stmt).scalar_one())
+    return new_max - n + 1
+
+
+def sync_user_cursor(user_id: str) -> int:
+    """The user's current max seq (0 if they have no synced data yet)."""
+    with _get_engine().begin() as conn:
+        row = conn.execute(select(sync_state.c.seq).where(sync_state.c.user_id == user_id)).fetchone()
+    return int(row[0]) if row else 0
+
+
+def sync_push(user_id: str, changes: list[dict]) -> dict:
+    """Apply a batch of client mutations under last-writer-wins.
+
+    Each change is {collection, item_id, updated_at, deleted, payload}. A change
+    is accepted only if it is newer (strictly greater `updated_at`) than what the
+    server holds — otherwise the SERVER's record wins and is returned as a
+    conflict so the client can reconcile its mirror. Returns
+    {applied: [...ids], conflicts: [server rows], cursor: <user max seq>}.
+    """
+    applied: list[str] = []
+    conflicts: list[dict] = []
+
+    with _get_engine().begin() as conn:
+        # Resolve winners against current server state (per-item read keeps this
+        # portable and correct; batches are modest).
+        winners: list[dict] = []
+        for ch in changes:
+            existing = conn.execute(
+                select(sync_items.c.updated_at).where(
+                    sync_items.c.user_id == user_id,
+                    sync_items.c.collection == ch["collection"],
+                    sync_items.c.item_id == ch["item_id"],
+                )
+            ).fetchone()
+            if existing is None or ch["updated_at"] > int(existing[0]):
+                winners.append(ch)
+            else:
+                row = conn.execute(
+                    select(sync_items).where(
+                        sync_items.c.user_id == user_id,
+                        sync_items.c.collection == ch["collection"],
+                        sync_items.c.item_id == ch["item_id"],
+                    )
+                ).mappings().fetchone()
+                conflicts.append(_sync_row_to_change(row))
+
+        if winners:
+            base = _allocate_seq(conn, user_id, len(winners))
+            for offset, ch in enumerate(winners):
+                stmt = _insert(sync_items).values(
+                    user_id=user_id,
+                    collection=ch["collection"],
+                    item_id=ch["item_id"],
+                    seq=base + offset,
+                    updated_at=ch["updated_at"],
+                    deleted=bool(ch.get("deleted", False)),
+                    payload=ch.get("payload"),
+                )
+                stmt = stmt.on_conflict_do_update(
+                    index_elements=["user_id", "collection", "item_id"],
+                    set_={
+                        "seq": stmt.excluded.seq,
+                        "updated_at": stmt.excluded.updated_at,
+                        "deleted": stmt.excluded.deleted,
+                        "payload": stmt.excluded.payload,
+                    },
+                )
+                conn.execute(stmt)
+                applied.append(ch["item_id"])
+
+        cursor_row = conn.execute(
+            select(sync_state.c.seq).where(sync_state.c.user_id == user_id)
+        ).fetchone()
+        cursor = int(cursor_row[0]) if cursor_row else 0
+
+    return {"applied": applied, "conflicts": conflicts, "cursor": cursor}
+
+
+def sync_pull(user_id: str, cursor: int, limit: int) -> dict:
+    """Everything changed for a user since `cursor`, ordered by seq. Returns
+    {changes: [...], cursor: <new cursor>, has_more: bool}."""
+    with _get_engine().begin() as conn:
+        rows = conn.execute(
+            select(sync_items)
+            .where(sync_items.c.user_id == user_id, sync_items.c.seq > cursor)
+            .order_by(sync_items.c.seq.asc())
+            .limit(limit + 1)
+        ).mappings().all()
+
+    has_more = len(rows) > limit
+    rows = rows[:limit]
+    changes = [_sync_row_to_change(r) for r in rows]
+    new_cursor = changes[-1]["seq"] if changes else cursor
+    return {"changes": changes, "cursor": new_cursor, "has_more": has_more}
+
+
+def _sync_row_to_change(row) -> dict:
+    return {
+        "collection": row["collection"],
+        "item_id": row["item_id"],
+        "seq": int(row["seq"]),
+        "updated_at": int(row["updated_at"]),
+        "deleted": bool(row["deleted"]),
+        "payload": row["payload"],
+    }
+
+
+def delete_user_sync_data(user_id: str) -> None:
+    """Hard-delete all of a user's synced rows + their seq counter (Stage 5)."""
+    with _get_engine().begin() as conn:
+        conn.execute(delete(sync_items).where(sync_items.c.user_id == user_id))
+        conn.execute(delete(sync_state).where(sync_state.c.user_id == user_id))
+
+
+def recipes_by_ids(ids: list[str]) -> list[Recipe]:
+    """Full recipe content for a set of ids, from the shared cache. Lets a new
+    device hydrate the recipe bodies for the library entries it just pulled."""
+    if not ids:
+        return []
+    with _get_engine().begin() as conn:
+        rows = conn.execute(select(recipes.c.data).where(recipes.c.recipe_id.in_(ids))).fetchall()
+    return [Recipe.model_validate_json(r[0]) for r in rows]

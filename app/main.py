@@ -19,12 +19,14 @@ from . import config, db, ratelimit
 from .auth.router import router as auth_router
 from .models import Job, Recipe
 from .pipeline import orchestrator
+from .sync import router as sync_router
 
 app = FastAPI(title="Recipe Extraction API", version="0.1.0")
 
-# Auth endpoints (/auth/*). Still behind the app-key gate below — abuse
-# deterrence applies to auth too.
+# Auth endpoints (/auth/*) and the account-scoped sync API (/v1/sync/*,
+# /v1/recipes/batch). Both still behind the app-key gate below.
 app.include_router(auth_router)
+app.include_router(sync_router)
 
 
 @app.on_event("startup")
