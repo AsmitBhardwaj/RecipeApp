@@ -190,7 +190,7 @@ struct GroceryListView: View {
                             GroceryCheckRow(
                                 text: item.displayString,
                                 detail: item.sources.joined(separator: ", "),
-                                emoji: GroceryItemEmoji.emoji(for: item.name, aisle: item.category),
+                                icon: GroceryItemIconResolver.icon(for: item.name),
                                 checked: model.isChecked(key)
                             ) {
                                 toggle(key)
@@ -208,7 +208,7 @@ struct GroceryListView: View {
                             GroceryCheckRow(
                                 text: item.name,
                                 detail: nil,
-                                emoji: GroceryItemEmoji.emoji(for: item.name),
+                                icon: GroceryItemIconResolver.icon(for: item.name),
                                 checked: model.isChecked(item.checkKey)
                             ) {
                                 toggle(item.checkKey)
@@ -589,23 +589,22 @@ private struct DayChip: View {
     }
 }
 
-// MARK: - Item icon (category emoji + checked-state affordance)
+// MARK: - Item icon (ingredient photo or emoji + checked-state affordance)
 
-/// The leading glyph on a grocery row: a small food emoji for the item's
-/// category. Toggling checked keeps the emoji visible (dimmed) and lays a small
-/// checkmark badge over it, so the tap affordance survives while the icon still
-/// tells you what the item is. Occupies the same footprint as the old circle so
-/// rows neither shift horizontally nor grow taller.
-private struct GroceryItemIcon: View {
-    let emoji: String
+/// The leading glyph on a grocery row: a bundled ingredient photo when we have
+/// one for the item, otherwise its category emoji. Toggling checked keeps the
+/// icon visible (dimmed) and lays a small checkmark badge over it, so the tap
+/// affordance survives while the icon still tells you what the item is. Occupies
+/// the same 30×30 footprint as the old circle so rows neither shift horizontally
+/// nor grow taller.
+private struct GroceryItemIconView: View {
+    let icon: GroceryItemIcon
     let checked: Bool
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        Text(emoji)
-            .font(.system(size: 22))
-            .frame(width: 30, height: 30)
+        IngredientIconGlyph(icon: icon, size: 30)
             .opacity(checked ? 0.4 : 1.0)
             .overlay(alignment: .bottomTrailing) {
                 if checked {
@@ -631,7 +630,7 @@ private struct GroceryItemIcon: View {
 private struct GroceryCheckRow: View {
     let text: String
     let detail: String?
-    let emoji: String
+    let icon: GroceryItemIcon
     let checked: Bool
     let onToggle: () -> Void
 
@@ -640,7 +639,7 @@ private struct GroceryCheckRow: View {
     var body: some View {
         Button(action: onToggle) {
             HStack(spacing: 12) {
-                GroceryItemIcon(emoji: emoji, checked: checked)
+                GroceryItemIconView(icon: icon, checked: checked)
 
                 VStack(alignment: .leading, spacing: 2) {
                     StrikeThroughText(

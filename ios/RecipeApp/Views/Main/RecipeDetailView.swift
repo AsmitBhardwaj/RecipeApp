@@ -223,11 +223,10 @@ struct RecipeDetailView: View {
                     .foregroundStyle(Color.textSecondary)
             } else {
                 ForEach(Array(recipe.ingredients.enumerated()), id: \.offset) { _, ingredient in
-                    HStack(alignment: .top, spacing: 12) {
-                        Circle()
-                            .fill(.tint)
-                            .frame(width: 6, height: 6)
-                            .padding(.top, 7)
+                    HStack(alignment: .center, spacing: 12) {
+                        // Same photo/emoji icon the item shows on the Grocery List.
+                        IngredientIconGlyph(name: ingredient.name, size: 28)
+                            .accessibilityHidden(true)
                         Text(ingredientLine(for: ingredient))
                             .font(.body)
                         Spacer(minLength: 0)
