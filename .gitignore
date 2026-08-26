@@ -18,3 +18,7 @@ env/
 .DS_Store
 .idea/
 .vscode/
+
+# Raw ingredient photo source art — optimized copies live in
+# ios/RecipeApp/Assets.xcassets/ing*.imageset; these originals aren't bundled.
+/pictures/
