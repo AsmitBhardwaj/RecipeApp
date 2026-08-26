@@ -16,15 +16,27 @@ from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from pydantic import BaseModel, field_validator, model_validator
 
 from . import config, db, ratelimit
+from .auth.router import router as auth_router
 from .models import Job, Recipe
 from .pipeline import orchestrator
 
 app = FastAPI(title="Recipe Extraction API", version="0.1.0")
 
+# Auth endpoints (/auth/*). Still behind the app-key gate below — abuse
+# deterrence applies to auth too.
+app.include_router(auth_router)
+
 
 @app.on_event("startup")
 def _startup() -> None:
     db.init_db()
+    if config.JWT_SECRET_IS_DEV_FALLBACK:
+        import logging
+
+        logging.getLogger("uvicorn.error").warning(
+            "JWT_SECRET is unset — using the INSECURE dev fallback. Set JWT_SECRET "
+            "in the environment before serving real users."
+        )
 
 
 # --------------------------------------------------------------------------- #
