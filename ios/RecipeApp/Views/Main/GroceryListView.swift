@@ -28,6 +28,8 @@ struct GroceryListView: View {
     @StateObject private var plan = MealPlanModel()
     @StateObject private var model = GroceryListModel()
 
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
     /// Fresh read source for meal-plan entries — bypasses MealPlanModel's cache
     /// so edits from the Meal Plan tab are reflected live.
     private let mealStore = MealPlanStore()
@@ -40,6 +42,16 @@ struct GroceryListView: View {
     @State private var newItemText = ""
     @State private var showingShareToday = false
 
+    // Celebration state. `confettiTrigger` fires a burst on increment;
+    // `celebratedSignature` records the exact set of items whose completion was
+    // already celebrated, so unchecking + rechecking the same final item does not
+    // re-fire — only a meaningfully different list (new/removed items, a changed
+    // plan) produces a new signature and a fresh celebration.
+    @State private var confettiTrigger = 0
+    @State private var showDoneBanner = false
+    @State private var celebratedSignature: String?
+    @State private var bannerDismissTask: Task<Void, Never>?
+
     enum Scope: String, CaseIterable, Identifiable {
         case day = "Day"
         case week = "Week"
@@ -47,25 +59,22 @@ struct GroceryListView: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            Picker("Scope", selection: $scope) {
-                ForEach(Scope.allCases) { Text($0.rawValue).tag($0) }
-            }
-            .pickerStyle(.segmented)
-            .padding(.horizontal, 16)
-            .padding(.top, 8)
-            .padding(.bottom, 10)
+        ZStack(alignment: .top) {
+            listStack
 
-            WeekNavBar(plan: plan)
-
-            if scope == .day {
-                DayStrip(plan: plan, selectedDayKey: $selectedDayKey)
-                    .padding(.bottom, 6)
+            if !reduceMotion {
+                ConfettiView(trigger: confettiTrigger)
+                    .ignoresSafeArea()
+                    .allowsHitTesting(false)
             }
 
-            Divider()
-
-            content
+            if showDoneBanner {
+                completionBanner
+                    .padding(.top, 12)
+                    .transition(reduceMotion
+                                ? .opacity
+                                : .move(edge: .top).combined(with: .opacity))
+            }
         }
         .foregroundStyle(Color.textPrimary)
         .appBackground()
@@ -100,6 +109,9 @@ struct GroceryListView: View {
         }
         .onAppear(perform: syncSelectedDay)
         .onChange(of: plan.weekStart) { _, _ in syncSelectedDay() }
+        .onChange(of: isComplete) { _, complete in
+            if complete { celebrateCompletion() }
+        }
         .alert("Add item", isPresented: $showingAddItem) {
             TextField("e.g. paper towels", text: $newItemText)
             Button("Add") {
@@ -110,6 +122,48 @@ struct GroceryListView: View {
         } message: {
             Text("Adds a one-off item to this \(scope == .day ? "day" : "week")'s list. Not tied to any recipe.")
         }
+    }
+
+    private var listStack: some View {
+        VStack(spacing: 0) {
+            Picker("Scope", selection: $scope) {
+                ForEach(Scope.allCases) { Text($0.rawValue).tag($0) }
+            }
+            .pickerStyle(.segmented)
+            .padding(.horizontal, 16)
+            .padding(.top, 8)
+            .padding(.bottom, 10)
+
+            if totalInPeriod > 0 {
+                GroceryProgressBar(checked: checkedInPeriod, total: totalInPeriod)
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 10)
+            }
+
+            WeekNavBar(plan: plan)
+
+            if scope == .day {
+                DayStrip(plan: plan, selectedDayKey: $selectedDayKey)
+                    .padding(.bottom, 6)
+            }
+
+            Divider()
+
+            content
+        }
+    }
+
+    private var completionBanner: some View {
+        Text("All done! 🎉")
+            .font(.headline)
+            .foregroundStyle(Color.white)
+            .padding(.vertical, 10)
+            .padding(.horizontal, 20)
+            .background(
+                Capsule().fill(Color.accentColor)
+            )
+            .shadow(color: .black.opacity(0.15), radius: 8, y: 2)
+            .allowsHitTesting(false)
     }
 
     // MARK: - Content
@@ -131,14 +185,15 @@ struct GroceryListView: View {
 
                 ForEach(sections) { section in
                     Section {
-                        ForEach(section.items) { item in
+                        ForEach(orderedItems(section.items)) { item in
                             let key = "\(periodKey)|\(item.stableKey)"
                             GroceryCheckRow(
                                 text: item.displayString,
                                 detail: item.sources.joined(separator: ", "),
+                                emoji: GroceryItemEmoji.emoji(for: item.name, aisle: item.category),
                                 checked: model.isChecked(key)
                             ) {
-                                model.toggle(key)
+                                toggle(key)
                             }
                             .tornEdgeCardRow()
                         }
@@ -149,13 +204,14 @@ struct GroceryListView: View {
 
                 if !manualForPeriod.isEmpty {
                     Section {
-                        ForEach(manualForPeriod) { item in
+                        ForEach(orderedManual(manualForPeriod)) { item in
                             GroceryCheckRow(
                                 text: item.name,
                                 detail: nil,
+                                emoji: GroceryItemEmoji.emoji(for: item.name),
                                 checked: model.isChecked(item.checkKey)
                             ) {
-                                model.toggle(item.checkKey)
+                                toggle(item.checkKey)
                             }
                             .tornEdgeCardRow()
                             .swipeActions(edge: .trailing) {
@@ -251,6 +307,104 @@ struct GroceryListView: View {
 
     private var isEmpty: Bool {
         sections.isEmpty && manualForPeriod.isEmpty
+    }
+
+    // MARK: - Progress & completion
+
+    /// Every checkable key in the current period — recipe-derived lines plus
+    /// hand-added items — the denominator for progress and completion.
+    private var allCheckKeys: [String] {
+        let recipeKeys = sections.flatMap { $0.items.map { "\(periodKey)|\($0.stableKey)" } }
+        let manualKeys = manualForPeriod.map(\.checkKey)
+        return recipeKeys + manualKeys
+    }
+
+    private var totalInPeriod: Int { allCheckKeys.count }
+
+    private var checkedInPeriod: Int {
+        allCheckKeys.reduce(0) { $0 + (model.isChecked($1) ? 1 : 0) }
+    }
+
+    private var isComplete: Bool {
+        totalInPeriod > 0 && checkedInPeriod == totalInPeriod
+    }
+
+    /// Identity of *this* completed list. Includes the period and the full sorted
+    /// key set, so it stays constant across an uncheck/recheck of the same final
+    /// item but changes the moment the list is repopulated for a new trip.
+    private var completionSignature: String {
+        periodKey + "#" + allCheckKeys.sorted().joined(separator: ",")
+    }
+
+    // MARK: - Interaction
+
+    /// Toggle a checkmark with the playful feedback: a distinct haptic for
+    /// check vs. uncheck, and an animated settle (checked items sink to the
+    /// bottom of their section). Reduce Motion drops the animation but keeps
+    /// the haptic.
+    private func toggle(_ key: String) {
+        let willCheck = !model.isChecked(key)
+        fireToggleHaptic(checking: willCheck)
+        if reduceMotion {
+            model.toggle(key)
+        } else {
+            withAnimation(.spring(response: 0.42, dampingFraction: 0.72)) {
+                model.toggle(key)
+            }
+        }
+    }
+
+    private func fireToggleHaptic(checking: Bool) {
+        // A crisper tap on check, a softer one on uncheck, so the two directions
+        // feel deliberately different in the hand.
+        let generator = UIImpactFeedbackGenerator(style: checking ? .medium : .soft)
+        generator.impactOccurred(intensity: checking ? 1.0 : 0.7)
+    }
+
+    /// Fire confetti + banner + success haptic once per distinct completion.
+    private func celebrateCompletion() {
+        guard celebratedSignature != completionSignature else { return }
+        celebratedSignature = completionSignature
+
+        UINotificationFeedbackGenerator().notificationOccurred(.success)
+
+        if !reduceMotion {
+            confettiTrigger += 1
+        }
+
+        bannerDismissTask?.cancel()
+        withAnimation(reduceMotion ? nil : .spring(response: 0.4, dampingFraction: 0.8)) {
+            showDoneBanner = true
+        }
+        bannerDismissTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 1_900_000_000)
+            guard !Task.isCancelled else { return }
+            withAnimation(reduceMotion ? nil : .easeOut(duration: 0.4)) {
+                showDoneBanner = false
+            }
+        }
+    }
+
+    // MARK: - Ordering (checked items settle to the bottom)
+
+    /// Unchecked items first (alphabetized), checked items sink below. Combined
+    /// with the animated `toggle`, the List animates the move.
+    private func orderedItems(_ items: [GroceryLineItem]) -> [GroceryLineItem] {
+        items.sorted { lhs, rhs in
+            let lc = model.isChecked("\(periodKey)|\(lhs.stableKey)")
+            let rc = model.isChecked("\(periodKey)|\(rhs.stableKey)")
+            if lc != rc { return !lc }
+            return lhs.name.lowercased() < rhs.name.lowercased()
+        }
+    }
+
+    private func orderedManual(_ items: [GroceryManualItem]) -> [GroceryManualItem] {
+        items.sorted { lhs, rhs in
+            let lc = model.isChecked(lhs.checkKey)
+            let rc = model.isChecked(rhs.checkKey)
+            if lc != rc { return !lc }
+            return lhs.addedAt < rhs.addedAt
+        }
     }
 
     private var unresolvedNote: String {
@@ -435,26 +589,65 @@ private struct DayChip: View {
     }
 }
 
+// MARK: - Item icon (category emoji + checked-state affordance)
+
+/// The leading glyph on a grocery row: a small food emoji for the item's
+/// category. Toggling checked keeps the emoji visible (dimmed) and lays a small
+/// checkmark badge over it, so the tap affordance survives while the icon still
+/// tells you what the item is. Occupies the same footprint as the old circle so
+/// rows neither shift horizontally nor grow taller.
+private struct GroceryItemIcon: View {
+    let emoji: String
+    let checked: Bool
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        Text(emoji)
+            .font(.system(size: 22))
+            .frame(width: 30, height: 30)
+            .opacity(checked ? 0.4 : 1.0)
+            .overlay(alignment: .bottomTrailing) {
+                if checked {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.system(size: 13, weight: .bold))
+                        .foregroundStyle(Color.secondaryAccent)
+                        .background(Circle().fill(Color.appBackground))
+                        .transition(.scale.combined(with: .opacity))
+                }
+            }
+            // A quick pop as the check lands, matching the old circle's bounce.
+            .scaleEffect(checked ? 1.12 : 1.0)
+            .animation(
+                reduceMotion ? nil : .spring(response: 0.28, dampingFraction: 0.5),
+                value: checked
+            )
+            .accessibilityHidden(true)
+    }
+}
+
 // MARK: - Checkable row
 
 private struct GroceryCheckRow: View {
     let text: String
     let detail: String?
+    let emoji: String
     let checked: Bool
     let onToggle: () -> Void
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         Button(action: onToggle) {
             HStack(spacing: 12) {
-                Image(systemName: checked ? "checkmark.circle.fill" : "circle")
-                    .font(.title3)
-                    .foregroundStyle(checked ? Color.secondaryAccent : Color.textSecondary)
+                GroceryItemIcon(emoji: emoji, checked: checked)
 
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(text)
-                        .font(.body)
-                        .strikethrough(checked, color: Color.textSecondary)
-                        .foregroundStyle(checked ? Color.textSecondary : Color.textPrimary)
+                    StrikeThroughText(
+                        text: text,
+                        struck: checked,
+                        animate: !reduceMotion
+                    )
                     if let detail, !detail.isEmpty {
                         Text(detail)
                             .font(.caption2)
@@ -466,8 +659,87 @@ private struct GroceryCheckRow: View {
                 Spacer(minLength: 0)
             }
             .contentShape(Rectangle())
+            // Dim the whole row as it settles into the "got it" state.
+            .opacity(checked ? 0.55 : 1.0)
+            .animation(reduceMotion ? nil : .easeInOut(duration: 0.3), value: checked)
         }
         .buttonStyle(.plain)
+    }
+}
+
+/// A line of text with a strike-through that *draws across* the word when
+/// `struck` becomes true (instead of the instant native `.strikethrough`). The
+/// bar is a rule overlaid on the text, its width measured from the text itself
+/// and animated from 0 → full. Reduce Motion snaps straight to full.
+private struct StrikeThroughText: View {
+    let text: String
+    let struck: Bool
+    let animate: Bool
+
+    @State private var textWidth: CGFloat = 0
+
+    var body: some View {
+        Text(text)
+            .font(.body)
+            .foregroundStyle(struck ? Color.textSecondary : Color.textPrimary)
+            .animation(animate ? .easeInOut(duration: 0.3) : nil, value: struck)
+            .background(
+                GeometryReader { geo in
+                    Color.clear
+                        .onAppear { textWidth = geo.size.width }
+                        .onChange(of: geo.size.width) { _, w in textWidth = w }
+                }
+            )
+            .overlay(alignment: .leading) {
+                Capsule()
+                    .fill(Color.textSecondary)
+                    .frame(width: struck ? textWidth : 0, height: 1.5)
+                    .animation(
+                        animate ? .easeInOut(duration: 0.32) : nil,
+                        value: struck
+                    )
+            }
+    }
+}
+
+/// Thin animated progress bar for the current period's list, filled in the sage
+/// accent. The fill springs to its new width whenever the checked count changes.
+private struct GroceryProgressBar: View {
+    let checked: Int
+    let total: Int
+
+    private var fraction: CGFloat {
+        total > 0 ? CGFloat(checked) / CGFloat(total) : 0
+    }
+
+    private var remaining: Int { max(0, total - checked) }
+
+    var body: some View {
+        VStack(spacing: 6) {
+            HStack {
+                Text(remaining == 0
+                     ? "All items checked off"
+                     : "\(remaining) of \(total) item\(total == 1 ? "" : "s") left")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(Color.textSecondary)
+                Spacer()
+            }
+
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
+                    Capsule()
+                        .fill(Color.textSecondary.opacity(0.18))
+                    Capsule()
+                        .fill(Color.accentColor)
+                        .frame(width: max(0, geo.size.width * fraction))
+                }
+            }
+            .frame(height: 6)
+            .animation(.spring(response: 0.5, dampingFraction: 0.78), value: fraction)
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Shopping progress")
+        .accessibilityValue("\(checked) of \(total) items checked off")
     }
 }
 
