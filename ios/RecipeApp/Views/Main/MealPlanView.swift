@@ -18,7 +18,13 @@ import RecipeKit
 struct MealPlanView: View {
     @ObservedObject var jobs: PendingJobsModel
     @ObservedObject var cookbooks: CookbooksModel
-    @StateObject private var plan = MealPlanModel()
+    @StateObject private var plan: MealPlanModel
+
+    init(jobs: PendingJobsModel, cookbooks: CookbooksModel, userScope: String? = nil, sync: SyncCoordinator? = nil) {
+        self.jobs = jobs
+        self.cookbooks = cookbooks
+        _plan = StateObject(wrappedValue: MealPlanModel(userScope: userScope, sync: sync))
+    }
 
     /// Drives the add/change assignment sheet.
     @State private var assignFlow: AssignFlow?
@@ -102,7 +108,7 @@ struct MealPlanView: View {
             Text("Nothing planned")
                 .font(.subheadline)
                 .foregroundStyle(Color.textSecondary)
-                .tornEdgeCardRow()
+                .tornEdgeCardRow(bordered: false)
         } else {
             ForEach(MealSlot.allCases) { slot in
                 let slotEntries = dayEntries.filter { $0.mealSlot == slot }
@@ -115,7 +121,7 @@ struct MealPlanView: View {
                             MealPlanEntryRow(entry: entry)
                         }
                         .buttonStyle(.plain)
-                        .tornEdgeCardRow()
+                        .tornEdgeCardRow(bordered: false)
                         .swipeActions(edge: .trailing) {
                             Button(role: .destructive) {
                                 plan.remove(entry)

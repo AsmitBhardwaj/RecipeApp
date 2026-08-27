@@ -24,11 +24,13 @@ final class CookbooksModel: ObservableObject {
 
     private let store: CookbookStore
     private let membership: CookbookMembershipStore
+    /// Sync hub (nil in previews/unscoped builds → no sync recording).
+    private let sync: SyncCoordinator?
 
-    init(store: CookbookStore = CookbookStore(),
-         membership: CookbookMembershipStore = CookbookMembershipStore()) {
-        self.store = store
-        self.membership = membership
+    init(userScope: String? = nil, sync: SyncCoordinator? = nil) {
+        self.store = CookbookStore(userScope: userScope)
+        self.membership = CookbookMembershipStore(userScope: userScope)
+        self.sync = sync
         self.cookbooks = store.all()
     }
 
@@ -42,6 +44,7 @@ final class CookbooksModel: ObservableObject {
         let cookbook = Cookbook(name: trimmed)
         store.upsert(cookbook)
         cookbooks = store.all()
+        sync?.record(.cookbook, itemId: cookbook.id, payload: SyncCodec.encode(cookbook))
         return cookbook
     }
 
@@ -52,13 +55,20 @@ final class CookbooksModel: ObservableObject {
         updated.name = trimmed
         store.upsert(updated)
         cookbooks = store.all()
+        sync?.record(.cookbook, itemId: updated.id, payload: SyncCodec.encode(updated))
     }
 
     func delete(_ cookbook: Cookbook) {
+        // Record membership tombstones for the cookbook's links before clearing.
+        let recipeIds = membership.recipeIds(inCookbook: cookbook.id)
         store.remove(id: cookbook.id)
         membership.removeCookbook(cookbook.id)
         cookbooks = store.all()
         revision += 1
+        sync?.record(.cookbook, itemId: cookbook.id, payload: nil, deleted: true)
+        for recipeId in recipeIds {
+            recordMembership(cookbookId: cookbook.id, recipeId: recipeId, deleted: true)
+        }
     }
 
     // MARK: - Membership
@@ -80,7 +90,23 @@ final class CookbooksModel: ObservableObject {
 
     /// Replace the full set of cookbooks a recipe belongs to (editor save).
     func setCookbooks(for recipeId: String, to cookbookIds: Set<String>) {
+        let previous = Set(membership.cookbookIds(forRecipe: recipeId))
         membership.setCookbooks(forRecipe: recipeId, to: Array(cookbookIds))
         revision += 1
+        // Record only the diffs as per-pair adds/removes.
+        for added in cookbookIds.subtracting(previous) {
+            recordMembership(cookbookId: added, recipeId: recipeId, deleted: false)
+        }
+        for removed in previous.subtracting(cookbookIds) {
+            recordMembership(cookbookId: removed, recipeId: recipeId, deleted: true)
+        }
+    }
+
+    private func recordMembership(cookbookId: String, recipeId: String, deleted: Bool) {
+        let link = MembershipPayload(cookbookId: cookbookId, recipeId: recipeId)
+        sync?.record(.cookbookMembership,
+                     itemId: MembershipPayload.itemId(cookbookId: cookbookId, recipeId: recipeId),
+                     payload: SyncCodec.encode(link),
+                     deleted: deleted)
     }
 }

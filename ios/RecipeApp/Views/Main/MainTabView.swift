@@ -20,7 +20,9 @@ import RecipeKit
 
 struct MainTabView: View {
     @StateObject private var jobs: PendingJobsModel
-    @StateObject private var cookbooks = CookbooksModel()
+    @StateObject private var cookbooks: CookbooksModel
+    @StateObject private var sync: SyncCoordinator
+    private let userScope: String
     @Environment(\.scenePhase) private var scenePhase
     /// Which tab is showing. Bound so `onOpenURL` (launch via `recipeapp://`
     /// from the Share Extension) can force the Recipes tab, where the new
@@ -31,8 +33,13 @@ struct MainTabView: View {
         case recipes, mealPlan, grocery
     }
 
-    init(recipeProvider: RecipeProvider) {
-        _jobs = StateObject(wrappedValue: PendingJobsModel(provider: recipeProvider))
+    init(recipeProvider: RecipeProvider, auth: AuthModel) {
+        let userId = auth.currentUser?.id ?? "unknown"
+        let coordinator = SyncCoordinator(userId: userId, tokenProvider: { try await auth.validAccessToken() })
+        self.userScope = userId
+        _sync = StateObject(wrappedValue: coordinator)
+        _jobs = StateObject(wrappedValue: PendingJobsModel(provider: recipeProvider, userScope: userId, sync: coordinator))
+        _cookbooks = StateObject(wrappedValue: CookbooksModel(userScope: userId, sync: coordinator))
     }
 
     var body: some View {
@@ -46,7 +53,7 @@ struct MainTabView: View {
             .tag(Tab.recipes)
 
             NavigationStack {
-                MealPlanView(jobs: jobs, cookbooks: cookbooks)
+                MealPlanView(jobs: jobs, cookbooks: cookbooks, userScope: userScope, sync: sync)
             }
             .tabItem {
                 Label("Meal Plan", systemImage: "calendar")
@@ -54,16 +61,22 @@ struct MainTabView: View {
             .tag(Tab.mealPlan)
 
             NavigationStack {
-                GroceryListView(jobs: jobs)
+                GroceryListView(jobs: jobs, userScope: userScope, sync: sync)
             }
             .tabItem {
                 Label("Grocery List", systemImage: "cart")
             }
             .tag(Tab.grocery)
         }
-        .task { jobs.reconcile() }
+        .task {
+            jobs.reconcile()
+            sync.triggerSync()  // pull remote changes + flush outbox on launch/sign-in
+        }
         .onChange(of: scenePhase) { _, phase in
-            if phase == .active { jobs.reconcile() }
+            if phase == .active {
+                jobs.reconcile()
+                sync.triggerSync()
+            }
         }
         // Launched via `recipeapp://` (Share Extension "Open RecipeApp"): bring
         // the user to the Recipes tab so the just-submitted job's processing card
@@ -94,5 +107,5 @@ struct MainTabView: View {
 }
 
 #Preview {
-    MainTabView(recipeProvider: MockRecipeProvider())
+    MainTabView(recipeProvider: MockRecipeProvider(), auth: AuthModel())
 }

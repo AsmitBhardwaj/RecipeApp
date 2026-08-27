@@ -25,9 +25,12 @@ final class MealPlanModel: ObservableObject {
 
     private let store: MealPlanStore
     private let calendar: Calendar
+    /// Sync hub (nil in previews/unscoped builds → no sync recording).
+    private let sync: SyncCoordinator?
 
-    init(store: MealPlanStore = MealPlanStore(), reference: Date = Date()) {
-        self.store = store
+    init(userScope: String? = nil, sync: SyncCoordinator? = nil, reference: Date = Date()) {
+        self.store = MealPlanStore(userScope: userScope)
+        self.sync = sync
         var cal = Calendar.current
         cal.firstWeekday = 2 // Monday
         self.calendar = cal
@@ -83,15 +86,15 @@ final class MealPlanModel: ObservableObject {
     // MARK: - Mutations
 
     func add(recipe: Recipe, to date: Date, slot: MealSlot) {
-        store.add(
-            MealPlanEntry(
-                dayKey: dayKey(for: date),
-                mealSlot: slot,
-                recipeId: recipe.recipeId,
-                recipeTitle: recipe.title,
-                recipeImageURL: recipe.imageUrl
-            )
+        let entry = MealPlanEntry(
+            dayKey: dayKey(for: date),
+            mealSlot: slot,
+            recipeId: recipe.recipeId,
+            recipeTitle: recipe.title,
+            recipeImageURL: recipe.imageUrl
         )
+        store.add(entry)
+        recordUpsert(entry)
         reload()
     }
 
@@ -99,21 +102,31 @@ final class MealPlanModel: ObservableObject {
     /// (the "Change" action). Implemented as remove-then-add at the store level.
     func replace(_ entry: MealPlanEntry, with recipe: Recipe) {
         store.remove(id: entry.id)
-        store.add(
-            MealPlanEntry(
-                dayKey: entry.dayKey,
-                mealSlot: entry.mealSlot,
-                recipeId: recipe.recipeId,
-                recipeTitle: recipe.title,
-                recipeImageURL: recipe.imageUrl
-            )
+        recordDelete(entry.id)
+        let replacement = MealPlanEntry(
+            dayKey: entry.dayKey,
+            mealSlot: entry.mealSlot,
+            recipeId: recipe.recipeId,
+            recipeTitle: recipe.title,
+            recipeImageURL: recipe.imageUrl
         )
+        store.add(replacement)
+        recordUpsert(replacement)
         reload()
     }
 
     func remove(_ entry: MealPlanEntry) {
         store.remove(id: entry.id)
+        recordDelete(entry.id)
         reload()
+    }
+
+    private func recordUpsert(_ entry: MealPlanEntry) {
+        sync?.record(.mealPlan, itemId: entry.id, payload: SyncCodec.encode(entry))
+    }
+
+    private func recordDelete(_ id: String) {
+        sync?.record(.mealPlan, itemId: id, payload: nil, deleted: true)
     }
 
     // MARK: - Loading

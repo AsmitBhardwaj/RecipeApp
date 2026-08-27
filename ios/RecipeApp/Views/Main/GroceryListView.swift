@@ -25,14 +25,21 @@ import RecipeKit
 
 struct GroceryListView: View {
     @ObservedObject var jobs: PendingJobsModel
-    @StateObject private var plan = MealPlanModel()
-    @StateObject private var model = GroceryListModel()
+    @StateObject private var plan: MealPlanModel
+    @StateObject private var model: GroceryListModel
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     /// Fresh read source for meal-plan entries — bypasses MealPlanModel's cache
     /// so edits from the Meal Plan tab are reflected live.
-    private let mealStore = MealPlanStore()
+    private let mealStore: MealPlanStore
+
+    init(jobs: PendingJobsModel, userScope: String? = nil, sync: SyncCoordinator? = nil) {
+        self.jobs = jobs
+        _plan = StateObject(wrappedValue: MealPlanModel(userScope: userScope, sync: sync))
+        _model = StateObject(wrappedValue: GroceryListModel(userScope: userScope, sync: sync))
+        self.mealStore = MealPlanStore(userScope: userScope)
+    }
 
     @State private var scope: Scope = .day
     /// The day selected in Day scope, as a "yyyy-MM-dd" key. Always one of the

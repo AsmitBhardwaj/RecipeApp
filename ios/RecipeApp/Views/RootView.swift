@@ -30,7 +30,7 @@ struct RootView: View {
             // Value first: show the illustrated onboarding before any auth wall.
             OnboardingView { hasCompletedOnboarding = true }
         } else if auth.isSignedIn {
-            MainTabView(recipeProvider: recipeProvider)
+            MainTabView(recipeProvider: recipeProvider, auth: auth)
                 .environmentObject(auth)
         } else {
             // Mandatory account gate, after onboarding.

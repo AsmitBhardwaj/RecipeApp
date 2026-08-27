@@ -80,14 +80,21 @@ final class PendingJobsModel: ObservableObject {
     private let pollInterval: Duration = .seconds(1.5)
     private let maxWait: Duration = .seconds(120)
 
+    /// Sync hub (nil in previews/unscoped builds → no sync recording).
+    private let sync: SyncCoordinator?
+
     init(
         provider: RecipeProvider,
-        store: PendingJobStore = PendingJobStore(),
-        recipeStore: RecipeStore = RecipeStore()
+        userScope: String? = nil,
+        sync: SyncCoordinator? = nil,
+        store: PendingJobStore = PendingJobStore()
     ) {
         self.provider = provider
+        self.sync = sync
         self.store = store
-        self.recipeStore = recipeStore
+        // The recipe cache is account-scoped; the pending-jobs queue stays
+        // device-local (transient, reconciled per Stage 6).
+        self.recipeStore = RecipeStore(userScope: userScope)
         // Show any persisted jobs immediately (e.g. submitted last session, or by
         // the Share Extension while the app was closed) before the first re-poll.
         self.pending = store.all()
@@ -219,6 +226,11 @@ final class PendingJobsModel: ObservableObject {
             recipes.insert(recipe, at: 0)
             // Persist to the on-device cache so it survives a full relaunch.
             recipeStore.upsert(recipe)
+            // Sync library membership (the recipe body is already in the server
+            // cache from extraction, so only the membership entry is pushed).
+            let iso = ISO8601DateFormatter().string(from: Date())
+            sync?.record(.library, itemId: recipe.recipeId,
+                         payload: SyncCodec.encode(LibraryPayload(recipeId: recipe.recipeId, savedAt: iso)))
         }
         store.remove(jobId: jobId)
         pending = store.all()

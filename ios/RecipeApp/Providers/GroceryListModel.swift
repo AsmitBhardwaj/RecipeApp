@@ -25,9 +25,12 @@ final class GroceryListModel: ObservableObject {
     @Published private(set) var manualItems: [GroceryManualItem] = []
 
     private let store: GroceryCheckStore
+    /// Sync hub (nil in previews/unscoped builds → no sync recording).
+    private let sync: SyncCoordinator?
 
-    init(store: GroceryCheckStore = GroceryCheckStore()) {
-        self.store = store
+    init(userScope: String? = nil, sync: SyncCoordinator? = nil) {
+        self.store = GroceryCheckStore(userScope: userScope)
+        self.sync = sync
         self.checkedKeys = store.checkedKeys()
         self.manualItems = store.manualItems()
     }
@@ -39,8 +42,10 @@ final class GroceryListModel: ObservableObject {
     }
 
     func toggle(_ fullKey: String) {
-        store.setChecked(fullKey, !checkedKeys.contains(fullKey))
+        let checked = !checkedKeys.contains(fullKey)
+        store.setChecked(fullKey, checked)
         checkedKeys = store.checkedKeys()
+        sync?.record(.groceryCheck, itemId: fullKey, payload: SyncCodec.encode(GroceryCheckPayload(checked: checked)))
     }
 
     // MARK: - Manual items
@@ -56,8 +61,10 @@ final class GroceryListModel: ObservableObject {
     func addManual(name: String, period: String) {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
-        store.addManual(GroceryManualItem(period: period, name: trimmed))
+        let item = GroceryManualItem(period: period, name: trimmed)
+        store.addManual(item)
         manualItems = store.manualItems()
+        sync?.record(.groceryManual, itemId: item.id, payload: SyncCodec.encode(item))
     }
 
     /// Remove a manual item and clear any checkmark it carried.
@@ -66,5 +73,7 @@ final class GroceryListModel: ObservableObject {
         store.removeManual(id: item.id)
         manualItems = store.manualItems()
         checkedKeys = store.checkedKeys()
+        sync?.record(.groceryManual, itemId: item.id, payload: nil, deleted: true)
+        sync?.record(.groceryCheck, itemId: item.checkKey, payload: SyncCodec.encode(GroceryCheckPayload(checked: false)))
     }
 }
