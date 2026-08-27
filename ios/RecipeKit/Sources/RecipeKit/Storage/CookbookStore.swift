@@ -16,26 +16,29 @@ import Foundation
 public struct CookbookStore {
 
     /// Single key holding the JSON-encoded `[Cookbook]`, newest-created first.
-    private static let storageKey = "cookbooks_v1"
+    private static let baseKey = "cookbooks_v1"
+    private let storageKey: String
 
     private let defaults: UserDefaults
 
     /// Production initializer. Falls back to `.standard` if the App Group suite
     /// can't be opened, so cookbooks degrade to app-local rather than crashing.
-    public init(suiteName: String = AppGroup.identifier) {
+    public init(suiteName: String = AppGroup.identifier, userScope: String? = nil) {
         self.defaults = UserDefaults(suiteName: suiteName) ?? .standard
+        self.storageKey = scopedStorageKey(Self.baseKey, userScope)
     }
 
     /// Test/seam initializer: inject an ephemeral `UserDefaults` for host tests.
-    public init(defaults: UserDefaults) {
+    public init(defaults: UserDefaults, userScope: String? = nil) {
         self.defaults = defaults
+        self.storageKey = scopedStorageKey(Self.baseKey, userScope)
     }
 
     // MARK: - Reads
 
     /// All cookbooks, in stored order (newest-created first).
     public func all() -> [Cookbook] {
-        guard let data = defaults.data(forKey: Self.storageKey) else { return [] }
+        guard let data = defaults.data(forKey: storageKey) else { return [] }
         return (try? JSONDecoder().decode([Cookbook].self, from: data)) ?? []
     }
 
@@ -61,6 +64,6 @@ public struct CookbookStore {
 
     private func write(_ cookbooks: [Cookbook]) {
         guard let data = try? JSONEncoder().encode(cookbooks) else { return }
-        defaults.set(data, forKey: Self.storageKey)
+        defaults.set(data, forKey: storageKey)
     }
 }

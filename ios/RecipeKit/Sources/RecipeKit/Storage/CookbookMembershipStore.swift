@@ -17,20 +17,24 @@ import Foundation
 
 public struct CookbookMembershipStore {
 
-    /// Single key holding the JSON-encoded `[cookbookId: [recipeId]]`.
-    private static let storageKey = "cookbook_membership_v1"
+    /// Key holding the JSON-encoded `[cookbookId: [recipeId]]`. Namespaced by
+    /// account when a `userScope` is given (Stage 2b), legacy key otherwise.
+    private static let baseKey = "cookbook_membership_v1"
+    private let storageKey: String
 
     private let defaults: UserDefaults
 
     /// Production initializer. Falls back to `.standard` if the App Group suite
     /// can't be opened, so membership degrades to app-local rather than crashing.
-    public init(suiteName: String = AppGroup.identifier) {
+    public init(suiteName: String = AppGroup.identifier, userScope: String? = nil) {
         self.defaults = UserDefaults(suiteName: suiteName) ?? .standard
+        self.storageKey = scopedStorageKey(Self.baseKey, userScope)
     }
 
     /// Test/seam initializer: inject an ephemeral `UserDefaults` for host tests.
-    public init(defaults: UserDefaults) {
+    public init(defaults: UserDefaults, userScope: String? = nil) {
         self.defaults = defaults
+        self.storageKey = scopedStorageKey(Self.baseKey, userScope)
     }
 
     // MARK: - Reads
@@ -86,12 +90,12 @@ public struct CookbookMembershipStore {
     // MARK: - Storage
 
     private func map() -> [String: [String]] {
-        guard let data = defaults.data(forKey: Self.storageKey) else { return [:] }
+        guard let data = defaults.data(forKey: storageKey) else { return [:] }
         return (try? JSONDecoder().decode([String: [String]].self, from: data)) ?? [:]
     }
 
     private func write(_ m: [String: [String]]) {
         guard let data = try? JSONEncoder().encode(m) else { return }
-        defaults.set(data, forKey: Self.storageKey)
+        defaults.set(data, forKey: storageKey)
     }
 }
