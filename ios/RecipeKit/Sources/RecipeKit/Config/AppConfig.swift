@@ -28,7 +28,29 @@ import Foundation
 public enum AppConfig {
     /// The shared app key, or "" when not configured for this build.
     public static var appKey: String {
-        let value = Bundle.main.object(forInfoDictionaryKey: "APP_KEY") as? String
-        return (value ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        infoString("APP_KEY")
+    }
+
+    /// Google OAuth iOS client id, injected via Secrets.xcconfig → Info.plist
+    /// (`GOOGLE_CLIENT_ID`). Empty when the build isn't configured for Google
+    /// sign-in — the UI then shows Google as unavailable rather than failing mid
+    /// flow. The paired reversed-client-id is the OAuth redirect URL scheme.
+    public static var googleClientID: String {
+        infoString("GOOGLE_CLIENT_ID")
+    }
+
+    public static var googleReversedClientID: String {
+        infoString("GOOGLE_REVERSED_CLIENT_ID")
+    }
+
+    public static var isGoogleConfigured: Bool {
+        !googleClientID.isEmpty && !googleReversedClientID.isEmpty
+    }
+
+    private static func infoString(_ key: String) -> String {
+        let value = Bundle.main.object(forInfoDictionaryKey: key) as? String
+        let trimmed = (value ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        // Guard against an unexpanded xcconfig placeholder leaking through.
+        return trimmed.hasPrefix("$(") ? "" : trimmed
     }
 }

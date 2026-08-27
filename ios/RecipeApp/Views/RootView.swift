@@ -11,6 +11,7 @@ import RecipeKit
 
 struct RootView: View {
     let recipeProvider: RecipeProvider
+    @ObservedObject var auth: AuthModel
 
     @AppStorage("hasCompletedOnboarding") private var hasCompletedOnboarding = false
     /// In-app appearance override (App Group–backed). Applied here so it covers
@@ -25,14 +26,19 @@ struct RootView: View {
 
     @ViewBuilder
     private var content: some View {
-        if hasCompletedOnboarding {
-            MainTabView(recipeProvider: recipeProvider)
-        } else {
+        if !hasCompletedOnboarding {
+            // Value first: show the illustrated onboarding before any auth wall.
             OnboardingView { hasCompletedOnboarding = true }
+        } else if auth.isSignedIn {
+            MainTabView(recipeProvider: recipeProvider)
+                .environmentObject(auth)
+        } else {
+            // Mandatory account gate, after onboarding.
+            SignInView(auth: auth)
         }
     }
 }
 
 #Preview("Onboarding") {
-    RootView(recipeProvider: MockRecipeProvider())
+    RootView(recipeProvider: MockRecipeProvider(), auth: AuthModel())
 }

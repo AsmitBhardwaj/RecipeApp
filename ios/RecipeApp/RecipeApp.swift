@@ -16,6 +16,10 @@ struct RecipeApp: App {
     /// Live networking against the Railway backend.
     private let recipeProvider: RecipeProvider = APIRecipeProvider()
 
+    /// The app-wide auth session. Owns the signed-in state, persists tokens in
+    /// the shared Keychain, and (Stage 2b) vends access tokens to the sync engine.
+    @StateObject private var auth = AuthModel()
+
     init() {
         // Register the bundled editorial display font before any UI renders.
         AppFonts.register()
@@ -23,7 +27,8 @@ struct RecipeApp: App {
 
     var body: some Scene {
         WindowGroup {
-            RootView(recipeProvider: recipeProvider)
+            RootView(recipeProvider: recipeProvider, auth: auth)
+                .environmentObject(auth)
         }
     }
 }

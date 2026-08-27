@@ -9,11 +9,17 @@
 //  Functionality is unchanged; only the styling differs from the rest of the app.
 //
 
+import RecipeKit
 import SwiftUI
 
 struct AccountView: View {
+    @EnvironmentObject private var auth: AuthModel
     @AppStorage("hasCompletedOnboarding") private var hasCompletedOnboarding = false
     @AppStorage(AppAppearance.storageKey, store: .appGroup) private var appearance: AppAppearance = .system
+
+    private var displayName: String {
+        auth.currentUser?.fullName ?? auth.currentUser?.email ?? "Your account"
+    }
 
     /// Drives the single "Dark Mode" switch. The stored preference keeps three
     /// states so first launch (`.system`) follows the OS; the toggle only ever
@@ -33,11 +39,17 @@ struct AccountView: View {
                         .font(.system(size: 44))
                         .foregroundStyle(.secondary)
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("Guest")
+                        Text(displayName)
                             .font(.headline)
-                        Text("Not signed in")
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
+                        if let email = auth.currentUser?.email, email != displayName {
+                            Text(email)
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                        } else {
+                            Text("Signed in")
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                        }
                     }
                 }
                 .padding(.vertical, 6)
@@ -45,11 +57,7 @@ struct AccountView: View {
 
             Section("Appearance") {
                 Toggle(isOn: darkModeBinding) {
-                    Label {
-                        Text("Dark Mode")
-                    } icon: {
-                        Image(systemName: "moon.stars").foregroundStyle(.secondary)
-                    }
+                    Text("Dark Mode")
                 }
                 .tint(.green)  // native switch green, not the app's sage
             }
@@ -58,17 +66,22 @@ struct AccountView: View {
                 NavigationLink {
                     FeedbackView()
                 } label: {
-                    Label {
-                        Text("Send Feedback")
-                    } icon: {
-                        Image(systemName: "bubble.left.and.bubble.right").foregroundStyle(.secondary)
-                    }
+                    Text("Send Feedback")
                 }
             }
 
             Section("About") {
                 LabeledContent("Version", value: "1.0 (mock)")
                 LabeledContent("Recipes are", value: "Free & unlimited")
+            }
+
+            Section {
+                Button(role: .destructive) {
+                    auth.signOut()
+                } label: {
+                    Text("Sign Out")
+                }
+                // Account deletion (App Store Guideline 5.1.1) lands here in Stage 5.
             }
 
             #if DEBUG
@@ -88,4 +101,5 @@ struct AccountView: View {
     NavigationStack {
         AccountView()
     }
+    .environmentObject(AuthModel())
 }
