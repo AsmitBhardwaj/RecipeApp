@@ -119,6 +119,34 @@ final class AuthTests: XCTestCase {
         _ = try await api().register(email: "a@b.com", password: "supersecret1", fullName: nil)
     }
 
+    func testDeleteAccountSendsBearerDeleteAndSucceedsOn204() async throws {
+        AuthStubURLProtocol.handler = { request in
+            XCTAssertEqual(request.httpMethod, "DELETE")
+            XCTAssertTrue(request.url!.absoluteString.hasSuffix("/auth/me"))
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer my-access")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "X-App-Key"), "test-key")
+            let resp = HTTPURLResponse(url: request.url!, statusCode: 204, httpVersion: nil, headerFields: nil)!
+            return (resp, Data())
+        }
+        try await api().deleteAccount(accessToken: "my-access")  // no throw = success
+    }
+
+    func testDeleteAccountMapsErrors() async {
+        for (status, expected) in [(401, AuthError.invalidCredentials), (500, AuthError.server(500))] {
+            AuthStubURLProtocol.handler = { request in
+                (HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: nil, headerFields: nil)!, Data())
+            }
+            do {
+                try await api().deleteAccount(accessToken: "t")
+                XCTFail("expected error for \(status)")
+            } catch let error as AuthError {
+                XCTAssertEqual(error, expected)
+            } catch {
+                XCTFail("wrong error type: \(error)")
+            }
+        }
+    }
+
     // MARK: AuthAPI error mapping
 
     func assertMaps(status: Int, to expected: AuthError, file: StaticString = #filePath, line: UInt = #line) async {

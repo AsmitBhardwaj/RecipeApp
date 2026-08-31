@@ -17,6 +17,9 @@ struct AccountView: View {
     @AppStorage("hasCompletedOnboarding") private var hasCompletedOnboarding = false
     @AppStorage(AppAppearance.storageKey, store: .appGroup) private var appearance: AppAppearance = .system
 
+    @State private var showDeleteConfirm = false
+    @State private var deleteError: String?
+
     private var displayName: String {
         auth.currentUser?.fullName ?? auth.currentUser?.email ?? "Your account"
     }
@@ -81,7 +84,18 @@ struct AccountView: View {
                 } label: {
                     Text("Sign Out")
                 }
-                // Account deletion (App Store Guideline 5.1.1) lands here in Stage 5.
+            }
+
+            // Account deletion (App Store Guideline 5.1.1). Separate section, with
+            // a required confirmation, so it's never a one-tap accident.
+            Section {
+                Button(role: .destructive) {
+                    showDeleteConfirm = true
+                } label: {
+                    Text("Delete Account")
+                }
+            } footer: {
+                Text("Permanently deletes your account and all your recipes, cookbooks, meal plans, and lists on every device.")
             }
 
             #if DEBUG
@@ -94,6 +108,32 @@ struct AccountView: View {
         }
         .listStyle(.insetGrouped)
         .navigationTitle("Account")
+        .disabled(auth.isWorking)
+        .confirmationDialog("Delete your account?", isPresented: $showDeleteConfirm, titleVisibility: .visible) {
+            Button("Delete Account", role: .destructive) { deleteAccount() }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This can't be undone. Your account and all your recipes, cookbooks, meal plans, and lists will be permanently deleted.")
+        }
+        .alert(
+            "Couldn't delete account",
+            isPresented: Binding(get: { deleteError != nil }, set: { if !$0 { deleteError = nil } })
+        ) {
+            Button("OK", role: .cancel) { deleteError = nil }
+        } message: {
+            Text(deleteError ?? "")
+        }
+    }
+
+    private func deleteAccount() {
+        Task {
+            do {
+                try await auth.deleteAccount()
+                // Success: `auth.session` is now nil, so RootView swaps to SignInView.
+            } catch {
+                deleteError = (error as? AuthError)?.userMessage ?? error.localizedDescription
+            }
+        }
     }
 }
 

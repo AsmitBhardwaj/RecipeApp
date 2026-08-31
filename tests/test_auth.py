@@ -151,6 +151,43 @@ class AuthTests(unittest.TestCase):
         # The new token still works.
         self.assertEqual(self.client.post("/auth/refresh", json={"refresh_token": new}).status_code, 200)
 
+    def test_delete_account_removes_user_and_data(self):
+        reg = self.client.post(
+            "/auth/register", json={"email": "del@b.com", "password": "supersecret1"}
+        ).json()
+        uid, access, refresh = reg["user"]["id"], reg["access_token"], reg["refresh_token"]
+        hdr = {"Authorization": f"Bearer {access}"}
+
+        # Seed some synced data so we can prove it's gone after deletion.
+        push = self.client.post(
+            "/v1/sync/push",
+            headers=hdr,
+            json={"changes": [{"collection": "grocery_manual", "item_id": "g1", "updated_at": 1, "payload": "{}"}]},
+        )
+        self.assertEqual(push.status_code, 200, push.text)
+
+        # Delete requires a valid access token and returns 204.
+        self.assertEqual(self.client.delete("/auth/me").status_code, 401)  # unauthenticated rejected
+        r = self.client.delete("/auth/me", headers=hdr)
+        self.assertEqual(r.status_code, 204, r.text)
+
+        # Account is gone: login fails, the (still-unexpired) access token 401s
+        # because the user no longer exists, and the refresh token is dead.
+        self.assertEqual(
+            self.client.post("/auth/login", json={"email": "del@b.com", "password": "supersecret1"}).status_code, 401
+        )
+        self.assertEqual(self.client.get("/auth/me", headers=hdr).status_code, 401)
+        self.assertEqual(self.client.post("/auth/refresh", json={"refresh_token": refresh}).status_code, 401)
+
+        # Synced data for the deleted user is gone.
+        self.assertEqual(db.sync_pull(uid, 0, 100)["changes"], [])
+
+        # Re-registering the same email yields a brand-new, empty account.
+        again = self.client.post(
+            "/auth/register", json={"email": "del@b.com", "password": "supersecret1"}
+        ).json()
+        self.assertNotEqual(again["user"]["id"], uid)
+
     # ---- provider endpoints (verifier stubbed) ---------------------------- #
 
     def test_apple_endpoint_upserts_and_is_stable(self, ):

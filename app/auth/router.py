@@ -202,3 +202,12 @@ def me(user: User = Depends(current_user)) -> UserResponse:
     return UserResponse(
         id=user.id, email=user.email, email_verified=user.email_verified, full_name=user.full_name
     )
+
+
+@router.delete("/me", status_code=status.HTTP_204_NO_CONTENT)
+def delete_me(user: User = Depends(current_user)) -> None:
+    # In-app account deletion (App Store Guideline 5.1.1). Requires a valid access
+    # token (current_user); irreversibly removes the account and all data scoped
+    # to it. Any outstanding refresh tokens are dropped, so existing sessions on
+    # other devices can no longer refresh.
+    db.delete_account(user.id)

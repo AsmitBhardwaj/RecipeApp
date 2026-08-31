@@ -488,6 +488,22 @@ def delete_user_sync_data(user_id: str) -> None:
         conn.execute(delete(sync_state).where(sync_state.c.user_id == user_id))
 
 
+def delete_account(user_id: str) -> None:
+    """Hard-delete a user and everything scoped to them, in one transaction
+    (Stage 5, in-app account deletion). Removes synced records + seq counter, the
+    per-user recipe join rows, all refresh tokens, provider identities, and the
+    account row itself. The shared recipe CACHE (keyed by canonical video id) is
+    intentionally left intact — it's not personal data and other users rely on it.
+    """
+    with _get_engine().begin() as conn:
+        conn.execute(delete(sync_items).where(sync_items.c.user_id == user_id))
+        conn.execute(delete(sync_state).where(sync_state.c.user_id == user_id))
+        conn.execute(delete(user_recipes).where(user_recipes.c.user_id == user_id))
+        conn.execute(delete(refresh_tokens).where(refresh_tokens.c.user_id == user_id))
+        conn.execute(delete(auth_identities).where(auth_identities.c.user_id == user_id))
+        conn.execute(delete(users).where(users.c.id == user_id))
+
+
 def recipes_by_ids(ids: list[str]) -> list[Recipe]:
     """Full recipe content for a set of ids, from the shared cache. Lets a new
     device hydrate the recipe bodies for the library entries it just pulled."""

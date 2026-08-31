@@ -63,6 +63,16 @@ public struct AuthAPI {
         _ = try? await session.data(for: request)
     }
 
+    /// Irreversibly delete the signed-in account and all its server-side data
+    /// (Stage 5). Authenticated with the caller's access token; throws on failure
+    /// so the UI can keep the user signed in and surface an error rather than
+    /// wiping local data against a delete that didn't happen.
+    public func deleteAccount(accessToken: String) async throws {
+        var request = makeRequest("auth/me", method: "DELETE")
+        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        try await sendNoContent(request)
+    }
+
     // MARK: - Plumbing
 
     private func tokenCall(_ path: String, body: [String: String?]) async throws -> AuthSession {
@@ -84,6 +94,34 @@ public struct AuthAPI {
             request.setValue(key, forHTTPHeaderField: "X-App-Key")
         }
         return request
+    }
+
+    /// Like `send`, for endpoints that return no body (204). Maps transport and
+    /// HTTP errors the same way; success is any 2xx.
+    private func sendNoContent(_ request: URLRequest) async throws {
+        let response: URLResponse
+        do {
+            (_, response) = try await session.data(for: request)
+        } catch let urlError as URLError {
+            switch urlError.code {
+            case .notConnectedToInternet, .dataNotAllowed:
+                throw AuthError.offline
+            case .timedOut:
+                throw AuthError.timedOut
+            default:
+                throw AuthError.invalidResponse(urlError.localizedDescription)
+            }
+        }
+        guard let http = response as? HTTPURLResponse else {
+            throw AuthError.invalidResponse("non-HTTP response")
+        }
+        guard (200..<300).contains(http.statusCode) else {
+            switch http.statusCode {
+            case 401: throw AuthError.invalidCredentials
+            case 429: throw AuthError.rateLimited
+            default: throw AuthError.server(http.statusCode)
+            }
+        }
     }
 
     private func send<T: Decodable>(_ request: URLRequest) async throws -> T {

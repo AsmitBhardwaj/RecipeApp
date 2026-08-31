@@ -72,6 +72,23 @@ final class AuthModel: ObservableObject {
         store.clear()
     }
 
+    // MARK: - Account deletion (Stage 5)
+
+    /// Irreversibly delete the account server-side, then wipe this device's local
+    /// copy of its data and sign out. Throws (leaving the user signed in) if the
+    /// server delete fails, so we never erase local data against a delete that
+    /// didn't happen. On success `session` becomes nil and RootView routes to
+    /// the sign-in screen.
+    func deleteAccount() async throws {
+        guard let session = session else { throw AuthError.invalidCredentials }
+        isWorking = true
+        defer { isWorking = false }
+        let token = try await validAccessToken()      // refresh first if near expiry
+        try await api.deleteAccount(accessToken: token)
+        AccountDataEraser.erase(userId: session.user.id)
+        clearLocalSession()
+    }
+
     // MARK: - Token access (used by the sync engine, Stage 2b)
 
     /// A currently-valid access token, refreshing first if it's near expiry. If
