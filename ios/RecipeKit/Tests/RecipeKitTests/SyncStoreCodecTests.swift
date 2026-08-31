@@ -50,7 +50,13 @@ final class SyncStoreCodecTests: XCTestCase {
     // MARK: Codecs
 
     func testMealPlanPayloadRoundTrips() {
-        let entry = MealPlanEntry(id: "m1", dayKey: "2026-08-28", recipeId: "r1", recipeTitle: "Tacos")
+        // Pin `addedAt` to a whole-second epoch value. The codec encodes dates as
+        // `.secondsSince1970` (a Double); a default `Date()` carries a sub-second
+        // fraction that isn't always bit-exact after the Double round-trip, which
+        // made this equality check intermittently fail. A whole-second timestamp
+        // is exactly representable, so the round-trip is deterministic.
+        let entry = MealPlanEntry(id: "m1", dayKey: "2026-08-28", recipeId: "r1", recipeTitle: "Tacos",
+                                  addedAt: Date(timeIntervalSince1970: 1_700_000_000))
         let payload = SyncCodec.encode(entry)
         let back = SyncCodec.decode(MealPlanEntry.self, from: payload)
         XCTAssertEqual(back, entry)
