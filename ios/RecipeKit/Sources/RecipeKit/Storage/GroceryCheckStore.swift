@@ -23,27 +23,34 @@ import Foundation
 public struct GroceryCheckStore {
 
     /// Set<String> of full checked keys ("period|itemKey").
-    private static let checkedKey = "grocery_checked_keys_v1"
+    private static let checkedBaseKey = "grocery_checked_keys_v1"
     /// [GroceryManualItem] of hand-added items.
-    private static let manualKey = "grocery_manual_items_v1"
+    private static let manualBaseKey = "grocery_manual_items_v1"
+    /// Account-namespaced keys (Stage 2b), legacy when no scope.
+    private let checkedKey: String
+    private let manualKey: String
 
     private let defaults: UserDefaults
 
     /// Production initializer. Falls back to `.standard` if the App Group suite
     /// can't be opened, so the list degrades to app-local rather than crashing.
-    public init(suiteName: String = AppGroup.identifier) {
+    public init(suiteName: String = AppGroup.identifier, userScope: String? = nil) {
         self.defaults = UserDefaults(suiteName: suiteName) ?? .standard
+        self.checkedKey = scopedStorageKey(Self.checkedBaseKey, userScope)
+        self.manualKey = scopedStorageKey(Self.manualBaseKey, userScope)
     }
 
     /// Test/seam initializer: inject an ephemeral `UserDefaults` for host tests.
-    public init(defaults: UserDefaults) {
+    public init(defaults: UserDefaults, userScope: String? = nil) {
         self.defaults = defaults
+        self.checkedKey = scopedStorageKey(Self.checkedBaseKey, userScope)
+        self.manualKey = scopedStorageKey(Self.manualBaseKey, userScope)
     }
 
     // MARK: - Checked state
 
     public func checkedKeys() -> Set<String> {
-        guard let data = defaults.data(forKey: Self.checkedKey) else { return [] }
+        guard let data = defaults.data(forKey: checkedKey) else { return [] }
         return (try? JSONDecoder().decode(Set<String>.self, from: data)) ?? []
     }
 
@@ -52,13 +59,13 @@ public struct GroceryCheckStore {
         var keys = checkedKeys()
         if checked { keys.insert(key) } else { keys.remove(key) }
         guard let data = try? JSONEncoder().encode(keys) else { return }
-        defaults.set(data, forKey: Self.checkedKey)
+        defaults.set(data, forKey: checkedKey)
     }
 
     // MARK: - Manual items
 
     public func manualItems() -> [GroceryManualItem] {
-        guard let data = defaults.data(forKey: Self.manualKey) else { return [] }
+        guard let data = defaults.data(forKey: manualKey) else { return [] }
         return (try? JSONDecoder().decode([GroceryManualItem].self, from: data)) ?? []
     }
 
@@ -74,6 +81,6 @@ public struct GroceryCheckStore {
 
     private func writeManual(_ items: [GroceryManualItem]) {
         guard let data = try? JSONEncoder().encode(items) else { return }
-        defaults.set(data, forKey: Self.manualKey)
+        defaults.set(data, forKey: manualKey)
     }
 }

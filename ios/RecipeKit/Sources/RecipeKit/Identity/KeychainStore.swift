@@ -96,6 +96,25 @@ struct KeychainStore {
         }
     }
 
+    /// Upserts a value (unlike `addIfAbsent`, which no-ops when one exists).
+    /// Used for credentials that rotate, e.g. the auth session on token refresh.
+    func set(_ value: String, forKey account: String) throws {
+        let attributes = [kSecValueData as String: Data(value.utf8)]
+        let updateStatus = SecItemUpdate(baseQuery(account: account) as CFDictionary, attributes as CFDictionary)
+        switch updateStatus {
+        case errSecSuccess:
+            return
+        case errSecItemNotFound:
+            var query = baseQuery(account: account)
+            query[kSecValueData as String] = Data(value.utf8)
+            query[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
+            let addStatus = SecItemAdd(query as CFDictionary, nil)
+            guard addStatus == errSecSuccess else { throw KeychainError.unexpectedStatus(addStatus) }
+        default:
+            throw KeychainError.unexpectedStatus(updateStatus)
+        }
+    }
+
     func removeValue(forKey account: String) throws {
         let status = SecItemDelete(baseQuery(account: account) as CFDictionary)
         guard status == errSecSuccess || status == errSecItemNotFound else {

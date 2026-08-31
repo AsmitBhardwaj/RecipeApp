@@ -153,4 +153,41 @@ final class APIRecipeProviderTests: XCTestCase {
         let recipes = try await makeProvider().fetchRecipes()
         XCTAssertTrue(recipes.isEmpty)
     }
+
+    // MARK: - Abuse-prevention headers
+
+    /// Builds a provider with an injected app key and captures the outbound
+    /// request headers via the stub.
+    private func provider(appKey: @escaping () -> String) -> (APIRecipeProvider, () -> URLRequest?) {
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [StubURLProtocol.self]
+        var captured: URLRequest?
+        StubURLProtocol.handler = { request in
+            captured = request
+            return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!,
+                    Data(self.queuedJSON.utf8))
+        }
+        let p = APIRecipeProvider(
+            baseURL: URL(string: "https://example.test")!,
+            session: URLSession(configuration: config),
+            userID: { "test-user" },
+            appKey: appKey,
+            pollInterval: .milliseconds(5),
+            maxWait: .seconds(2)
+        )
+        return (p, { captured })
+    }
+
+    func testSendsAppKeyHeaderWhenConfigured() async throws {
+        let (p, captured) = provider(appKey: { "secret-123" })
+        _ = try await p.submitJob(url: "https://www.instagram.com/reel/x/")
+        XCTAssertEqual(captured()?.value(forHTTPHeaderField: "X-App-Key"), "secret-123")
+        XCTAssertEqual(captured()?.value(forHTTPHeaderField: "X-User-Id"), "test-user")
+    }
+
+    func testOmitsAppKeyHeaderWhenEmpty() async throws {
+        let (p, captured) = provider(appKey: { "" })
+        _ = try await p.submitJob(url: "https://www.instagram.com/reel/x/")
+        XCTAssertNil(captured()?.value(forHTTPHeaderField: "X-App-Key"))
+    }
 }

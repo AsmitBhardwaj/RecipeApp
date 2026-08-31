@@ -2,17 +2,9 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<!--
-	  Must be the EXACT same group string as the app target's
-	  RecipeApp.entitlements. This is what lets the extension write to the same
-	  PendingJobStore (UserDefaults(suiteName:)) the app reconciles from, and it
-	  doubles as the Keychain access group so RecipeKit.currentUserID resolves to
-	  the same anonymous user id. Requires the extension to sign with the same
-	  team (8H53GPKK9) as the app.
-	-->
 	<key>com.apple.security.application-groups</key>
 	<array>
-		<string>group.com.recipeapp.shared</string>
+		<string>group.com.recipeapp.shared2</string>
 	</array>
 </dict>
 </plist>

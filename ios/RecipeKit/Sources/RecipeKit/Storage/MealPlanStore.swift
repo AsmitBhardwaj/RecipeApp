@@ -15,27 +15,31 @@ import Foundation
 
 public struct MealPlanStore {
 
-    /// Single key holding the JSON-encoded `[MealPlanEntry]`.
-    private static let storageKey = "meal_plan_entries_v1"
+    /// Key holding the JSON-encoded `[MealPlanEntry]`. Namespaced by account
+    /// when a `userScope` is given (Stage 2b), legacy key otherwise.
+    private static let baseKey = "meal_plan_entries_v1"
+    private let storageKey: String
 
     private let defaults: UserDefaults
 
     /// Production initializer. Falls back to `.standard` if the App Group suite
     /// can't be opened, so the plan degrades to app-local rather than crashing.
-    public init(suiteName: String = AppGroup.identifier) {
+    public init(suiteName: String = AppGroup.identifier, userScope: String? = nil) {
         self.defaults = UserDefaults(suiteName: suiteName) ?? .standard
+        self.storageKey = scopedStorageKey(Self.baseKey, userScope)
     }
 
     /// Test/seam initializer: inject an ephemeral `UserDefaults` for host tests.
-    public init(defaults: UserDefaults) {
+    public init(defaults: UserDefaults, userScope: String? = nil) {
         self.defaults = defaults
+        self.storageKey = scopedStorageKey(Self.baseKey, userScope)
     }
 
     // MARK: - Reads
 
     /// Every assignment across all days.
     public func all() -> [MealPlanEntry] {
-        guard let data = defaults.data(forKey: Self.storageKey) else { return [] }
+        guard let data = defaults.data(forKey: storageKey) else { return [] }
         return (try? JSONDecoder().decode([MealPlanEntry].self, from: data)) ?? []
     }
 
@@ -62,6 +66,6 @@ public struct MealPlanStore {
 
     private func write(_ entries: [MealPlanEntry]) {
         guard let data = try? JSONEncoder().encode(entries) else { return }
-        defaults.set(data, forKey: Self.storageKey)
+        defaults.set(data, forKey: storageKey)
     }
 }

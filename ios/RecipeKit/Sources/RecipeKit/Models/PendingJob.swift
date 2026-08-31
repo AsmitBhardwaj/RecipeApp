@@ -32,6 +32,12 @@ public struct PendingJob: Codable, Identifiable, Hashable {
 
     public var id: String { jobId }
 
+    /// Which platform the shared URL points at, derived from its host. Mirrors the
+    /// backend's classification in `urls.py` (tiktok.com → tiktok, instagram.com /
+    /// instagr.am → instagram, everything else → web) so the processing card can
+    /// show a source icon at queue time, before the backend has resolved the job.
+    public var platform: SharePlatform { SharePlatform(url: url) }
+
     public init(
         jobId: String,
         url: String,

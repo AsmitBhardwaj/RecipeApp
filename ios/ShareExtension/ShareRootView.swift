@@ -14,13 +14,63 @@
 import SwiftUI
 import RecipeKit
 
+/// Carries the shared URL from the host controller into the SwiftUI view without
+/// gating the view's *presentation* on the (potentially slow) `loadItem` call.
+///
+/// The controller presents `ShareRootView` immediately in `viewDidLoad` — so the
+/// "extracting" message paints at once — and resolves this box asynchronously when
+/// the share item finishes loading. `ShareRootView.run()` awaits `urlValue()`, so
+/// only the *submit* waits on the URL, never the first paint.
+///
+/// All access is on the main thread (the controller resolves from a
+/// main-queue-dispatched completion; the view awaits from its `.task`), so the
+/// tiny continuation buffer needs no extra locking.
+///
+/// Not `ObservableObject`: the view never re-renders on this — it only `await`s
+/// `urlValue()` once from `run()`, so a plain reference type is enough.
+final class SharedURLBox {
+    enum State: Equatable {
+        case loading
+        case resolved(String?)   // nil = no usable URL found in the share
+    }
+
+    private var state: State = .loading
+    private var waiters: [CheckedContinuation<String?, Never>] = []
+
+    /// Called once by the controller when `loadItem` completes. Idempotent: a
+    /// second call after resolution is ignored.
+    func resolve(_ url: String?) {
+        guard case .loading = state else { return }
+        state = .resolved(url)
+        let pending = waiters
+        waiters.removeAll()
+        for waiter in pending { waiter.resume(returning: url) }
+    }
+
+    /// Awaits the resolved URL, returning immediately if it already arrived.
+    func urlValue() async -> String? {
+        if case .resolved(let url) = state { return url }
+        return await withCheckedContinuation { continuation in
+            waiters.append(continuation)
+        }
+    }
+}
+
 struct ShareRootView: View {
-    /// URL string extracted from the share context (nil if none was found).
-    let sharedURL: String?
-    /// Called to complete the extension request and dismiss the sheet.
+    /// Resolves to the shared URL asynchronously; presenting the view does not
+    /// wait on it (see `SharedURLBox`).
+    let urlBox: SharedURLBox
+    /// Called to complete the extension request and dismiss the sheet
+    /// (returns to Instagram/TikTok) — the "Keep browsing" action.
     let onFinish: () -> Void
 
     @State private var phase: Phase = .working
+
+    // Named lookups (NOT Color.accentColor): the extension has no designated
+    // global accent, so Color.accentColor resolves to system blue. These read
+    // the copied colorsets in ShareExtension/Assets.xcassets directly.
+    private let sage = Color("AccentColor")
+    private let cream = Color("AppBackground")
 
     private enum Phase: Equatable {
         case working
@@ -29,16 +79,24 @@ struct ShareRootView: View {
     }
 
     var body: some View {
-        ZStack {
-            Color.black.opacity(0.15).ignoresSafeArea()
+        ZStack(alignment: .bottom) {
+            Color.black.opacity(0.25).ignoresSafeArea()
 
+            // Bottom-anchored sheet (like a native action sheet), cream surface
+            // with rounded top corners, flush to the screen's bottom edge.
             VStack(spacing: 14) {
                 content
             }
-            .padding(24)
-            .frame(maxWidth: 280)
-            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 20))
-            .shadow(radius: 20, y: 8)
+            .frame(maxWidth: .infinity)
+            .padding(.horizontal, 22)
+            .padding(.top, 24)
+            .padding(.bottom, 20)
+            .background(
+                UnevenRoundedRectangle(topLeadingRadius: 22, topTrailingRadius: 22, style: .continuous)
+                    .fill(cream)
+                    .ignoresSafeArea(edges: .bottom)
+                    .shadow(color: .black.opacity(0.18), radius: 18, y: -3)
+            )
         }
         .task { await run() }
     }
@@ -60,12 +118,18 @@ struct ShareRootView: View {
             Image(systemName: "checkmark.circle.fill")
                 .font(.largeTitle)
                 .foregroundStyle(.green)
-            Text("Added to RecipeApp")
+            Text("Saved — find it in the app")
                 .font(.headline)
-            Text("Open the app to watch it turn into a recipe.")
+            Text("Open RecipeApp whenever you like to watch it turn into a recipe.")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
+
+            // Single action: dismiss and return to Instagram/TikTok. The job is
+            // already queued in the shared PendingJobStore, so there's nothing to
+            // wait on here.
+            filledButton("Keep browsing", action: onFinish)
+                .padding(.top, 6)
 
         case .failure(let message):
             Image(systemName: "exclamationmark.triangle.fill")
@@ -81,9 +145,26 @@ struct ShareRootView: View {
         }
     }
 
+    /// Solid sage button, cream/white text — the success screen's single action.
+    private func filledButton(_ title: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(.headline)
+                .foregroundStyle(.white)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 12)
+                .background(sage, in: RoundedRectangle(cornerRadius: 12))
+        }
+        .buttonStyle(.plain)
+    }
+
     // MARK: - Submit
 
     private func run() async {
+        // Wait for the share item to finish loading. The view is already on
+        // screen showing the "extracting" message — only the submit below waits.
+        let sharedURL = await urlBox.urlValue()
+
         // Validate + supported-link check (graceful fallback for anything the
         // activation rule let through that isn't an IG Reel / TikTok link).
         guard
@@ -98,14 +179,14 @@ struct ShareRootView: View {
 
         do {
             // Same provider + store the main app uses. PendingJobStore defaults to
-            // the shared App Group suite (group.com.recipeapp.shared).
+            // the shared App Group suite (group.com.recipeapp.shared2).
             let job = try await APIRecipeProvider().submitJob(url: raw)
             PendingJobStore().upsert(
                 PendingJob(jobId: job.jobId, url: raw, submittedAt: Date(), lastStatus: job.status)
             )
+            // No auto-dismiss: the user taps "Keep browsing" to return to
+            // Instagram/TikTok from the success state.
             phase = .success
-            try? await Task.sleep(for: .seconds(1.2))
-            onFinish()
         } catch let error as RecipeProviderError {
             phase = .failure(error.userMessage)
         } catch {

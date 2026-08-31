@@ -22,18 +22,21 @@ public struct MealPlanEntry: Codable, Identifiable, Hashable {
     public let id: String
     /// The day this is planned for, as a stable local-day key: "yyyy-MM-dd".
     public let dayKey: String
+    /// Which meal of the day this is planned for.
+    public let mealSlot: MealSlot
     /// Reference to the source recipe (may not be resolvable in a later session).
     public let recipeId: String
     /// Snapshot of the recipe title, so the card renders without the full Recipe.
     public let recipeTitle: String
     /// Snapshot of the recipe image URL (nil if the recipe had no image).
     public let recipeImageURL: String?
-    /// When it was assigned — orders entries within a day.
+    /// When it was assigned — orders entries within a day/slot.
     public let addedAt: Date
 
     public init(
         id: String = UUID().uuidString,
         dayKey: String,
+        mealSlot: MealSlot = .dinner,
         recipeId: String,
         recipeTitle: String,
         recipeImageURL: String? = nil,
@@ -41,9 +44,29 @@ public struct MealPlanEntry: Codable, Identifiable, Hashable {
     ) {
         self.id = id
         self.dayKey = dayKey
+        self.mealSlot = mealSlot
         self.recipeId = recipeId
         self.recipeTitle = recipeTitle
         self.recipeImageURL = recipeImageURL
         self.addedAt = addedAt
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id, dayKey, mealSlot, recipeId, recipeTitle, recipeImageURL, addedAt
+    }
+
+    /// Custom decode so entries persisted BEFORE meal slots existed still load:
+    /// a missing `mealSlot` defaults to `.dinner` (no separate migration pass, no
+    /// storage-key bump — legacy data upgrades on the next write). Encoding stays
+    /// synthesized, so re-saved entries include the slot.
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        dayKey = try c.decode(String.self, forKey: .dayKey)
+        mealSlot = try c.decodeIfPresent(MealSlot.self, forKey: .mealSlot) ?? .dinner
+        recipeId = try c.decode(String.self, forKey: .recipeId)
+        recipeTitle = try c.decode(String.self, forKey: .recipeTitle)
+        recipeImageURL = try c.decodeIfPresent(String.self, forKey: .recipeImageURL)
+        addedAt = try c.decode(Date.self, forKey: .addedAt)
     }
 }

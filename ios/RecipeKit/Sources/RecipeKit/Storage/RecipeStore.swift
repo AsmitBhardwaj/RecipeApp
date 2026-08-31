@@ -24,27 +24,31 @@ import Foundation
 
 public struct RecipeStore {
 
-    /// Single key holding the JSON-encoded `[Recipe]`, newest first.
-    private static let storageKey = "recipes_v1"
+    /// Key holding the JSON-encoded `[Recipe]`, newest first. Namespaced by
+    /// account when a `userScope` is given (Stage 2b), legacy key otherwise.
+    private static let baseKey = "recipes_v1"
+    private let storageKey: String
 
     private let defaults: UserDefaults
 
     /// Production initializer. Falls back to `.standard` if the App Group suite
     /// can't be opened, so the list degrades to app-local rather than crashing.
-    public init(suiteName: String = AppGroup.identifier) {
+    public init(suiteName: String = AppGroup.identifier, userScope: String? = nil) {
         self.defaults = UserDefaults(suiteName: suiteName) ?? .standard
+        self.storageKey = scopedStorageKey(Self.baseKey, userScope)
     }
 
     /// Test/seam initializer: inject an ephemeral `UserDefaults` for host tests.
-    public init(defaults: UserDefaults) {
+    public init(defaults: UserDefaults, userScope: String? = nil) {
         self.defaults = defaults
+        self.storageKey = scopedStorageKey(Self.baseKey, userScope)
     }
 
     // MARK: - Reads
 
     /// All cached recipes, in stored order (newest first).
     public func all() -> [Recipe] {
-        guard let data = defaults.data(forKey: Self.storageKey) else { return [] }
+        guard let data = defaults.data(forKey: storageKey) else { return [] }
         return (try? JSONDecoder().decode([Recipe].self, from: data)) ?? []
     }
 
@@ -65,6 +69,6 @@ public struct RecipeStore {
 
     private func write(_ recipes: [Recipe]) {
         guard let data = try? JSONEncoder().encode(recipes) else { return }
-        defaults.set(data, forKey: Self.storageKey)
+        defaults.set(data, forKey: storageKey)
     }
 }

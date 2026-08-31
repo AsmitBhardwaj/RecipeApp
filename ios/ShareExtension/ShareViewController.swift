@@ -2,12 +2,11 @@
 //  ShareViewController.swift
 //  ShareExtension
 //
-//  Principal class for the Share Extension (referenced by NSExtensionPrincipalClass
-//  in Info.plist — there is deliberately NO storyboard). Its only job is to pull
-//  the shared URL out of the extension context and host the SwiftUI
-//  `ShareRootView`, which submits the job and dismisses. All real work (submit +
-//  persist to the shared App Group store) is reused verbatim from RecipeKit; the
-//  extension adds no networking or model code of its own.
+//  The extension's principal class (wired via NSExtensionPrincipalClass in
+//  Info.plist — no storyboard). Its only jobs: pull the shared URL out of the
+//  extension context, host `ShareRootView` (the real "submit and forget" UI),
+//  and complete the request when that view finishes. All real work — job
+//  submission, PendingJobStore persistence — lives in ShareRootView / RecipeKit.
 //
 
 import UIKit
@@ -16,75 +15,86 @@ import UniformTypeIdentifiers
 
 final class ShareViewController: UIViewController {
 
+    /// Feeds the shared URL into `ShareRootView` once `loadItem` completes, without
+    /// blocking the view's presentation on it.
+    private let urlBox = SharedURLBox()
+
     override func viewDidLoad() {
         super.viewDidLoad()
         view.backgroundColor = .clear
-        extractSharedURL { [weak self] url in
-            self?.presentUI(url: url)
+
+        // Present the UI IMMEDIATELY so the "extracting" message paints at once —
+        // do not gate it on extractSharedURL, whose loadItem is host-controlled and
+        // can be slow. The resolved URL arrives asynchronously via `urlBox`.
+        presentRoot()
+        extractSharedURL { [weak self] urlString in
+            self?.urlBox.resolve(urlString)
         }
     }
 
     // MARK: - UI
 
-    private func presentUI(url: String?) {
+    private func presentRoot() {
         let root = ShareRootView(
-            sharedURL: url,
+            urlBox: urlBox,
             onFinish: { [weak self] in self?.finish() }
         )
         let host = UIHostingController(rootView: root)
         host.view.backgroundColor = .clear
+
         addChild(host)
-        host.view.frame = view.bounds
-        host.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        host.view.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(host.view)
+        NSLayoutConstraint.activate([
+            host.view.topAnchor.constraint(equalTo: view.topAnchor),
+            host.view.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            host.view.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            host.view.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+        ])
         host.didMove(toParent: self)
     }
 
-    /// Complete and dismiss. The extension never waits on extraction — the main
-    /// app picks the job up from the shared store on next foreground.
     private func finish() {
         extensionContext?.completeRequest(returningItems: [], completionHandler: nil)
     }
 
-    // MARK: - Extract the shared URL
+    // MARK: - URL extraction
 
-    /// Pulls a URL string from the shared item: a real `public.url` attachment
-    /// first, then a URL detected inside shared `public.plain-text`. Returns nil
-    /// if neither yields one (the UI then shows the unsupported-link state).
+    /// Walks every attachment across every input item, preferring a real URL
+    /// provider, then falling back to plain text that contains a URL (IG/TikTok
+    /// sometimes hand over the link as text). Always resolves on the main queue;
+    /// passes nil if nothing usable is found (ShareRootView shows a graceful
+    /// "unsupported link" state rather than crashing).
     private func extractSharedURL(completion: @escaping (String?) -> Void) {
-        guard
-            let item = extensionContext?.inputItems.first as? NSExtensionItem,
-            let providers = item.attachments
-        else {
-            completion(nil)
-            return
-        }
+        let providers = (extensionContext?.inputItems as? [NSExtensionItem])?
+            .flatMap { $0.attachments ?? [] } ?? []
 
         let urlType = UTType.url.identifier
         let textType = UTType.plainText.identifier
 
-        if let provider = providers.first(where: { $0.hasItemConformingToTypeIdentifier(urlType) }) {
-            provider.loadItem(forTypeIdentifier: urlType, options: nil) { value, _ in
-                let url = (value as? URL)?.absoluteString ?? (value as? String)
-                DispatchQueue.main.async { completion(url) }
+        // Prefer an explicit URL attachment.
+        if let urlProvider = providers.first(where: { $0.hasItemConformingToTypeIdentifier(urlType) }) {
+            urlProvider.loadItem(forTypeIdentifier: urlType, options: nil) { item, _ in
+                let resolved = (item as? URL)?.absoluteString ?? (item as? String)
+                DispatchQueue.main.async { completion(resolved) }
             }
             return
         }
 
-        if let provider = providers.first(where: { $0.hasItemConformingToTypeIdentifier(textType) }) {
-            provider.loadItem(forTypeIdentifier: textType, options: nil) { value, _ in
-                let url = (value as? String).flatMap(Self.firstURL(in:))
-                DispatchQueue.main.async { completion(url) }
+        // Fall back to plain text that may contain a link.
+        if let textProvider = providers.first(where: { $0.hasItemConformingToTypeIdentifier(textType) }) {
+            textProvider.loadItem(forTypeIdentifier: textType, options: nil) { item, _ in
+                let text = item as? String
+                DispatchQueue.main.async { completion(Self.firstURL(in: text) ?? text) }
             }
             return
         }
 
-        completion(nil)
+        DispatchQueue.main.async { completion(nil) }
     }
 
-    /// First link found in free text (Instagram/TikTok sometimes share the caption
-    /// with the URL embedded rather than a bare URL attachment).
-    private static func firstURL(in text: String) -> String? {
+    private static func firstURL(in text: String?) -> String? {
+        guard let text else { return nil }
         let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
         let range = NSRange(text.startIndex..., in: text)
         return detector?.firstMatch(in: text, options: [], range: range)?.url?.absoluteString
