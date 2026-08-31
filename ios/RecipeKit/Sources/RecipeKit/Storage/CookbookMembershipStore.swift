@@ -49,6 +49,14 @@ public struct CookbookMembershipStore {
         map().compactMap { key, ids in ids.contains(recipeId) ? key : nil }
     }
 
+    /// Every (cookbook, recipe) link, cookbook-key order. Used by the Stage 4
+    /// claim path to enumerate memberships for migration into a signed-in account.
+    public func allMemberships() -> [(cookbookId: String, recipeId: String)] {
+        map().flatMap { cookbookId, recipeIds in
+            recipeIds.map { (cookbookId: cookbookId, recipeId: $0) }
+        }
+    }
+
     // MARK: - Writes
 
     /// Replace the full set of cookbooks a recipe belongs to — the detail-view

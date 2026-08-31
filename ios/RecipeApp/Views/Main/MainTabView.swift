@@ -23,6 +23,9 @@ struct MainTabView: View {
     @StateObject private var cookbooks: CookbooksModel
     @StateObject private var sync: SyncCoordinator
     private let userScope: String
+    /// Stage 4: non-nil once, right after the "claim your data" migration runs on
+    /// first sign-in. Drives the confirmation toast, then is cleared on dismiss.
+    @State private var claimSummary: ClaimSummary?
     @Environment(\.scenePhase) private var scenePhase
     /// Which tab is showing. Bound so `onOpenURL` (launch via `recipeapp://`
     /// from the Share Extension) can force the Recipes tab, where the new
@@ -35,6 +38,12 @@ struct MainTabView: View {
 
     init(recipeProvider: RecipeProvider, auth: AuthModel) {
         let userId = auth.currentUser?.id ?? "unknown"
+        // Stage 4 "claim your data": migrate any pre-account (legacy) local data
+        // into this account BEFORE the view models below read their scoped stores,
+        // so claimed recipes/lists show immediately (not only after the next sync).
+        // Idempotent + device-global: a cheap no-op after the first sign-in.
+        let claim = LegacyDataClaimer(userId: userId).claimIfNeeded()
+        _claimSummary = State(initialValue: claim)
         let coordinator = SyncCoordinator(userId: userId, tokenProvider: { try await auth.validAccessToken() })
         self.userScope = userId
         _sync = StateObject(wrappedValue: coordinator)
@@ -103,6 +112,18 @@ struct MainTabView: View {
             }
         }
         .animation(.easeOut(duration: 0.2), value: jobs.failureAlert)
+        // Stage 4 "claim your data" confirmation — top, non-blocking, self-dismissing.
+        .overlay(alignment: .top) {
+            if let summary = claimSummary {
+                ClaimToastView(summary: summary)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+                    .task {
+                        try? await Task.sleep(nanoseconds: 4_000_000_000)
+                        withAnimation { claimSummary = nil }
+                    }
+            }
+        }
+        .animation(.spring(response: 0.4, dampingFraction: 0.85), value: claimSummary)
     }
 }
 
