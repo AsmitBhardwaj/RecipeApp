@@ -14,9 +14,52 @@
 import SwiftUI
 import RecipeKit
 
+/// Carries the shared URL from the host controller into the SwiftUI view without
+/// gating the view's *presentation* on the (potentially slow) `loadItem` call.
+///
+/// The controller presents `ShareRootView` immediately in `viewDidLoad` — so the
+/// "extracting" message paints at once — and resolves this box asynchronously when
+/// the share item finishes loading. `ShareRootView.run()` awaits `urlValue()`, so
+/// only the *submit* waits on the URL, never the first paint.
+///
+/// All access is on the main thread (the controller resolves from a
+/// main-queue-dispatched completion; the view awaits from its `.task`), so the
+/// tiny continuation buffer needs no extra locking.
+///
+/// Not `ObservableObject`: the view never re-renders on this — it only `await`s
+/// `urlValue()` once from `run()`, so a plain reference type is enough.
+final class SharedURLBox {
+    enum State: Equatable {
+        case loading
+        case resolved(String?)   // nil = no usable URL found in the share
+    }
+
+    private var state: State = .loading
+    private var waiters: [CheckedContinuation<String?, Never>] = []
+
+    /// Called once by the controller when `loadItem` completes. Idempotent: a
+    /// second call after resolution is ignored.
+    func resolve(_ url: String?) {
+        guard case .loading = state else { return }
+        state = .resolved(url)
+        let pending = waiters
+        waiters.removeAll()
+        for waiter in pending { waiter.resume(returning: url) }
+    }
+
+    /// Awaits the resolved URL, returning immediately if it already arrived.
+    func urlValue() async -> String? {
+        if case .resolved(let url) = state { return url }
+        return await withCheckedContinuation { continuation in
+            waiters.append(continuation)
+        }
+    }
+}
+
 struct ShareRootView: View {
-    /// URL string extracted from the share context (nil if none was found).
-    let sharedURL: String?
+    /// Resolves to the shared URL asynchronously; presenting the view does not
+    /// wait on it (see `SharedURLBox`).
+    let urlBox: SharedURLBox
     /// Called to complete the extension request and dismiss the sheet
     /// (returns to Instagram/TikTok) — the "Keep browsing" action.
     let onFinish: () -> Void
@@ -118,6 +161,10 @@ struct ShareRootView: View {
     // MARK: - Submit
 
     private func run() async {
+        // Wait for the share item to finish loading. The view is already on
+        // screen showing the "extracting" message — only the submit below waits.
+        let sharedURL = await urlBox.urlValue()
+
         // Validate + supported-link check (graceful fallback for anything the
         // activation rule let through that isn't an IG Reel / TikTok link).
         guard

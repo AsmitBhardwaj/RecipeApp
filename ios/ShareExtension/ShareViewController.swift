@@ -15,20 +15,28 @@ import UniformTypeIdentifiers
 
 final class ShareViewController: UIViewController {
 
+    /// Feeds the shared URL into `ShareRootView` once `loadItem` completes, without
+    /// blocking the view's presentation on it.
+    private let urlBox = SharedURLBox()
+
     override func viewDidLoad() {
         super.viewDidLoad()
         view.backgroundColor = .clear
 
+        // Present the UI IMMEDIATELY so the "extracting" message paints at once —
+        // do not gate it on extractSharedURL, whose loadItem is host-controlled and
+        // can be slow. The resolved URL arrives asynchronously via `urlBox`.
+        presentRoot()
         extractSharedURL { [weak self] urlString in
-            self?.presentRoot(with: urlString)
+            self?.urlBox.resolve(urlString)
         }
     }
 
     // MARK: - UI
 
-    private func presentRoot(with urlString: String?) {
+    private func presentRoot() {
         let root = ShareRootView(
-            sharedURL: urlString,
+            urlBox: urlBox,
             onFinish: { [weak self] in self?.finish() }
         )
         let host = UIHostingController(rootView: root)
