@@ -35,6 +35,12 @@ class Ingredient(BaseModel):
 class Instruction(BaseModel):
     step_number: int
     text: str
+    # Per-step cooking duration in seconds when the step states/implies one
+    # ("bake for 20 minutes" -> 1200); null when absent or ambiguous. Powers
+    # Cook Mode's auto-detected step timers. Nullable + additive: it lives in the
+    # recipes.data JSON blob, so no migration, and pre-Cook-Mode recipes decode
+    # it as null. The client falls back to regex on the step text when null.
+    duration_seconds: Optional[int] = None
 
 
 class Confidence(BaseModel):

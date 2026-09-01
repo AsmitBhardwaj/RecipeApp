@@ -136,17 +136,25 @@ public struct Ingredient: Codable, Hashable {
 public struct Instruction: Codable, Hashable, Identifiable {
     public let stepNumber: Int
     public let text: String
+    /// Per-step cooking duration in seconds when the backend extracted one
+    /// ("bake for 20 minutes" -> 1200); nil when absent/ambiguous or for recipes
+    /// saved before Cook Mode shipped. The synthesized decoder treats a missing
+    /// key as nil, so older cached JSON round-trips unchanged. When nil, Cook Mode
+    /// falls back to `StepDurationParser` on `text` (see `effectiveDurationSeconds`).
+    public let durationSeconds: Int?
 
     public var id: Int { stepNumber }
 
-    public init(stepNumber: Int, text: String) {
+    public init(stepNumber: Int, text: String, durationSeconds: Int? = nil) {
         self.stepNumber = stepNumber
         self.text = text
+        self.durationSeconds = durationSeconds
     }
 
     enum CodingKeys: String, CodingKey {
         case stepNumber = "step_number"
         case text
+        case durationSeconds = "duration_seconds"
     }
 }
 
