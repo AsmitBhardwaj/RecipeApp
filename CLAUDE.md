@@ -81,7 +81,7 @@ expand MVP scope right now.
         │
         ▼
 [Caption has enough signal?] ──No──► [Dish-ID prompt → generic recipe,
-        │ Yes                          clearly labeled as generated]
+        │ Yes                          source_type=generated (data flag only)]
         ▼
 [LLM extraction: caption → structured recipe JSON]
         │
@@ -272,10 +272,12 @@ not overly creative. Set "source_type": "generated" and set
 an extracted one.
 ```
 
-**UI requirement:** any `source_type: "generated"` recipe must be visually
-distinguishable from an extracted one (badge, distinct accent) — never let a
-generated recipe look identical to an extracted one. This is a hard rule, not
-a nice-to-have; users must always be able to tell the difference.
+**UI treatment:** `source_type: "generated"` is still recorded on the recipe in
+the data model, but generated recipes are **no longer surfaced differently in
+the UI** — there is no generated badge or distinct accent, and a generated
+recipe may look identical to an extracted one. (The `GeneratedBadge` component
+is kept in the codebase but is no longer called, so a visual distinction can be
+reinstated later if the product decision changes.)
 
 ### Validation
 - Run all LLM output through strict schema validation (e.g. Pydantic)

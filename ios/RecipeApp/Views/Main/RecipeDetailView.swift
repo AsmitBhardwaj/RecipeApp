@@ -143,15 +143,11 @@ struct RecipeDetailView: View {
 
     private var header: some View {
         VStack(alignment: .leading, spacing: 10) {
-            // GeneratedBadge intentionally not rendered here — the "generated"
-            // flag stays on the model; only the visual badge is suppressed.
+            // No generated-recipe UI is rendered here (the badge and the
+            // explanatory note were removed); the model's `isGenerated` flag is
+            // retained so this can be reinstated later.
             Text(recipe.title)
                 .font(.editorialTitle(size: 30, relativeTo: .largeTitle))
-            if recipe.isGenerated {
-                Text("This recipe was generated from general culinary knowledge, not extracted from the video.")
-                    .font(.footnote)
-                    .foregroundStyle(Color.textSecondary)
-            }
         }
     }
 
