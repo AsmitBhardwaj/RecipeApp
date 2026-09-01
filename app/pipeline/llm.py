@@ -48,7 +48,11 @@ RULES:
    If a unit is ambiguous or colloquial (e.g. "a splash", "a good glug"), keep
    it as given in the "notes" field and leave "unit" null.
 4. Reconstruct instructions as a clean, numbered sequence even if the source
-   rambles or is out of order — infer logical cooking order from context.
+   rambles or is out of order — infer logical cooking order from context. For
+   each step, if the text states or clearly implies a single cooking duration
+   (e.g. "bake for 20 minutes", "simmer 1 hour"), set that step's
+   "duration_seconds" to that time in total seconds; otherwise set it null.
+   Never guess a duration that isn't stated.
 5. If title is not explicitly stated, generate a concise, descriptive title
    from the dish being made — never a generic phrase like "Recipe video."
 6. Populate the "confidence" object honestly:
@@ -94,7 +98,11 @@ RULES:
    If a unit is ambiguous or colloquial (e.g. "a splash", "a good glug"), keep
    it as given in the "notes" field and leave "unit" null.
 4. Reconstruct instructions as a clean, numbered sequence even if the source
-   rambles or is out of order — infer logical cooking order from context.
+   rambles or is out of order — infer logical cooking order from context. For
+   each step, if the text states or clearly implies a single cooking duration
+   (e.g. "bake for 20 minutes", "simmer 1 hour"), set that step's
+   "duration_seconds" to that time in total seconds; otherwise set it null.
+   Never guess a duration that isn't stated.
 5. If title is not explicitly stated, generate a concise, descriptive title
    from the dish being made — never a generic phrase like "Recipe."
 6. Populate the "confidence" object honestly:
@@ -115,7 +123,9 @@ any distinguishing details provided. This is NOT based on a specific source —
 generate from general culinary knowledge. Keep it approachable and correct,
 not overly creative. Set "source_type": "generated" and set
 "confidence.overall" to reflect that this is a generic reference recipe, not
-an extracted one."""
+an extracted one. For each step with a clear cooking duration (e.g. "bake for
+20 minutes"), set that step's "duration_seconds" to that time in total seconds;
+otherwise set it null."""
 
 # The recipe JSON shape we hand the model (referenced as "the schema provided").
 _RECIPE_SCHEMA_HINT = """\
@@ -130,7 +140,7 @@ Respond with ONLY a JSON object of this shape:
     {"quantity": number|null, "unit": string|null, "name": "string", "notes": string|null}
   ],
   "instructions": [
-    {"step_number": number, "text": "string"}
+    {"step_number": number, "text": "string", "duration_seconds": number|null}
   ],
   "confidence": {
     "overall": number,

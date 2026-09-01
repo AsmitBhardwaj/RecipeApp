@@ -25,6 +25,8 @@ enum RecipeScope: Hashable {
 struct CookbooksGridView: View {
     @ObservedObject var jobs: PendingJobsModel
     @ObservedObject var cookbooks: CookbooksModel
+    /// Account scope, threaded to Recipe Detail for the Cook Mode timer store.
+    var userScope: String? = nil
 
     @State private var showingAdd = false
     @State private var showingAccount = false
@@ -105,7 +107,7 @@ struct CookbooksGridView: View {
         }
         // Recipe detail push (from any scoped list).
         .navigationDestination(for: Recipe.self) { recipe in
-            RecipeDetailView(recipe: recipe, cookbooks: cookbooks)
+            RecipeDetailView(recipe: recipe, cookbooks: cookbooks, userScope: userScope)
         }
         .task { await jobs.load() }
     }

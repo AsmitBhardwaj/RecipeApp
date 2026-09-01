@@ -13,12 +13,18 @@ import RecipeKit
 struct RecipeDetailView: View {
     let recipe: Recipe
     @ObservedObject var cookbooks: CookbooksModel
+    /// Account scope for the per-user Cook Mode timer store (nil in previews).
+    let userScope: String?
     @StateObject private var scaler: ServingScaler
     @State private var showingCookbookPicker = false
+    @State private var showingCookMode = false
+    /// App-wide step-timer notification scheduler, injected at the app root.
+    @Environment(\.cookTimerScheduler) private var cookTimerScheduler
 
-    init(recipe: Recipe, cookbooks: CookbooksModel) {
+    init(recipe: Recipe, cookbooks: CookbooksModel, userScope: String? = nil) {
         self.recipe = recipe
         self.cookbooks = cookbooks
+        self.userScope = userScope
         // Base is only meaningful when scalable; when it isn't, the scaler is
         // never surfaced, so a placeholder of 1 is harmless.
         _scaler = StateObject(wrappedValue: ServingScaler(baseServings: recipe.baseServings ?? 1))
@@ -37,6 +43,9 @@ struct RecipeDetailView: View {
                         }
                     }
                     metaRow
+                    if !recipe.instructions.isEmpty {
+                        startCookingButton
+                    }
                     cookbooksSection
                     ingredientsSection
                     instructionsSection
@@ -49,6 +58,28 @@ struct RecipeDetailView: View {
         .appBackground()
         .navigationTitle(recipe.title)
         .navigationBarTitleDisplayMode(.inline)
+        // Full-screen cover (not a sheet) so a stray swipe can't drop the cook.
+        .fullScreenCover(isPresented: $showingCookMode) {
+            CookModeView(recipe: recipe, userScope: userScope, scheduler: cookTimerScheduler)
+        }
+    }
+
+    // MARK: Start Cooking
+
+    /// Primary entry point into the full-screen guided Cook Mode. Shown only when
+    /// the recipe actually has steps (guarded at the call site).
+    private var startCookingButton: some View {
+        Button {
+            showingCookMode = true
+        } label: {
+            Label("Start Cooking", systemImage: "flame.fill")
+                .font(.headline)
+                .foregroundStyle(.white)
+                .frame(maxWidth: .infinity)
+                .frame(height: 54)
+                .background(Color.accentColor, in: RoundedRectangle(cornerRadius: 14))
+        }
+        .buttonStyle(.plain)
     }
 
     // MARK: Serving-size adjuster

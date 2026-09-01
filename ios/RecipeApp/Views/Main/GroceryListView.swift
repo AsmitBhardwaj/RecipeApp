@@ -186,7 +186,7 @@ struct GroceryListView: View {
                         Text(unresolvedNote)
                             .font(.caption)
                             .foregroundStyle(Color.textSecondary)
-                            .tornEdgeCardRow()
+                            .tornEdgeCardRow(bordered: false)
                     }
                 }
 
@@ -202,7 +202,7 @@ struct GroceryListView: View {
                             ) {
                                 toggle(key)
                             }
-                            .tornEdgeCardRow()
+                            .tornEdgeCardRow(bordered: false)
                         }
                     } header: {
                         sectionHeader(section.category.displayName)
@@ -220,7 +220,7 @@ struct GroceryListView: View {
                             ) {
                                 toggle(item.checkKey)
                             }
-                            .tornEdgeCardRow()
+                            .tornEdgeCardRow(bordered: false)
                             .swipeActions(edge: .trailing) {
                                 Button(role: .destructive) {
                                     model.removeManual(item)
