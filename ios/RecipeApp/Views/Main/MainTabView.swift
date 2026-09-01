@@ -54,7 +54,7 @@ struct MainTabView: View {
     var body: some View {
         TabView(selection: $selectedTab) {
             NavigationStack {
-                CookbooksGridView(jobs: jobs, cookbooks: cookbooks)
+                CookbooksGridView(jobs: jobs, cookbooks: cookbooks, userScope: userScope)
             }
             .tabItem {
                 Label("Recipes", systemImage: "book.closed.fill")
