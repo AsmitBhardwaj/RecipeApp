@@ -17,7 +17,10 @@ struct GeneratedBadge: View {
         Label("Generated recipe", systemImage: "sparkles")
             .font(.caption.weight(.semibold))
             .padding(.horizontal, 10)
-            .padding(.vertical, 5)
+            // Match the duration pill's vertical padding (3) so the badge is the
+            // same compact height and hugs the pill above it, instead of adding a
+            // taller capsule that reads as excess spacing on generated-recipe cards.
+            .padding(.vertical, 3)
             .foregroundStyle(Color.badgeGenerated)
             .background(Color.badgeGenerated.opacity(0.15), in: Capsule())
     }
