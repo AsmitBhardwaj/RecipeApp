@@ -1,0 +1,62 @@
+name: CI
+
+# Runs on every push and every pull request.
+on:
+  push:
+  pull_request:
+
+# A newer push to the same ref supersedes an in-flight run.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  recipekit-tests:
+    name: RecipeKit unit tests (swift test)
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      # Point the toolchain at full Xcode so `swift test` can find XCTest
+      # (the CommandLineTools toolchain doesn't ship it).
+      - name: Select Xcode
+        run: |
+          sudo xcode-select -s /Applications/Xcode.app
+          swift --version
+          xcodebuild -version
+
+      - name: swift test
+        working-directory: ios/RecipeKit
+        run: swift test
+
+  app-build:
+    name: Build RecipeApp (iOS Simulator)
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: |
+          sudo xcode-select -s /Applications/Xcode.app
+          xcodebuild -version
+
+      # Secrets.xcconfig is gitignored (it holds the real APP_KEY) but is the
+      # RecipeApp target's base configuration, so the build needs *a* file there.
+      # A placeholder from the committed example is enough to compile/link — CI
+      # never talks to the backend.
+      - name: Provide placeholder Secrets.xcconfig
+        working-directory: ios
+        run: cp Secrets.example.xcconfig Secrets.xcconfig
+
+      - name: Build for the simulator
+        working-directory: ios
+        run: |
+          set -o pipefail
+          xcodebuild build \
+            -project RecipeApp.xcodeproj \
+            -scheme RecipeApp \
+            -configuration Debug \
+            -destination 'generic/platform=iOS Simulator' \
+            CODE_SIGNING_ALLOWED=NO
