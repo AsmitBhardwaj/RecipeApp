@@ -143,9 +143,8 @@ struct RecipeDetailView: View {
 
     private var header: some View {
         VStack(alignment: .leading, spacing: 10) {
-            if recipe.isGenerated {
-                GeneratedBadge()
-            }
+            // GeneratedBadge intentionally not rendered here — the "generated"
+            // flag stays on the model; only the visual badge is suppressed.
             Text(recipe.title)
                 .font(.editorialTitle(size: 30, relativeTo: .largeTitle))
             if recipe.isGenerated {

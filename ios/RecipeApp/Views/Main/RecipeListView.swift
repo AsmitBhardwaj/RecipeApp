@@ -141,10 +141,8 @@ struct RecipeRowView: View {
                     .background(Color.textSecondary.opacity(0.10), in: Capsule())
                     .overlay(Capsule().strokeBorder(Color.cardEdge, lineWidth: 1))
                 }
-
-                if recipe.isGenerated {
-                    GeneratedBadge()
-                }
+                // GeneratedBadge intentionally not rendered here — the "generated"
+                // flag stays on the model; only the visual badge is suppressed.
             }
         }
         .padding(.vertical, 4)
