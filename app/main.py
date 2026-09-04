@@ -111,7 +111,31 @@ def _with_recipe(job: Job) -> JobResponse:
 
 @app.get("/")
 def health() -> dict:
+    # Lightweight LIVENESS check — no DB touch. This is Railway's healthcheck
+    # path (railway.json), so it must stay cheap and must NOT fail on a DB
+    # outage: coupling the platform healthcheck to the DB would make Railway
+    # kill/restart the container in a crash loop during a DB blip. Readiness
+    # (including the DB) lives at /health below.
     return {"status": "ok", "model": config.OPENAI_MODEL}
+
+
+@app.get("/health")
+def health_ready() -> JSONResponse:
+    # READINESS check for external monitoring: actually exercises the configured
+    # database (SELECT 1) and reports which backend is live. Returns 503 if the
+    # DB is unreachable so an outage fails LOUDLY — the gap that let the original
+    # incident hide behind a green `GET /` while every job silently failed.
+    try:
+        db_status = db.health_check()
+    except Exception as exc:  # noqa: BLE001 - any DB failure => not ready
+        return JSONResponse(
+            status_code=503,
+            content={"status": "unhealthy", "database": "error", "detail": str(exc)},
+        )
+    return JSONResponse(
+        status_code=200,
+        content={"status": "ok", "model": config.OPENAI_MODEL, **db_status},
+    )
 
 
 @app.post("/v1/jobs", response_model=JobResponse)

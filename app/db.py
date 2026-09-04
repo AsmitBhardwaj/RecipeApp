@@ -211,6 +211,21 @@ def get_engine() -> Engine:
     return _get_engine()
 
 
+def health_check() -> dict:
+    """Liveness probe for the configured database: run `SELECT 1` against the
+    real engine and report the dialect. Raises if the DB is unreachable so the
+    caller (the /health endpoint) can fail loudly — the whole point is that a DB
+    outage shows up in monitoring instead of every job silently failing while
+    `GET /` still says "ok". Also surfaces which backend is actually live
+    (postgresql vs sqlite), so a misconfigured DATABASE_URL is visible."""
+    from sqlalchemy import text
+
+    engine = _get_engine()
+    with engine.connect() as conn:
+        conn.execute(text("SELECT 1"))
+    return {"database": "ok", "dialect": engine.dialect.name}
+
+
 def _insert(table: Table):
     """Dialect-appropriate INSERT builder exposing `.on_conflict_*`."""
     return _pg_insert(table) if _get_engine().dialect.name == "postgresql" else _sqlite_insert(table)
