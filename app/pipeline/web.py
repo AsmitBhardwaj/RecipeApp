@@ -31,6 +31,35 @@ _TIMEOUT = 15
 _MAX_BYTES = 5 * 1024 * 1024   # 5 MB cap — recipe pages are far smaller
 _MAX_REDIRECTS = 5
 
+# Origin-side "we are refusing this client" responses — bot protection / WAF /
+# paywall (e.g. Cloudflare returns 402/403/503 to non-browser clients; some
+# publishers now do this to every datacenter AND residential HTTP client). These
+# are reported with a distinct `site_blocked` code — NOT a generic fetch_failed —
+# so the app can offer a manual "paste the recipe text" fallback instead of a
+# dead-end error. Deliberately status/marker-based, never a domain allowlist, so
+# any site that blocks us (now or later) degrades gracefully.
+_BLOCK_STATUSES = frozenset({401, 402, 403, 406, 429, 451, 503})
+
+# Markers of an interstitial anti-bot / JS challenge served WITH a 2xx (the HTML
+# loads but it's the challenge page, not the article) — matched case-insensitively
+# against the start of the body. Kept specific to avoid false positives.
+_CHALLENGE_MARKERS = (
+    "just a moment...",
+    "cf-browser-verification",
+    "cf-challenge",
+    "challenge-platform",
+    "__cf_chl",
+    "attention required! | cloudflare",
+    "enable javascript and cookies to continue",
+)
+
+# User-facing detail stored on the failed job (surfaces via the app's fallback
+# message for the `site_blocked` code). Honest about the cause and the remedy.
+_SITE_BLOCKED_MESSAGE = (
+    "This site blocks automatic recipe import. You can still add it by pasting "
+    "the recipe text."
+)
+
 
 class WebFetchError(Exception):
     """Raised when a web page can't be fetched or isn't usable HTML."""
@@ -39,6 +68,12 @@ class WebFetchError(Exception):
         super().__init__(message)
         self.code = code
         self.message = message
+
+
+def _looks_like_challenge(html: str) -> bool:
+    """True if `html` looks like an anti-bot interstitial rather than content."""
+    head = html[:4096].lower()
+    return any(marker in head for marker in _CHALLENGE_MARKERS)
 
 
 def safe_get(url: str) -> Tuple[str, str]:
@@ -73,6 +108,12 @@ def safe_get(url: str) -> Tuple[str, str]:
             current = urljoin(current, location)
             continue
 
+        # Origin is refusing us (bot protection / paywall / rate limit). Report
+        # it as a distinct, actionable state rather than an opaque fetch_failed.
+        if resp.status_code in _BLOCK_STATUSES:
+            resp.close()
+            raise WebFetchError("site_blocked", _SITE_BLOCKED_MESSAGE)
+
         try:
             resp.raise_for_status()
         except requests.HTTPError as exc:
@@ -83,6 +124,10 @@ def safe_get(url: str) -> Tuple[str, str]:
             raise WebFetchError("not_html", f"unsupported content-type: {content_type or 'unknown'}")
 
         html = _read_capped(resp)
+        # Some anti-bot systems serve the challenge page with a 200 — treat that
+        # as a block too, not as (empty) recipe content.
+        if _looks_like_challenge(html):
+            raise WebFetchError("site_blocked", _SITE_BLOCKED_MESSAGE)
         return html, current
 
     raise WebFetchError("too_many_redirects", "exceeded redirect limit")

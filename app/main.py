@@ -54,7 +54,9 @@ async def _require_app_key(request: Request, call_next):
     # `/` (healthcheck) and `/admin/*` (browser page, guarded by its own Basic
     # Auth instead — a browser can't send X-App-Key) are exempt.
     path = request.url.path
-    if config.APP_KEY and path != "/" and not path.startswith("/admin"):
+    # `/` and `/health` (monitoring probes) and `/admin/*` (its own Basic Auth)
+    # are exempt — an uptime checker won't send X-App-Key.
+    if config.APP_KEY and path not in ("/", "/health") and not path.startswith("/admin"):
         presented = request.headers.get("X-App-Key", "")
         # Constant-time compare to avoid leaking the key via response timing.
         if not hmac.compare_digest(presented, config.APP_KEY):
