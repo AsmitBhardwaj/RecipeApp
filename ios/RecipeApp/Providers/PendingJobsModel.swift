@@ -50,7 +50,13 @@ final class PendingJobsModel: ObservableObject {
         let jobId: String
         let url: String
         let message: String
+        /// Backend `error_code`, so the card can decide whether to offer the
+        /// "Paste recipe text" remedy (see RecipeProviderError.canPasteText).
+        let errorCode: String?
         var id: String { jobId }
+
+        /// Whether this failure can be recovered by pasting the recipe text.
+        var canPasteText: Bool { RecipeProviderError.canPasteText(code: errorCode) }
     }
 
     /// A one-shot failure surfaced as an alert. Identifiable by job id so
@@ -176,6 +182,28 @@ final class PendingJobsModel: ObservableObject {
         failureAlert = nil
     }
 
+    /// Retry a failed job with user-pasted recipe text. On success the recipe is
+    /// added to the list exactly like a normal completion (persisted + library
+    /// sync) and the failed card is cleared. Throws `RecipeProviderError` so the
+    /// paste screen can show a specific failure state.
+    @discardableResult
+    func submitPastedText(jobId: String, text: String) async throws -> Recipe {
+        let envelope = try await provider.submitPastedText(jobId: jobId, text: text)
+        switch envelope.job.status {
+        case .complete:
+            guard let recipe = envelope.recipe else {
+                throw RecipeProviderError.invalidResponse("job completed but carried no recipe")
+            }
+            handleComplete(jobId: jobId, envelope: envelope)  // insert + persist + sync
+            failed.removeAll { $0.jobId == jobId }            // clear the failed card
+            return recipe
+        case .failed:
+            throw RecipeProviderError.jobFailed(code: envelope.job.errorCode, message: envelope.job.error)
+        case .queued, .processing:
+            throw RecipeProviderError.invalidResponse("paste did not reach a terminal state")
+        }
+    }
+
     // MARK: - Polling
 
     private func startPolling(jobId: String) {
@@ -203,7 +231,8 @@ final class PendingJobsModel: ObservableObject {
                     let message = RecipeProviderError
                         .jobFailed(code: envelope.job.errorCode, message: envelope.job.error)
                         .userMessage
-                    handleFailed(jobId: jobId, message: message, url: envelope.job.url)
+                    handleFailed(jobId: jobId, message: message, url: envelope.job.url,
+                                 code: envelope.job.errorCode)
                     return
                 }
             } catch RecipeProviderError.httpStatus(404) {
@@ -236,10 +265,10 @@ final class PendingJobsModel: ObservableObject {
         pending = store.all()
     }
 
-    private func handleFailed(jobId: String, message: String, url: String? = nil) {
+    private func handleFailed(jobId: String, message: String, url: String? = nil, code: String? = nil) {
         let jobURL = url ?? pending.first(where: { $0.jobId == jobId })?.url ?? ""
         if !failed.contains(where: { $0.jobId == jobId }) {
-            failed.append(FailedJob(jobId: jobId, url: jobURL, message: message))
+            failed.append(FailedJob(jobId: jobId, url: jobURL, message: message, errorCode: code))
         }
         // Surface a one-time alert on the transition to failed. Once per jobId
         // per session; a second concurrent failure keeps its card but doesn't

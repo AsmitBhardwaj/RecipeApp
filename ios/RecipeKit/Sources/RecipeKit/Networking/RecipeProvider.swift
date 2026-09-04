@@ -43,4 +43,10 @@ public protocol RecipeProvider {
     /// Poll a single job by id, returning the current `{ job, recipe? }` envelope.
     /// The recipe is nil until the job reaches `complete`.
     func fetchJob(jobId: String) async throws -> JobEnvelope
+
+    /// Retry a failed job with user-pasted recipe text. The remedy for failures
+    /// where we couldn't obtain/read the source (e.g. `site_blocked`,
+    /// `caption_not_found`): the user pastes the text and the backend re-runs
+    /// extraction on it in place, returning the finished `{ job, recipe? }`.
+    func submitPastedText(jobId: String, text: String) async throws -> JobEnvelope
 }

@@ -24,6 +24,9 @@ struct RecipeListView: View {
     /// nil = "All Recipes"; non-nil = a specific cookbook's members.
     var cookbook: Cookbook? = nil
 
+    /// The failed job the user is pasting recipe text for (drives the sheet).
+    @State private var pasteTarget: PendingJobsModel.FailedJob?
+
     private var title: String { cookbook?.name ?? "All Recipes" }
 
     private var displayedRecipes: [Recipe] {
@@ -57,9 +60,11 @@ struct RecipeListView: View {
                     // Failed then in-flight cards first, so a just-submitted share
                     // (and anything that couldn't extract) sits at the top.
                     ForEach(failedJobs) { failedJob in
-                        FailedJobCardView(job: failedJob) {
-                            jobs.dismissFailed(jobId: failedJob.jobId)
-                        }
+                        FailedJobCardView(
+                            job: failedJob,
+                            onDismiss: { jobs.dismissFailed(jobId: failedJob.jobId) },
+                            onPasteText: failedJob.canPasteText ? { pasteTarget = failedJob } : nil
+                        )
                         .tornEdgeCardRow(bordered: false)
                     }
                     ForEach(pendingJobs) { pendingJob in
@@ -88,6 +93,9 @@ struct RecipeListView: View {
                     .font(.editorialTitle(size: 22))
                     .foregroundStyle(Color.textPrimary)
             }
+        }
+        .sheet(item: $pasteTarget) { failedJob in
+            PasteRecipeTextView(jobs: jobs, failedJob: failedJob)
         }
     }
 
@@ -211,6 +219,9 @@ struct ProcessingCardView: View {
 struct FailedJobCardView: View {
     let job: PendingJobsModel.FailedJob
     let onDismiss: () -> Void
+    /// Non-nil when this failure can be recovered by pasting the recipe text
+    /// (see `FailedJob.canPasteText`) — surfaces a "Paste recipe text" action.
+    var onPasteText: (() -> Void)? = nil
 
     var body: some View {
         HStack(spacing: 14) {
@@ -231,6 +242,16 @@ struct FailedJobCardView: View {
                     .font(.caption)
                     .foregroundStyle(Color.textSecondary)
                     .lineLimit(3)
+
+                if let onPasteText {
+                    Button(action: onPasteText) {
+                        Label("Paste recipe text", systemImage: "doc.on.clipboard")
+                            .font(.caption.weight(.semibold))
+                    }
+                    .buttonStyle(.borderless)
+                    .foregroundStyle(.tint)
+                    .padding(.top, 2)
+                }
             }
 
             Spacer(minLength: 8)
@@ -238,7 +259,7 @@ struct FailedJobCardView: View {
             Button("Dismiss", action: onDismiss)
                 .font(.caption.weight(.semibold))
                 .buttonStyle(.borderless)
-                .foregroundStyle(.tint)
+                .foregroundStyle(Color.textSecondary)
         }
         .padding(.vertical, 4)
     }

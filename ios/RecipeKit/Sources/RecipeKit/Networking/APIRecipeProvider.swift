@@ -97,6 +97,22 @@ public struct APIRecipeProvider: RecipeProvider {
         return try await send(request)
     }
 
+    /// POST /v1/jobs/{job_id}/paste — retry the job with pasted recipe text.
+    /// Runs synchronously server-side and returns the terminal envelope, so a
+    /// `complete` job already carries its recipe.
+    public func submitPastedText(jobId: String, text: String) async throws -> JobEnvelope {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            throw RecipeProviderError.invalidResponse("no text to submit")
+        }
+        var request = URLRequest(url: baseURL.appendingPathComponent("v1/jobs/\(jobId)/paste"))
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        applyCommonHeaders(&request)
+        request.httpBody = try JSONEncoder().encode(PasteRequestBody(text: trimmed))
+        return try await send(request)
+    }
+
     // MARK: - Feedback
 
     /// POST /feedback — send user feedback (a rating and/or a message, plus an
@@ -207,6 +223,10 @@ public struct APIRecipeProvider: RecipeProvider {
 
 private struct JobRequestBody: Encodable {
     let url: String
+}
+
+private struct PasteRequestBody: Encodable {
+    let text: String
 }
 
 private struct FeedbackBody: Encodable {

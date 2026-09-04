@@ -169,6 +169,41 @@ def get_job(job_id: str) -> JobResponse:
     return _with_recipe(job)
 
 
+class PasteRequest(BaseModel):
+    text: str
+
+
+@app.post("/v1/jobs/{job_id}/paste", response_model=JobResponse)
+def paste_job_text(
+    job_id: str, req: PasteRequest, request: Request
+) -> JobResponse:
+    """Retry a failed job with user-pasted recipe text (the remedy for the
+    `site_blocked` state and its caption analog — see
+    orchestrator.process_pasted_text). Same app-key gate (middleware) and
+    per-user/per-IP rate limit as the submit path.
+
+    Runs synchronously and returns the finished recipe (or a failed job): unlike
+    the fire-and-forget submit path, the caller (the paste screen) is actively
+    waiting on the result.
+    """
+    user_id = _resolve_user_id(request)
+    try:
+        ratelimit.check(user_id, _client_ip(request))
+    except ratelimit.RateLimitExceeded as exc:
+        raise HTTPException(status_code=429, detail=str(exc))
+
+    text = req.text.strip()
+    if len(text) < 10:
+        raise HTTPException(status_code=400, detail="pasted text is too short to extract a recipe")
+
+    job = db.get_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="job not found")
+
+    job = orchestrator.process_pasted_text(job, text)
+    return _with_recipe(job)
+
+
 # --------------------------------------------------------------------------- #
 # Feedback
 # --------------------------------------------------------------------------- #

@@ -32,6 +32,8 @@ struct CookbooksGridView: View {
     @State private var showingAccount = false
     @State private var showingNewCookbook = false
     @State private var newCookbookName = ""
+    /// The failed job the user is pasting recipe text for (drives the sheet).
+    @State private var pasteTarget: PendingJobsModel.FailedJob?
 
     private let columns = [GridItem(.flexible(), spacing: 14), GridItem(.flexible(), spacing: 14)]
 
@@ -75,6 +77,9 @@ struct CookbooksGridView: View {
         }
         .sheet(isPresented: $showingAdd) {
             AddRecipeView(jobs: jobs)
+        }
+        .sheet(item: $pasteTarget) { failedJob in
+            PasteRecipeTextView(jobs: jobs, failedJob: failedJob)
         }
         .sheet(isPresented: $showingAccount) {
             NavigationStack {
@@ -120,9 +125,11 @@ struct CookbooksGridView: View {
                 // In-flight / failed job cards first, so a just-submitted share is
                 // acknowledged here on the tab home.
                 ForEach(jobs.failed) { failedJob in
-                    FailedJobCardView(job: failedJob) {
-                        jobs.dismissFailed(jobId: failedJob.jobId)
-                    }
+                    FailedJobCardView(
+                        job: failedJob,
+                        onDismiss: { jobs.dismissFailed(jobId: failedJob.jobId) },
+                        onPasteText: failedJob.canPasteText ? { pasteTarget = failedJob } : nil
+                    )
                     .tornEdgeCard()
                 }
                 ForEach(jobs.pending) { pendingJob in

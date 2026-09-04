@@ -171,4 +171,19 @@ struct MockRecipeProvider: RecipeProvider {
         )
         return JobEnvelope(job: job, recipe: .spicyNoodles)
     }
+
+    /// Fake paste retry: pauses briefly, then resolves the job to `complete`
+    /// with a sample recipe (as if the pasted text extracted cleanly).
+    func submitPastedText(jobId: String, text: String) async throws -> JobEnvelope {
+        try? await Task.sleep(for: .seconds(1))
+        let job = Job(
+            jobId: jobId,
+            userId: "mock_user",
+            url: "https://example.com",
+            status: .complete,
+            createdAt: ISO8601DateFormatter().string(from: Date()),
+            recipeId: Recipe.spicyNoodles.recipeId
+        )
+        return JobEnvelope(job: job, recipe: .spicyNoodles)
+    }
 }

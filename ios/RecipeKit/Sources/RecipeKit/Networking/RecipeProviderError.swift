@@ -50,15 +50,39 @@ public enum RecipeProviderError: Error, Equatable {
         }
     }
 
+    /// Backend failure codes where the fix is for the user to paste the recipe
+    /// text themselves — we either couldn't obtain the source (a site blocked us,
+    /// a fetch failed) or couldn't read the caption. The failed-job UI offers a
+    /// "Paste recipe text" action for these instead of a dead-end message; the
+    /// paste is sent to `POST /v1/jobs/{id}/paste`, which re-runs extraction on
+    /// the pasted text (see APIRecipeProvider.submitPastedText).
+    public static let pasteEligibleCodes: Set<String> = [
+        "site_blocked",        // publisher bot-protection blocked the fetch
+        "fetch_failed",        // couldn't reach the page at all
+        "too_many_redirects",
+        "not_html",            // link didn't serve readable HTML
+        "too_large",
+        "dns_error",
+        "caption_not_found",   // Instagram/TikTok caption couldn't be read
+    ]
+
+    /// Whether a failed job's `error_code` should offer the paste-text remedy.
+    public static func canPasteText(code: String?) -> Bool {
+        guard let code else { return false }
+        return pasteEligibleCodes.contains(code)
+    }
+
     /// Maps a backend job-failure `error_code` to a distinct, honest message.
     /// Falls back to the backend's own message (then a generic line) for codes
     /// we don't recognize, so a new server code never shows blank.
     private static func failedJobMessage(code: String?, backendMessage: String?) -> String {
         switch code {
+        case "site_blocked":
+            return "This site blocks automatic import. Paste the recipe text and we'll do the rest."
         case "no_recipe_found":
             return "We couldn't find a recipe on this page."
         case "fetch_failed", "too_many_redirects":
-            return "We couldn't reach that page. Check the link and try again."
+            return "We couldn't reach that page. Paste the recipe text and we'll do the rest."
         case "not_html":
             return "That link doesn't point to a readable web page."
         case "too_large":

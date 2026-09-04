@@ -180,6 +180,93 @@ def process_job(job: Job) -> Job:
     return _finalize(job, recipe)
 
 
+def process_pasted_text(job: Job, text: str) -> Job:
+    """Retry a failed job with user-pasted recipe text instead of a fetch.
+
+    The remedy for the `site_blocked` state (a publisher's bot protection stopped
+    us from fetching the page — see app/pipeline/web.py) and its caption analog
+    (`caption_not_found`): the user copies the recipe text themselves and we run
+    it straight through extraction, skipping the network entirely.
+
+    Retry-IN-PLACE: this reuses the SAME job (its already-resolved
+    `canonical_video_id` and `platform`), flips it from `failed` back through
+    `processing` to `complete`/`failed`, and caches the recipe under the existing
+    canonical id — so one user pasting a blocked URL populates the shared cache
+    for everyone who submits it later (the same compounding-cache behavior the
+    normal pipeline relies on, CLAUDE.md §7).
+
+    Extraction path is chosen by the job's `platform`: a blocked BLOG (platform
+    "web", or unknown) is article-shaped → `extract_recipe_from_article`; a
+    blocked/failed Instagram/TikTok CAPTION is caption-shaped → `extract_recipe`.
+    The two prompts differ (ARTICLE vs CAPTION framing), so we route rather than
+    force one to cover both.
+    """
+    is_caption = job.platform in ("instagram", "tiktok")
+
+    job.status = "processing"
+    job.extraction_method = "pasted_text"
+    # Defensive: a job that failed before URL resolution would have no canonical
+    # id, but the recipes cache key is NOT NULL — synthesize a stable one.
+    if not job.canonical_video_id:
+        job.canonical_video_id = f"paste:{job.url}"
+    db.save_job(job)
+
+    # If the same URL was pasted (or otherwise cached) since this job failed,
+    # reuse the cached recipe rather than re-calling the LLM (and sidestep the
+    # UNIQUE(canonical_video_id) constraint a fresh insert would hit).
+    cached = db.get_recipe_by_video_id(job.canonical_video_id)
+    if cached is not None:
+        return _finalize(job, cached)
+
+    try:
+        if is_caption:
+            llm_recipe = llm.extract_recipe(text)
+        else:
+            llm_recipe = llm.extract_recipe_from_article(text)
+    except llm.LLMError as exc:
+        return _fail(job, exc.code, exc.message)
+
+    if not llm_recipe.ingredients and not llm_recipe.instructions:
+        return _fail(job, "no_recipe_found", "We couldn't find a recipe in that text.")
+
+    source_type = "caption" if is_caption else "article"
+
+    # Same gap fix as the fetch paths (CLAUDE.md §5): real ingredients but zero
+    # steps → generate a method for those exact ingredients, flag it generated.
+    if llm_recipe.ingredients and not llm_recipe.instructions:
+        try:
+            dish = DishIdentification(dish_name=llm_recipe.title)
+            generated = llm.generate_generic_recipe(dish, known_ingredients=llm_recipe.ingredients)
+        except llm.LLMError as exc:
+            return _fail(job, exc.code, exc.message)
+        llm_recipe = _with_generated_instructions(llm_recipe, generated)
+        source_type = "generated"
+
+    title = llm_recipe.title or "Untitled recipe"
+    # No page/thumbnail to draw from on a paste — resolve to a stock image.
+    if is_caption:
+        image_url, image_source = images.resolve_image(None, title)
+    else:
+        image_url, image_source = images.resolve_web_image(None, title)
+
+    recipe = Recipe(
+        recipe_id=str(uuid.uuid4()),
+        canonical_video_id=job.canonical_video_id,
+        title=title,
+        servings=llm_recipe.servings,
+        prep_time_minutes=llm_recipe.prep_time_minutes,
+        cook_time_minutes=llm_recipe.cook_time_minutes,
+        total_time_minutes=llm_recipe.total_time_minutes,
+        ingredients=llm_recipe.ingredients,
+        instructions=llm_recipe.instructions,
+        confidence=llm_recipe.confidence,
+        source_type=source_type,  # type: ignore[arg-type]
+        image_url=image_url,
+        image_source=image_source,  # type: ignore[arg-type]
+    )
+    return _finalize(job, recipe)
+
+
 def _process_web(job: Job, resolved: urls.ResolvedUrl) -> Job:
     """Generic-web extraction: SSRF-guarded fetch → JSON-LD (structured) → else
     article text + LLM (article). Reuses image resolution and _finalize as-is.
