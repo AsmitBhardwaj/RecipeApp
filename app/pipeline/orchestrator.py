@@ -61,6 +61,10 @@ def _finalize(job: Job, recipe: Recipe) -> Job:
     )
     job.recipe_id = recipe.recipe_id
     job.status = "complete"
+    # Clear any prior failure detail — a completed job (e.g. one recovered via
+    # the paste fallback after `site_blocked`) must not carry a stale error_code.
+    job.error_code = None
+    job.error = None
     db.save_job(job)
     return job
 
