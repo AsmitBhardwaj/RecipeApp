@@ -158,39 +158,44 @@ struct RecipeDetailView: View {
         let items = metaItems
         return Group {
             if !items.isEmpty {
-                HStack(spacing: 12) {
+                // Compact, boxless: a light inline strip (icon · value · label)
+                // rather than a full torn-edge card, so the times/servings read
+                // as a small label instead of a large box.
+                HStack(spacing: 16) {
                     ForEach(items, id: \.label) { item in
-                        VStack(spacing: 4) {
+                        HStack(spacing: 5) {
+                            Image(systemName: item.icon)
+                                .font(.caption2)
+                                .foregroundStyle(Color.textSecondary)
                             Text(item.value)
-                                .font(.subheadline.weight(.semibold))
+                                .font(.footnote.weight(.semibold))
+                                .monospacedDigit()
                             Text(item.label)
                                 .font(.caption2)
                                 .foregroundStyle(Color.textSecondary)
                         }
-                        .frame(maxWidth: .infinity)
                     }
+                    Spacer(minLength: 0)
                 }
-                .frame(maxWidth: .infinity)
-                .tornEdgeCard()
             }
         }
     }
 
-    private var metaItems: [(label: String, value: String)] {
-        var items: [(String, String)] = []
+    private var metaItems: [(label: String, value: String, icon: String)] {
+        var items: [(String, String, String)] = []
         // When the adjuster is shown it owns the servings display, so skip the
         // static cell here to avoid showing the count twice.
         if !recipe.canScaleServings, let servings = recipe.servings.displayString {
-            items.append(("Servings", servings))
+            items.append(("Servings", servings, "person.2"))
         }
         if let prep = recipe.prepTimeMinutes {
-            items.append(("Prep", prep.minutesString))
+            items.append(("Prep", prep.minutesString, "timer"))
         }
         if let cook = recipe.cookTimeMinutes {
-            items.append(("Cook", cook.minutesString))
+            items.append(("Cook", cook.minutesString, "flame"))
         }
         if let total = recipe.totalTimeMinutes {
-            items.append(("Total", total.minutesString))
+            items.append(("Total", total.minutesString, "clock"))
         }
         return items
     }
@@ -226,7 +231,9 @@ struct RecipeDetailView: View {
                         }
                     }
                     .frame(maxWidth: .infinity)
-                    .tornEdgeCard()
+                    // Plain solid cream card, no border — matching the recipe
+                    // cards on the main list (which use tornEdgeCard bordered:false).
+                    .tornEdgeCard(bordered: false)
                 }
             }
         }
