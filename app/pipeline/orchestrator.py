@@ -51,6 +51,13 @@ def _fail(job: Job, code: str, message: str) -> Job:
 
 
 def _finalize(job: Job, recipe: Recipe) -> Job:
+    # Never keep nutrition for a generated recipe: that fallback path invents its
+    # own ingredients, so any estimate would be computed off made-up quantities.
+    # Drop it here — the single chokepoint every path funnels through — so no
+    # assembly site can leak generated-recipe nutrition. nil == "not estimable",
+    # the same state as a recipe with too few usable quantities.
+    if recipe.source_type == "generated" and recipe.nutrition is not None:
+        recipe = recipe.model_copy(update={"nutrition": None})
     db.save_recipe(recipe)
     db.save_user_recipe(
         UserRecipe(
@@ -176,6 +183,7 @@ def process_job(job: Job) -> Job:
         ingredients=llm_recipe.ingredients,
         instructions=llm_recipe.instructions,
         confidence=llm_recipe.confidence,
+        nutrition=llm_recipe.nutrition,
         source_type=source_type,  # type: ignore[arg-type]
         image_url=image_url,
         image_source=image_source,  # type: ignore[arg-type]
@@ -264,6 +272,7 @@ def process_pasted_text(job: Job, text: str) -> Job:
         ingredients=llm_recipe.ingredients,
         instructions=llm_recipe.instructions,
         confidence=llm_recipe.confidence,
+        nutrition=llm_recipe.nutrition,
         source_type=source_type,  # type: ignore[arg-type]
         image_url=image_url,
         image_source=image_source,  # type: ignore[arg-type]
@@ -331,6 +340,7 @@ def _process_web(job: Job, resolved: urls.ResolvedUrl) -> Job:
         ingredients=llm_recipe.ingredients,
         instructions=llm_recipe.instructions,
         confidence=llm_recipe.confidence,
+        nutrition=llm_recipe.nutrition,
         source_type=source_type,  # type: ignore[arg-type]
         image_url=image_url,
         image_source=image_source,  # type: ignore[arg-type]

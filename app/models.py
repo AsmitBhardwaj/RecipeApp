@@ -50,6 +50,35 @@ class Confidence(BaseModel):
     missing_fields: List[str] = Field(default_factory=list)
 
 
+class Nutrition(BaseModel):
+    """Rough nutrition for a recipe (CLAUDE.md §8 / NUTRIENT_SCOPE.md).
+
+    Produced in the SAME extraction LLM call, never a second round-trip. Two
+    honesty markers travel with the numbers so downstream code/UI knows exactly
+    what it's showing:
+
+      * `basis`  — "per_serving" only when the recipe's serving count is known
+        and usable; "per_recipe" (whole-recipe totals) otherwise. We never guess
+        a serving count just to force a per-serving number.
+      * `source` — "creator_stated" when the caption/source already gave macros
+        (extracted verbatim); "estimated" when derived from ingredient
+        quantities. Estimation is the ONE place the extractor may compute rather
+        than only copy — but it must not invent ingredient quantities to do so.
+
+    The whole object is optional on the recipe (nutrition is null when the source
+    lacks enough usable ingredient quantities to estimate). The macro numbers are
+    themselves optional so a partial estimate (e.g. calories but not fat) is
+    representable rather than forcing a fabricated value.
+    """
+
+    calories: Optional[float] = None
+    protein_g: Optional[float] = None
+    carbs_g: Optional[float] = None
+    fat_g: Optional[float] = None
+    basis: Literal["per_serving", "per_recipe"]
+    source: Literal["estimated", "creator_stated"]
+
+
 # --------------------------------------------------------------------------- #
 # LLM output models (validated against raw model JSON — CLAUDE.md §5)
 # --------------------------------------------------------------------------- #
@@ -68,6 +97,9 @@ class LLMRecipe(BaseModel):
     ingredients: List[Ingredient] = Field(default_factory=list)
     instructions: List[Instruction] = Field(default_factory=list)
     confidence: Confidence = Field(default_factory=Confidence)
+    # Rough nutrition estimated (or extracted verbatim) in this same call; null
+    # when the source lacks enough usable ingredient quantities. See Nutrition.
+    nutrition: Optional[Nutrition] = None
 
 
 class DishIdentification(BaseModel):
@@ -102,10 +134,15 @@ class Recipe(BaseModel):
     # "web_image" = image pulled from the recipe page (JSON-LD image / og:image).
     image_source: Literal["video_thumbnail", "stock_photo", "web_image", "none"] = "none"
 
-    # Nullable placeholders for future features (CLAUDE.md §8) — cheap to add
-    # now so no schema migration is needed when transcription / nutrition land.
+    # Nullable placeholder for a future feature (CLAUDE.md §8) — cheap to add now
+    # so no schema migration is needed when transcription lands.
     transcript: Optional[str] = None
-    nutrition: Optional[dict] = None
+    # Rough per-recipe nutrition (NUTRIENT_SCOPE.md). Lives in the shared recipe
+    # cache (this recipe row is keyed by canonical_video_id), so it is computed
+    # once per recipe and reused across every user who saves that video — never
+    # per user. Null when not estimable. Stored in the `data` JSON blob, so no
+    # migration: pre-nutrition cached recipes decode it as null.
+    nutrition: Optional[Nutrition] = None
 
 
 class Job(BaseModel):

@@ -43,6 +43,7 @@ struct RecipeDetailView: View {
                         }
                     }
                     metaRow
+                    nutritionSection
                     if !recipe.instructions.isEmpty {
                         startCookingButton
                     }
@@ -192,6 +193,55 @@ struct RecipeDetailView: View {
             items.append(("Total", total.minutesString))
         }
         return items
+    }
+
+    // MARK: Nutrition
+
+    /// Compact Calories / Protein / Carbs / Fat row, shown right below the meta
+    /// row so its relationship to servings is obvious. Rendered only when the
+    /// recipe actually has nutrition — nil recipes show nothing (no empty/zero
+    /// state), and only the macros that are present get a cell. A small caption
+    /// states the basis (per serving vs whole recipe) so the numbers aren't
+    /// ambiguous. No confidence styling — that's deferred.
+    @ViewBuilder
+    private var nutritionSection: some View {
+        if let nutrition = recipe.nutrition {
+            let cells = nutritionCells(nutrition)
+            if !cells.isEmpty {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(nutrition.basis == .perServing ? "Nutrition per serving" : "Nutrition per recipe")
+                        .font(.caption2)
+                        .foregroundStyle(Color.textSecondary)
+                    HStack(spacing: 12) {
+                        ForEach(cells, id: \.label) { cell in
+                            VStack(spacing: 4) {
+                                Text(cell.value)
+                                    .font(.subheadline.weight(.semibold))
+                                    .monospacedDigit()
+                                Text(cell.label)
+                                    .font(.caption2)
+                                    .foregroundStyle(Color.textSecondary)
+                            }
+                            .frame(maxWidth: .infinity)
+                        }
+                    }
+                    .frame(maxWidth: .infinity)
+                    .tornEdgeCard()
+                }
+            }
+        }
+    }
+
+    /// Builds the stat cells, skipping any macro the estimate left nil. Calories
+    /// are whole; macros carry a "g" suffix. Uses the same rounding idiom as the
+    /// rest of the screen (no decimals for these rough figures).
+    private func nutritionCells(_ n: Nutrition) -> [(label: String, value: String)] {
+        var cells: [(String, String)] = []
+        if let cal = n.calories { cells.append(("Calories", "\(Int(cal.rounded()))")) }
+        if let p = n.proteinG { cells.append(("Protein", "\(Int(p.rounded()))g")) }
+        if let c = n.carbsG { cells.append(("Carbs", "\(Int(c.rounded()))g")) }
+        if let f = n.fatG { cells.append(("Fat", "\(Int(f.rounded()))g")) }
+        return cells
     }
 
     // MARK: Cookbooks

@@ -41,11 +41,12 @@ public struct Recipe: Codable, Identifiable, Hashable {
     /// Future-facing nullable field (CLAUDE.md §8). Always null today.
     public let transcript: String?
 
-    // NOTE: The backend `Recipe` also carries a freeform `nutrition` dict
-    // (always null today). It is intentionally omitted here: `Codable` ignores
-    // unknown JSON keys, so decoding stays lossless, and we will add a typed
-    // model for it when the nutrition feature actually lands rather than
-    // pulling in an `AnyCodable` helper prematurely.
+    /// Rough estimated (or creator-stated) nutrition for the recipe, or nil when
+    /// the source lacked enough usable ingredient quantities to estimate. Lives
+    /// on the shared cached recipe (computed once per recipe, not per user).
+    /// Optional + a nil default in the init, so recipes cached before nutrition
+    /// shipped decode as nil and existing construction sites are unaffected.
+    public let nutrition: Nutrition?
 
     public var id: String { recipeId }
 
@@ -63,7 +64,8 @@ public struct Recipe: Codable, Identifiable, Hashable {
         sourceType: SourceType,
         imageUrl: String?,
         imageSource: ImageSource,
-        transcript: String?
+        transcript: String?,
+        nutrition: Nutrition? = nil
     ) {
         self.recipeId = recipeId
         self.canonicalVideoId = canonicalVideoId
@@ -79,6 +81,7 @@ public struct Recipe: Codable, Identifiable, Hashable {
         self.imageUrl = imageUrl
         self.imageSource = imageSource
         self.transcript = transcript
+        self.nutrition = nutrition
     }
 
     enum CodingKeys: String, CodingKey {
@@ -96,6 +99,7 @@ public struct Recipe: Codable, Identifiable, Hashable {
         case imageUrl = "image_url"
         case imageSource = "image_source"
         case transcript
+        case nutrition
     }
 }
 
@@ -179,6 +183,72 @@ public struct Confidence: Codable, Hashable {
         case ingredientsComplete = "ingredients_complete"
         case instructionsComplete = "instructions_complete"
         case missingFields = "missing_fields"
+    }
+}
+
+// MARK: - Nutrition
+
+/// Mirror of backend `Nutrition` (app/models.py / NUTRIENT_SCOPE.md). Rough,
+/// per-recipe nutrition produced in the extraction call. Every macro is optional
+/// so a partial estimate decodes cleanly; `basis` and `source` are the honesty
+/// markers the UI reads to label what it's showing.
+public struct Nutrition: Codable, Hashable {
+    public let calories: Double?
+    public let proteinG: Double?
+    public let carbsG: Double?
+    public let fatG: Double?
+    /// Whether the numbers are per serving or whole-recipe totals.
+    public let basis: Basis
+    /// Whether the numbers were estimated from ingredients or stated by the source.
+    public let source: Source
+
+    public init(
+        calories: Double?,
+        proteinG: Double?,
+        carbsG: Double?,
+        fatG: Double?,
+        basis: Basis,
+        source: Source
+    ) {
+        self.calories = calories
+        self.proteinG = proteinG
+        self.carbsG = carbsG
+        self.fatG = fatG
+        self.basis = basis
+        self.source = source
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case calories
+        case proteinG = "protein_g"
+        case carbsG = "carbs_g"
+        case fatG = "fat_g"
+        case basis
+        case source
+    }
+
+    /// Backend `basis` (Literal["per_serving", "per_recipe"]). An unknown value
+    /// decodes to `.perRecipe` — the more conservative, less-specific claim.
+    public enum Basis: String, Codable, Hashable {
+        case perServing = "per_serving"
+        case perRecipe = "per_recipe"
+
+        public init(from decoder: Decoder) throws {
+            let raw = try decoder.singleValueContainer().decode(String.self)
+            self = Basis(rawValue: raw) ?? .perRecipe
+        }
+    }
+
+    /// Backend `source` (Literal["estimated", "creator_stated"]). An unknown
+    /// value decodes to `.estimated`.
+    public enum Source: String, Codable, Hashable {
+        case estimated
+        case creatorStated = "creator_stated"
+
+        public init(from decoder: Decoder) throws {
+            let raw = try decoder.singleValueContainer().decode(String.self)
+            self = Source(rawValue: raw) ?? .estimated
+        }
     }
 }
 
