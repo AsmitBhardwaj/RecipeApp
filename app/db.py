@@ -376,7 +376,8 @@ def get_all_feedback() -> list:
 # The collections the client is allowed to sync. Kept as an allowlist so a
 # compromised/buggy client can't spray arbitrary collection names into the table.
 SYNC_COLLECTIONS = frozenset(
-    {"library", "meal_plan", "grocery_check", "grocery_manual", "cookbook", "cookbook_membership"}
+    {"library", "meal_plan", "grocery_check", "grocery_manual", "cookbook", "cookbook_membership",
+     "pantry_items"}
 )
 
 
