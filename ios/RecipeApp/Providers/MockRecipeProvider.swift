@@ -54,7 +54,11 @@ extension Recipe {
         sourceType: .caption,
         imageUrl: "https://images.unsplash.com/photo-1569718212165-3a8278d5f624?w=800&q=80",
         imageSource: .videoThumbnail,
-        transcript: nil
+        transcript: nil,
+        nutrition: Nutrition(
+            calories: 520, proteinG: 14, carbsG: 78, fatG: 17,
+            basis: .perServing, source: .estimated
+        )
     )
 
     /// A GENERATED recipe (fallback path) with NO image. Exercises both the
@@ -91,7 +95,11 @@ extension Recipe {
         sourceType: .generated,
         imageUrl: nil,
         imageSource: .none,
-        transcript: nil
+        transcript: nil,
+        nutrition: Nutrition(
+            calories: 900, proteinG: 33, carbsG: 96, fatG: 40,
+            basis: .perRecipe, source: .creatorStated
+        )
     )
 
     /// A very short, two-ingredient recipe with a stock photo.

@@ -16,7 +16,13 @@ from openai import OpenAI, OpenAIError
 from pydantic import BaseModel, ValidationError
 
 from .. import config
-from ..models import DishIdentification, Ingredient, LLMRecipe
+from ..models import (
+    DishIdentification,
+    Ingredient,
+    LLMRecipe,
+    Nutrition,
+    Servings,
+)
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -63,6 +69,22 @@ RULES:
    - Lower "overall" confidence when the caption is sparse or ambiguous
 7. If the source text contains no discernible recipe at all, return the JSON
    with empty ingredients/instructions arrays and "overall": 0.
+8. "nutrition" is the ONE field you may ESTIMATE rather than only extract. It is
+   the narrow exception to rule 2 — but rule 2 still fully applies to the
+   ingredient list itself: never invent, add, or alter ingredient quantities in
+   order to make a nutrition estimate possible.
+   - If the caption/source already states nutrition macros directly (e.g.
+     "Calories 380, Protein 38g, Carbs 3g, Fat 22g"), extract those numbers
+     verbatim and set "source": "creator_stated".
+   - Otherwise, if there are enough real ingredient quantities to compute a
+     reasonable rough estimate, estimate calories, protein_g, carbs_g and fat_g
+     from those quantities and set "source": "estimated".
+   - Set "basis": "per_serving" ONLY when the recipe's serving count is known and
+     usable; otherwise give whole-recipe totals and set "basis": "per_recipe".
+     Never invent or guess a serving count just to produce a per-serving number.
+   - If there are too few usable ingredient quantities to estimate (and no
+     creator-stated macros), set "nutrition": null. Do not guess. A single macro
+     you cannot determine may itself be null while the others are filled.
 
 Input will be provided as:
 CAPTION: <text>"""
@@ -113,6 +135,22 @@ RULES:
    - Lower "overall" confidence when the text is sparse or ambiguous
 7. If the source text contains no discernible recipe at all, return the JSON
    with empty ingredients/instructions arrays and "overall": 0.
+8. "nutrition" is the ONE field you may ESTIMATE rather than only extract. It is
+   the narrow exception to rule 2 — but rule 2 still fully applies to the
+   ingredient list itself: never invent, add, or alter ingredient quantities in
+   order to make a nutrition estimate possible.
+   - If the article already states nutrition macros directly (many recipe pages
+     print a nutrition panel), extract those numbers verbatim and set
+     "source": "creator_stated".
+   - Otherwise, if there are enough real ingredient quantities to compute a
+     reasonable rough estimate, estimate calories, protein_g, carbs_g and fat_g
+     from those quantities and set "source": "estimated".
+   - Set "basis": "per_serving" ONLY when the recipe's serving count is known and
+     usable; otherwise give whole-recipe totals and set "basis": "per_recipe".
+     Never invent or guess a serving count just to produce a per-serving number.
+   - If there are too few usable ingredient quantities to estimate (and no
+     stated macros), set "nutrition": null. Do not guess. A single macro you
+     cannot determine may itself be null while the others are filled.
 
 Input will be provided as:
 ARTICLE: <text>"""
@@ -125,7 +163,12 @@ not overly creative. Set "source_type": "generated" and set
 "confidence.overall" to reflect that this is a generic reference recipe, not
 an extracted one. For each step with a clear cooking duration (e.g. "bake for
 20 minutes"), set that step's "duration_seconds" to that time in total seconds;
-otherwise set it null."""
+otherwise set it null.
+Also fill in "nutrition" as a rough estimate from the ingredient quantities in
+the recipe you generate: estimate calories, protein_g, carbs_g and fat_g and set
+"source": "estimated". Set "basis": "per_serving" when you give a serving count,
+otherwise "per_recipe". If the dish is too underspecified to estimate, set
+"nutrition": null rather than guessing."""
 
 # The recipe JSON shape we hand the model (referenced as "the schema provided").
 _RECIPE_SCHEMA_HINT = """\
@@ -147,7 +190,15 @@ Respond with ONLY a JSON object of this shape:
     "ingredients_complete": boolean,
     "instructions_complete": boolean,
     "missing_fields": ["string"]
-  }
+  },
+  "nutrition": {
+    "calories": number|null,
+    "protein_g": number|null,
+    "carbs_g": number|null,
+    "fat_g": number|null,
+    "basis": "per_serving"|"per_recipe",
+    "source": "estimated"|"creator_stated"
+  } | null
 }"""
 
 
@@ -299,3 +350,77 @@ def generate_generic_recipe(
             "in your JSON:\n" + lines
         )
     return _call_validated(GENERIC_RECIPE_SYSTEM_PROMPT, user, LLMRecipe)
+
+
+# --------------------------------------------------------------------------- #
+# Nutrition-only estimation (backfill of already-cached recipes).
+#
+# New recipes get their nutrition inside the main extraction call above (no extra
+# round-trip). This standalone path exists only to backfill recipes that were
+# cached BEFORE nutrition shipped — see scripts/backfill_nutrition.py. It reuses
+# the same estimate-not-invent semantics as the extraction prompts.
+# --------------------------------------------------------------------------- #
+
+NUTRITION_SYSTEM_PROMPT = """\
+You estimate rough nutrition for a recipe from its ingredient list. Output ONLY
+valid JSON, no prose, no markdown fences.
+
+RULES:
+1. You may ESTIMATE nutrition from the ingredient quantities given, but you must
+   NOT invent, add, or alter ingredient quantities to make an estimate possible.
+2. If the recipe already carries stated nutrition macros, return those verbatim
+   with "source": "creator_stated". Otherwise estimate calories, protein_g,
+   carbs_g and fat_g from the ingredient quantities and set "source":
+   "estimated".
+3. Set "basis": "per_serving" ONLY when a usable serving count is provided;
+   otherwise give whole-recipe totals and set "basis": "per_recipe". Never guess
+   a serving count just to produce a per-serving number.
+4. If there are too few usable ingredient quantities to estimate, return
+   {"nutrition": null}. Do not guess. Any single macro you cannot determine may
+   be null while the others are filled."""
+
+_NUTRITION_SCHEMA_HINT = """\
+Respond with ONLY a JSON object of this shape:
+{
+  "nutrition": {
+    "calories": number|null,
+    "protein_g": number|null,
+    "carbs_g": number|null,
+    "fat_g": number|null,
+    "basis": "per_serving"|"per_recipe",
+    "source": "estimated"|"creator_stated"
+  } | null
+}"""
+
+
+class _NutritionResponse(BaseModel):
+    """Wrapper so the model can return `{"nutrition": null}` when a recipe can't
+    be estimated — a bare nullable top-level object isn't expressible as a
+    structured-output schema."""
+
+    nutrition: Optional[Nutrition] = None
+
+
+def estimate_nutrition(
+    title: str,
+    ingredients: List[Ingredient],
+    servings: Optional[Servings] = None,
+) -> Optional[Nutrition]:
+    """Estimate nutrition for an already-extracted recipe in one LLM call.
+
+    Returns the same `Nutrition` shape the extraction call produces, or None when
+    the ingredients are too sparse to estimate. Same validate + retry-once path
+    as every other call here.
+    """
+    lines = "\n".join(_ingredient_line(i) for i in ingredients) or "(none given)"
+    if servings and servings.amount:
+        serving_line = f"Serving count (usable): {servings.amount} {servings.unit or ''}".strip()
+    else:
+        serving_line = "Serving count: unknown — use per_recipe totals."
+    user = (
+        f"{_NUTRITION_SCHEMA_HINT}\n\n"
+        f"Recipe title: {title}\n"
+        f"{serving_line}\n"
+        f"Ingredients:\n{lines}"
+    )
+    return _call_validated(NUTRITION_SYSTEM_PROMPT, user, _NutritionResponse).nutrition
