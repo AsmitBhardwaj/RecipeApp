@@ -14,5 +14,7 @@
 		<key>NSExtensionPointIdentifier</key>
 		<string>com.apple.share-services</string>
 	</dict>
+	<key>APP_KEY</key>
+	<string>$(APP_KEY)</string>
 </dict>
 </plist>
