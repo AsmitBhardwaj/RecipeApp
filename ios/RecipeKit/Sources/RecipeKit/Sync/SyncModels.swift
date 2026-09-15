@@ -20,6 +20,7 @@ public enum SyncCollection: String, CaseIterable, Codable, Sendable {
     case groceryManual = "grocery_manual"
     case cookbook
     case cookbookMembership = "cookbook_membership"
+    case pantryItems = "pantry_items"
 }
 
 public struct SyncChange: Codable, Equatable, Sendable {

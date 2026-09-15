@@ -23,6 +23,7 @@ public enum AccountDataEraser {
         "grocery_manual_items_v1",
         "cookbooks_v1",
         "cookbook_membership_v1",
+        "pantry_items_v1",
         "sync_outbox_v1",
         "sync_cursor_v1",
         "sync_meta_v1",
