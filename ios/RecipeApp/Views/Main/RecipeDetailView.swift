@@ -36,13 +36,7 @@ struct RecipeDetailView: View {
                 hero
                 VStack(alignment: .leading, spacing: 24) {
                     header
-                    if recipe.canScaleServings {
-                        HStack {
-                            Spacer(minLength: 0)
-                            servingAdjuster
-                        }
-                    }
-                    metaRow
+                    cookAndServingsRow
                     nutritionSection
                     if !recipe.instructions.isEmpty {
                         startCookingButton
@@ -73,7 +67,7 @@ struct RecipeDetailView: View {
         Button {
             showingCookMode = true
         } label: {
-            Label("Start Cooking", systemImage: "flame.fill")
+            Text("Start Cooking")
                 .font(.headline)
                 .foregroundStyle(.white)
                 .frame(maxWidth: .infinity)
@@ -87,12 +81,12 @@ struct RecipeDetailView: View {
 
     /// +/- control that scales ingredient quantities. Shown only when
     /// `recipe.canScaleServings` (numeric base + at least one numeric quantity);
-    /// see ServingScaler / RecipeKit's `Recipe.canScaleServings`. When shown, it
-    /// OWNS the servings display, so `metaItems` drops its static "Servings" cell
-    /// to avoid showing the count twice.
+    /// see ServingScaler / RecipeKit's `Recipe.canScaleServings`. It sits on the
+    /// right of `cookAndServingsRow` and OWNS the servings display there; a
+    /// non-scalable recipe shows a static serving count in its place instead.
     ///
     /// Deliberately a lightweight inline stepper — no torn-edge card — so it
-    /// reads as a small utility next to the title, not a boxed feature.
+    /// reads as a small utility next to the cook time, not a boxed feature.
     private var servingAdjuster: some View {
         HStack(spacing: 10) {
             stepButton("minus", enabled: scaler.canDecrement, action: scaler.decrement)
@@ -152,52 +146,42 @@ struct RecipeDetailView: View {
         }
     }
 
-    // MARK: Meta (servings + times)
+    // MARK: Cook time + servings (one row)
 
-    private var metaRow: some View {
-        let items = metaItems
-        return Group {
-            if !items.isEmpty {
-                // Compact, boxless: a light inline strip (icon · value · label)
-                // rather than a full torn-edge card, so the times/servings read
-                // as a small label instead of a large box.
-                HStack(spacing: 16) {
-                    ForEach(items, id: \.label) { item in
-                        HStack(spacing: 5) {
-                            Image(systemName: item.icon)
-                                .font(.caption2)
-                                .foregroundStyle(Color.textSecondary)
-                            Text(item.value)
-                                .font(.footnote.weight(.semibold))
-                                .monospacedDigit()
-                            Text(item.label)
-                                .font(.caption2)
-                                .foregroundStyle(Color.textSecondary)
-                        }
-                    }
-                    Spacer(minLength: 0)
+    /// One quiet, boxless row: cook time on the left, the serving-size stepper on
+    /// the right (space-between). When the recipe isn't scalable, the right side
+    /// shows a static serving count instead of the stepper, so that info isn't
+    /// lost. Text is value (bold) + label (secondary), no icon. Hidden entirely
+    /// when neither side has anything to show.
+    @ViewBuilder
+    private var cookAndServingsRow: some View {
+        let hasRight = recipe.canScaleServings || recipe.servings.displayString != nil
+        if recipe.cookTimeMinutes != nil || hasRight {
+            HStack(alignment: .center) {
+                if let cook = recipe.cookTimeMinutes {
+                    labeledValue(cook.minutesString, "Cook")
+                }
+                Spacer(minLength: 0)
+                if recipe.canScaleServings {
+                    servingAdjuster
+                } else if let servings = recipe.servings.displayString {
+                    labeledValue(servings, "Servings")
                 }
             }
         }
     }
 
-    private var metaItems: [(label: String, value: String, icon: String)] {
-        var items: [(String, String, String)] = []
-        // When the adjuster is shown it owns the servings display, so skip the
-        // static cell here to avoid showing the count twice.
-        if !recipe.canScaleServings, let servings = recipe.servings.displayString {
-            items.append(("Servings", servings, "person.2"))
+    /// A "value (bold) + label (secondary)" inline pair — the quiet meta style
+    /// shared by the cook-time and static-servings cells.
+    private func labeledValue(_ value: String, _ label: String) -> some View {
+        HStack(spacing: 6) {
+            Text(value)
+                .font(.subheadline.weight(.semibold))
+                .monospacedDigit()
+            Text(label)
+                .font(.caption2)
+                .foregroundStyle(Color.textSecondary)
         }
-        if let prep = recipe.prepTimeMinutes {
-            items.append(("Prep", prep.minutesString, "timer"))
-        }
-        if let cook = recipe.cookTimeMinutes {
-            items.append(("Cook", cook.minutesString, "flame"))
-        }
-        if let total = recipe.totalTimeMinutes {
-            items.append(("Total", total.minutesString, "clock"))
-        }
-        return items
     }
 
     // MARK: Nutrition
@@ -217,8 +201,16 @@ struct RecipeDetailView: View {
                     Text(nutrition.basis == .perServing ? "Nutrition per serving" : "Nutrition per recipe")
                         .font(.caption2)
                         .foregroundStyle(Color.textSecondary)
-                    HStack(spacing: 12) {
-                        ForEach(cells, id: \.label) { cell in
+                    // Plain, boxless row (no fill), each stat separated by a thin,
+                    // low-contrast vertical divider — the same quiet treatment as
+                    // the cook-time row above, so the meta reads as one style.
+                    HStack(spacing: 0) {
+                        ForEach(Array(cells.enumerated()), id: \.element.label) { index, cell in
+                            if index > 0 {
+                                Rectangle()
+                                    .fill(Color.textSecondary.opacity(0.25))
+                                    .frame(width: 1, height: 28)
+                            }
                             VStack(spacing: 4) {
                                 Text(cell.value)
                                     .font(.subheadline.weight(.semibold))
@@ -231,9 +223,6 @@ struct RecipeDetailView: View {
                         }
                     }
                     .frame(maxWidth: .infinity)
-                    // Plain solid cream card, no border — matching the recipe
-                    // cards on the main list (which use tornEdgeCard bordered:false).
-                    .tornEdgeCard(bordered: false)
                 }
             }
         }
