@@ -2,10 +2,10 @@
 //  MainTabView.swift
 //  RecipeApp
 //
-//  The tab shell: Recipes (with Cookbooks folded in), Meal Plan, and Grocery
-//  List. Account is reached from a toolbar icon on the Recipes screen, not a tab.
-//  Grocery List is a "coming soon" shell for now. DiscoverView still exists but
-//  is intentionally not in the tab bar yet — re-add a tab for it once built out.
+//  The tab shell: Recipes (with Cookbooks folded in), Meal Plan, Kitchen, and
+//  Grocery List. Account is reached from a toolbar icon on the Recipes screen,
+//  not a tab. DiscoverView still exists but is intentionally not in the tab bar
+//  yet — re-add a tab for it once built out.
 //
 //  Owns the app-wide `PendingJobsModel` so in-flight jobs and finished recipes
 //  live above the tabs (surviving tab switches and the Add sheet), and drives
@@ -33,7 +33,7 @@ struct MainTabView: View {
     @State private var selectedTab: Tab = .recipes
 
     private enum Tab: Hashable {
-        case recipes, mealPlan, grocery
+        case recipes, mealPlan, kitchen, grocery
     }
 
     init(recipeProvider: RecipeProvider, auth: AuthModel) {
@@ -68,6 +68,14 @@ struct MainTabView: View {
                 Label("Meal Plan", systemImage: "calendar")
             }
             .tag(Tab.mealPlan)
+
+            NavigationStack {
+                KitchenView(userScope: userScope, sync: sync)
+            }
+            .tabItem {
+                Label("Kitchen", systemImage: "refrigerator")
+            }
+            .tag(Tab.kitchen)
 
             NavigationStack {
                 GroceryListView(jobs: jobs, userScope: userScope, sync: sync)

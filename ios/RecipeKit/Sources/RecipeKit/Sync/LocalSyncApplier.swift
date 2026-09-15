@@ -20,6 +20,7 @@ public final class LocalSyncApplier {
     private let groceryStore: GroceryCheckStore
     private let cookbookStore: CookbookStore
     private let membershipStore: CookbookMembershipStore
+    private let pantryStore: PantryStore
     private let metadata: SyncMetadataStore
 
     /// Recipe ids referenced by pulled library entries whose bodies aren't local
@@ -32,6 +33,7 @@ public final class LocalSyncApplier {
         self.groceryStore = GroceryCheckStore(suiteName: suiteName, userScope: userId)
         self.cookbookStore = CookbookStore(suiteName: suiteName, userScope: userId)
         self.membershipStore = CookbookMembershipStore(suiteName: suiteName, userScope: userId)
+        self.pantryStore = PantryStore(suiteName: suiteName, userScope: userId)
         self.metadata = SyncMetadataStore(userId: userId, suiteName: suiteName)
     }
 
@@ -42,6 +44,7 @@ public final class LocalSyncApplier {
         self.groceryStore = GroceryCheckStore(defaults: defaults, userScope: userId)
         self.cookbookStore = CookbookStore(defaults: defaults, userScope: userId)
         self.membershipStore = CookbookMembershipStore(defaults: defaults, userScope: userId)
+        self.pantryStore = PantryStore(defaults: defaults, userScope: userId)
         self.metadata = SyncMetadataStore(userId: userId, defaults: defaults)
     }
 
@@ -57,6 +60,7 @@ public final class LocalSyncApplier {
         case .cookbook: applyCookbook(change)
         case .cookbookMembership: applyMembership(change)
         case .library: applyLibrary(change)
+        case .pantryItems: applyPantryItems(change)
         }
         metadata.setUpdatedAt(change.collection, change.itemId, change.updatedAt)
     }
@@ -78,6 +82,14 @@ public final class LocalSyncApplier {
     private func applyGroceryCheck(_ change: SyncChange) {
         let checked = !change.deleted && (SyncCodec.decode(GroceryCheckPayload.self, from: change.payload)?.checked ?? false)
         groceryStore.setChecked(change.itemId, checked)
+    }
+
+    private func applyPantryItems(_ change: SyncChange) {
+        if let id = UUID(uuidString: change.itemId) {
+            pantryStore.remove(id: id)  // upsert = remove-then-insert; also the delete path
+        }
+        guard !change.deleted, let item = SyncCodec.decode(PantryItem.self, from: change.payload) else { return }
+        pantryStore.upsert(item)
     }
 
     private func applyCookbook(_ change: SyncChange) {

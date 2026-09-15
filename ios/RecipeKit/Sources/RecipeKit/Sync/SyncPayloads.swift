@@ -15,6 +15,7 @@
 //    cookbook           → Cookbook.id
 //    cookbook_membership→ "<cookbookId>|<recipeId>"
 //    library            → recipeId
+//    pantry_items       → PantryItem.id (uuidString); payload is the PantryItem
 //
 
 import Foundation
