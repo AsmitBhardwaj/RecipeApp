@@ -29,6 +29,10 @@ final class SyncCoordinator: ObservableObject {
     private let applier: LocalSyncApplier
     private let metadata: SyncMetadataStore
     private let client: SyncClient
+    /// Reuses the same fresh-Bearer-token provider as sync, so pantry suggestions
+    /// (an account-scoped endpoint) authenticate identically. Built lazily —
+    /// suggestions are only fetched from the Kitchen tab's Pantry segment.
+    private let pantryClient: PantrySuggestionsClient
 
     private var pushTask: Task<Void, Never>?
     private var isSyncing = false
@@ -43,6 +47,7 @@ final class SyncCoordinator: ObservableObject {
         let applier = LocalSyncApplier(userId: userId, suiteName: suiteName)
         self.applier = applier
         self.client = SyncClient(accessTokenProvider: tokenProvider)
+        self.pantryClient = PantrySuggestionsClient(accessTokenProvider: tokenProvider)
         self.engine = SyncEngine(
             transport: client,
             outbox: SyncOutbox(userId: userId, suiteName: suiteName),
@@ -92,6 +97,21 @@ final class SyncCoordinator: ObservableObject {
     /// Fire-and-forget trigger for use from SwiftUI lifecycle hooks.
     func triggerSync() {
         Task { await sync() }
+    }
+
+    // MARK: - Pantry suggestions
+
+    /// Fetch pantry recipe suggestions for the signed-in account. `pantryOverride`
+    /// lets the caller match against the LOCAL pantry (what's on screen) rather
+    /// than waiting for the pantry to sync to the server first.
+    func pantrySuggestions(
+        limit: Int = 20,
+        pantryOverride: [String]? = nil,
+        allowGeneration: Bool = true
+    ) async throws -> PantrySuggestionsResponse {
+        try await pantryClient.suggestions(
+            limit: limit, pantryOverride: pantryOverride, allowGeneration: allowGeneration
+        )
     }
 
     private func hydrateIfNeeded() async throws {
