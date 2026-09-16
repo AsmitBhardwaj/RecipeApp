@@ -26,6 +26,10 @@ import RecipeKit
 
 struct KitchenTabView: View {
     @ObservedObject var jobs: PendingJobsModel
+    /// The app's shared CookbooksModel, forwarded to the Pantry segment so its
+    /// suggestion-detail sheet's "add to cookbook" uses the same instance as the
+    /// Recipes tab (no duplicate model, no cross-tab desync).
+    @ObservedObject var cookbooks: CookbooksModel
     let userScope: String
     let sync: SyncCoordinator
 
@@ -47,7 +51,7 @@ struct KitchenTabView: View {
             case .grocery:
                 GroceryListView(jobs: jobs, userScope: userScope, sync: sync, embedded: true)
             case .pantry:
-                KitchenView(userScope: userScope, sync: sync, embedded: true)
+                KitchenView(cookbooks: cookbooks, userScope: userScope, sync: sync, embedded: true)
             }
         }
         .appBackground()
@@ -82,6 +86,7 @@ extension View {
     NavigationStack {
         KitchenTabView(
             jobs: PendingJobsModel(provider: MockRecipeProvider(), userScope: "preview"),
+            cookbooks: CookbooksModel(),
             userScope: "preview",
             sync: SyncCoordinator(userId: "preview", tokenProvider: { "" })
         )

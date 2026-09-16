@@ -20,11 +20,11 @@ struct KitchenView: View {
     @StateObject private var model: PantryModel
     /// Recipe suggestions driven by the current pantry (PANTRY_SCOPE.md §4).
     @StateObject private var suggestions = PantrySuggestionsModel()
-    /// Needed only to open a suggested recipe in `RecipeDetailView` (its "add to
-    /// cookbook" actions require a live model). Built from this view's scope/sync
-    /// so those actions stay functional; a design trade-off noted in the Pass-2
-    /// report (a second CookbooksModel instance alongside the Recipes tab's).
-    @StateObject private var cookbooks: CookbooksModel
+    /// The app's single CookbooksModel, threaded down from MainTabView (the same
+    /// instance the Recipes tab uses) so "add to cookbook" from the suggestion
+    /// detail sheet writes to the shared state — no second instance, no
+    /// cross-tab desync.
+    @ObservedObject private var cookbooks: CookbooksModel
 
     @State private var showingAddItem = false
     @State private var newItemText = ""
@@ -41,9 +41,9 @@ struct KitchenView: View {
     /// consistent "Kitchen" title. Presentation only — logic/state unchanged.
     private let embedded: Bool
 
-    init(userScope: String? = nil, sync: SyncCoordinator? = nil, embedded: Bool = false) {
+    init(cookbooks: CookbooksModel, userScope: String? = nil, sync: SyncCoordinator? = nil, embedded: Bool = false) {
         _model = StateObject(wrappedValue: PantryModel(userScope: userScope, sync: sync))
-        _cookbooks = StateObject(wrappedValue: CookbooksModel(userScope: userScope, sync: sync))
+        _cookbooks = ObservedObject(wrappedValue: cookbooks)
         self.userScope = userScope
         self.sync = sync
         self.embedded = embedded
@@ -250,6 +250,6 @@ private struct SuggestionRow: View {
 
 #Preview {
     NavigationStack {
-        KitchenView()
+        KitchenView(cookbooks: CookbooksModel())
     }
 }
