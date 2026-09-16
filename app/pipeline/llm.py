@@ -13,7 +13,7 @@ import json
 from typing import List, Optional, Type, TypeVar
 
 from openai import OpenAI, OpenAIError
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, Field, ValidationError
 
 from .. import config
 from ..models import (
@@ -305,6 +305,50 @@ def identify_dish(caption: str) -> DishIdentification:
     """Fallback step 1: identify the dish."""
     user = f"CAPTION: {caption}"
     return _call_validated(DISH_ID_SYSTEM_PROMPT, user, DishIdentification)
+
+
+PANTRY_DISH_SUGGESTION_SYSTEM_PROMPT = """\
+You are given a list of ingredients a home cook currently has in their pantry.
+Propose common, approachable dishes they could realistically make using mainly
+these ingredients. A few extra common staples (salt, pepper, oil, water, basic
+spices) may be assumed, but do NOT propose dishes that need many key ingredients
+the pantry does not have. Respond with JSON only, no prose, no markdown fences:
+
+{
+  "dishes": [
+    {
+      "dish_name": "string",
+      "cuisine": "string | null",
+      "confidence": number 0-1,
+      "distinguishing_details": ["short specifics, e.g. 'uses the chickpeas', 'vegetarian'"]
+    }
+  ]
+}
+
+Propose at most N dishes. Prefer dishes that use SEVERAL of the given ingredients
+over ones that use only one. If the pantry is too sparse to make anything
+sensible, return {"dishes": []}."""
+
+
+class _PantryDishSuggestions(BaseModel):
+    """Wrapper so the model returns a top-level object (structured-output can't
+    express a bare top-level list)."""
+
+    dishes: List[DishIdentification] = Field(default_factory=list)
+
+
+def suggest_dishes_from_pantry(pantry_items: List[str], n: int) -> List[DishIdentification]:
+    """Pantry-suggestion generation, step 1: propose a few dishes makeable from
+    the user's pantry. Returns at most `n` dishes that carry a non-null name.
+
+    Same validate + retry-once path as every other call here. Only invoked by the
+    suggestion fallback when cache-search returns too few matches (PANTRY_SCOPE.md
+    §3e), so its cost is gated behind the sparse-results condition.
+    """
+    items = "\n".join(f"- {p}" for p in pantry_items) or "(none)"
+    user = f"Propose at most {n} dishes.\n\nPANTRY:\n{items}"
+    resp = _call_validated(PANTRY_DISH_SUGGESTION_SYSTEM_PROMPT, user, _PantryDishSuggestions)
+    return [d for d in resp.dishes if d.dish_name][:n]
 
 
 def _ingredient_line(ing: Ingredient) -> str:

@@ -18,6 +18,7 @@ from pydantic import BaseModel, field_validator, model_validator
 from . import config, db, ratelimit
 from .auth.router import router as auth_router
 from .models import Job, Recipe
+from .pantry import router as pantry_router
 from .pipeline import orchestrator
 from .sync import router as sync_router
 
@@ -27,6 +28,8 @@ app = FastAPI(title="Recipe Extraction API", version="0.1.0")
 # /v1/recipes/batch). Both still behind the app-key gate below.
 app.include_router(auth_router)
 app.include_router(sync_router)
+# Pantry suggestions (/v1/pantry/suggestions) — account-scoped, same app-key gate.
+app.include_router(pantry_router)
 
 
 @app.on_event("startup")

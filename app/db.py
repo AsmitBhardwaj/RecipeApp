@@ -297,6 +297,16 @@ def get_recipe(recipe_id: str) -> Optional[Recipe]:
     return Recipe.model_validate_json(row[0]) if row else None
 
 
+def all_recipes() -> list[Recipe]:
+    """Every cached recipe. Backs the pantry-suggestion cache-search (option A —
+    full scan; PANTRY_SCOPE.md §3a). Isolated here so a later inverted-index
+    swap-in touches only this function, not its callers. Track its latency:
+    it grows with the cache."""
+    with _get_engine().begin() as conn:
+        rows = conn.execute(select(recipes.c.data)).fetchall()
+    return [Recipe.model_validate_json(r[0]) for r in rows]
+
+
 # --------------------------------------------------------------------------- #
 # User <-> recipe join
 # --------------------------------------------------------------------------- #
@@ -503,6 +513,36 @@ def _sync_row_to_change(row) -> dict:
         "deleted": bool(row["deleted"]),
         "payload": row["payload"],
     }
+
+
+def pantry_item_names(user_id: str) -> list[str]:
+    """The user's current pantry item names, read from the generic sync store
+    (`pantry_items` collection). Tombstoned (deleted) rows are skipped; the
+    payload is the client's opaque `PantryItem` JSON, from which we read only
+    `name`. Used by the pantry-suggestion endpoint so the client need not re-send
+    its pantry on every request. A malformed/paylod-less row is skipped, not
+    fatal — one bad record must not sink the whole suggestion request."""
+    import json
+
+    with _get_engine().begin() as conn:
+        rows = conn.execute(
+            select(sync_items.c.payload).where(
+                sync_items.c.user_id == user_id,
+                sync_items.c.collection == "pantry_items",
+                sync_items.c.deleted.is_(False),
+            )
+        ).fetchall()
+    names: list[str] = []
+    for (payload,) in rows:
+        if not payload:
+            continue
+        try:
+            name = json.loads(payload).get("name")
+        except (ValueError, AttributeError):
+            continue
+        if isinstance(name, str) and name.strip():
+            names.append(name)
+    return names
 
 
 def delete_user_sync_data(user_id: str) -> None:
