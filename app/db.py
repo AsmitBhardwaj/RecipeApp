@@ -39,7 +39,7 @@ from sqlalchemy.dialects.postgresql import insert as _pg_insert
 from sqlalchemy.dialects.sqlite import insert as _sqlite_insert
 from sqlalchemy.engine import Engine
 
-from . import config
+from . import config, ingredient_matching
 from .models import Job, Recipe, UserRecipe
 
 # --------------------------------------------------------------------------- #
@@ -265,6 +265,14 @@ def get_job(job_id: str) -> Optional[Job]:
 
 
 def save_recipe(recipe: Recipe) -> None:
+    # Normalize ingredient names at the write chokepoint so EVERY recipe landing
+    # in the cache carries `normalized_name` for pantry matching, regardless of
+    # source path (caption, article, JSON-LD/structured, generated, paste, or a
+    # backfill re-save). Idempotent — see ingredient_matching.normalize_ingredients.
+    if recipe.ingredients:
+        recipe = recipe.model_copy(
+            update={"ingredients": ingredient_matching.normalize_ingredients(recipe.ingredients)}
+        )
     stmt = _insert(recipes).values(
         recipe_id=recipe.recipe_id,
         canonical_video_id=recipe.canonical_video_id,

@@ -30,6 +30,15 @@ class Ingredient(BaseModel):
     unit: Optional[str] = None
     name: str
     notes: Optional[str] = None
+    # Canonical form of `name` for pantry/ingredient matching — lowercased, with
+    # leading quantities/units, parentheticals, and trailing comma-clauses
+    # stripped (see app/ingredient_matching.normalize_ingredient_name). `name`
+    # stays verbatim for display; this is the field matching reads. Populated at
+    # write time for every source type (app/db.save_recipe), so it is derived,
+    # never author-supplied. Nullable + additive: lives in the recipes.data JSON
+    # blob (no migration), and pre-feature cached recipes decode it as null until
+    # the one-time backfill fills them in.
+    normalized_name: Optional[str] = None
 
 
 class Instruction(BaseModel):
