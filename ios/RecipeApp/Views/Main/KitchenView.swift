@@ -22,21 +22,29 @@ struct KitchenView: View {
     @State private var showingAddItem = false
     @State private var newItemText = ""
 
-    init(userScope: String? = nil, sync: SyncCoordinator? = nil) {
+    /// When true (shown inside KitchenTabView), suppress this view's own
+    /// principal title + navigationTitle so the container supplies a single
+    /// consistent "Kitchen" title. Presentation only — logic/state unchanged.
+    private let embedded: Bool
+
+    init(userScope: String? = nil, sync: SyncCoordinator? = nil, embedded: Bool = false) {
         _model = StateObject(wrappedValue: PantryModel(userScope: userScope, sync: sync))
+        self.embedded = embedded
     }
 
     var body: some View {
         content
             .foregroundStyle(Color.textPrimary)
             .appBackground()
-            .navigationTitle("Kitchen")
+            .navigationTitle("Kitchen", active: !embedded)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .principal) {
-                    Text("Kitchen")
-                        .font(.editorialTitle(size: 22))
-                        .foregroundStyle(Color.textPrimary)
+                if !embedded {
+                    ToolbarItem(placement: .principal) {
+                        Text("Kitchen")
+                            .font(.editorialTitle(size: 22))
+                            .foregroundStyle(Color.textPrimary)
+                    }
                 }
                 ToolbarItem(placement: .primaryAction) {
                     Button {

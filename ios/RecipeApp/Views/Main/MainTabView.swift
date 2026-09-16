@@ -2,8 +2,9 @@
 //  MainTabView.swift
 //  RecipeApp
 //
-//  The tab shell: Recipes (with Cookbooks folded in), Meal Plan, Kitchen, and
-//  Grocery List. Account is reached from a toolbar icon on the Recipes screen,
+//  The tab shell: Recipes (with Cookbooks folded in), Meal Plan, and Kitchen
+//  (which now folds Grocery List and Pantry behind one segmented picker — see
+//  KitchenTabView). Account is reached from a toolbar icon on the Recipes screen,
 //  not a tab. DiscoverView still exists but is intentionally not in the tab bar
 //  yet — re-add a tab for it once built out.
 //
@@ -33,7 +34,7 @@ struct MainTabView: View {
     @State private var selectedTab: Tab = .recipes
 
     private enum Tab: Hashable {
-        case recipes, mealPlan, kitchen, grocery
+        case recipes, mealPlan, kitchen
     }
 
     init(recipeProvider: RecipeProvider, auth: AuthModel) {
@@ -70,20 +71,12 @@ struct MainTabView: View {
             .tag(Tab.mealPlan)
 
             NavigationStack {
-                KitchenView(userScope: userScope, sync: sync)
+                KitchenTabView(jobs: jobs, userScope: userScope, sync: sync)
             }
             .tabItem {
                 Label("Kitchen", systemImage: "refrigerator")
             }
             .tag(Tab.kitchen)
-
-            NavigationStack {
-                GroceryListView(jobs: jobs, userScope: userScope, sync: sync)
-            }
-            .tabItem {
-                Label("Grocery List", systemImage: "cart")
-            }
-            .tag(Tab.grocery)
         }
         .task {
             jobs.reconcile()
