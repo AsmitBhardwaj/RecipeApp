@@ -19,7 +19,7 @@ struct OnboardingView: View {
 
     private let pages: [OnboardingPage] = [
         OnboardingPage(
-            art: .plate,
+            art: .welcomePhoto,
             title: "turn any reel into a recipe",
             message: "ingredients, steps, and photos — done for you"
         ),
