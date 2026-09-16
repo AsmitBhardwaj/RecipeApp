@@ -16,16 +16,23 @@ import SwiftUI
 /// Selects an onboarding illustration. `@ViewBuilder` so each case can return its
 /// own concrete view.
 enum OnboardingArt {
-    case plate, share, link, week, grocery, cookbooks
+    case welcomePhoto, plate, share, link, week, grocery, cookbooks
 
     @ViewBuilder var view: some View {
         switch self {
+        // Real photos replace the vector glyphs on every page except `.plate`
+        // (unused).
+        //   • welcome / share / week → transparent cutout PNGs, so they sit on
+        //     the cream ground exactly like the vector art did — no treatment.
+        //   • link / grocery / cookbooks → full photos baked onto a cream ground
+        //     that matches the app background, so they sit as-is too.
+        case .welcomePhoto: Image("onboarding-welcome").resizable().scaledToFit()
+        case .share: Image("onboarding-share").resizable().scaledToFit()
+        case .link: Image("onboarding-paste-link").resizable().scaledToFit()
+        case .week: Image("onboarding-planweek").resizable().scaledToFit()
+        case .grocery: Image("onboarding-grocery").resizable().scaledToFit()
+        case .cookbooks: Image("onboarding-cookbook").resizable().scaledToFit()
         case .plate: PlateArt()
-        case .share: ShareArt()
-        case .link: LinkArt()
-        case .week: WeekArt()
-        case .grocery: GroceryArt()
-        case .cookbooks: CookbooksArt()
         }
     }
 }

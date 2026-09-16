@@ -34,11 +34,17 @@ struct GroceryListView: View {
     /// so edits from the Meal Plan tab are reflected live.
     private let mealStore: MealPlanStore
 
-    init(jobs: PendingJobsModel, userScope: String? = nil, sync: SyncCoordinator? = nil) {
+    /// When true (shown inside KitchenTabView), suppress this view's own
+    /// principal title + navigationTitle so the container supplies a single
+    /// consistent "Kitchen" title. Presentation only — logic/state unchanged.
+    private let embedded: Bool
+
+    init(jobs: PendingJobsModel, userScope: String? = nil, sync: SyncCoordinator? = nil, embedded: Bool = false) {
         self.jobs = jobs
         _plan = StateObject(wrappedValue: MealPlanModel(userScope: userScope, sync: sync))
         _model = StateObject(wrappedValue: GroceryListModel(userScope: userScope, sync: sync))
         self.mealStore = MealPlanStore(userScope: userScope)
+        self.embedded = embedded
     }
 
     @State private var scope: Scope = .day
@@ -85,13 +91,15 @@ struct GroceryListView: View {
         }
         .foregroundStyle(Color.textPrimary)
         .appBackground()
-        .navigationTitle("Grocery List")
+        .navigationTitle("Grocery List", active: !embedded)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            ToolbarItem(placement: .principal) {
-                Text("Grocery List")
-                    .font(.editorialTitle(size: 22))
-                    .foregroundStyle(Color.textPrimary)
+            if !embedded {
+                ToolbarItem(placement: .principal) {
+                    Text("Grocery List")
+                        .font(.editorialTitle(size: 22))
+                        .foregroundStyle(Color.textPrimary)
+                }
             }
             ToolbarItem(placement: .topBarLeading) {
                 Button {
