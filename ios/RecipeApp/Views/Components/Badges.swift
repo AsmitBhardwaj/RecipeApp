@@ -13,12 +13,12 @@ import RecipeKit
 
 /// Marks a `source_type: "generated"` recipe. Distinct accent + icon.
 ///
-/// `label` is caller-supplied so the SAME badge serves different trust contexts
-/// without a backend flag to tell them apart: the pantry-suggestions surface
-/// renders it as "Suggested recipe", while its default keeps the original
-/// "Generated recipe" wording. The paste-fallback list/detail deliberately don't
-/// render it at all (CLAUDE.md §5) — reviving it is scoped to the surfaces that
-/// opt in, i.e. pass this view (PANTRY_SCOPE.md §4).
+/// `label` is caller-supplied so the SAME badge could serve different trust
+/// contexts without a backend flag to tell them apart. It is currently unused
+/// on-screen (the pantry-suggestions surface now shows an inline "AI suggested"
+/// note instead of this pill, and the paste-fallback list/detail deliberately
+/// don't render it at all — CLAUDE.md §5), but is kept so a pill-style visual
+/// distinction can be reinstated later without rebuilding it.
 struct GeneratedBadge: View {
     var label: String = "Generated recipe"
 
@@ -60,7 +60,7 @@ struct ImageSourceBadge: View {
     }
 }
 
-/// Pantry-match context for a suggested recipe, e.g. "3 of 6 ingredients". Muted,
+/// Pantry-match context for a suggested recipe, e.g. "3/6 ingredients". Muted,
 /// neutral styling — it's an informational chip, not a trust signal like
 /// `GeneratedBadge`. Reads the `PantryMatchInfo` the suggestions API returns.
 struct MatchContextBadge: View {

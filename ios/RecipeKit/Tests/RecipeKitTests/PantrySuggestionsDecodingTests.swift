@@ -97,10 +97,10 @@ final class PantrySuggestionsDecodingTests: XCTestCase {
         XCTAssertEqual(match.totalCount, 5)
         XCTAssertEqual(match.coverage, 0.6, accuracy: 0.0001)
         XCTAssertEqual(match.have.count + match.missing.count, match.totalCount)
-        XCTAssertEqual(match.ingredientSummary, "3 of 5 ingredients")
+        XCTAssertEqual(match.ingredientSummary, "3/5 ingredients")
 
-        // The generated array carries the generated recipe (which the UI badges
-        // "Suggested recipe"); cache matches do not.
+        // The generated array carries the generated recipe (which the UI marks
+        // with an inline "AI suggested" note); cache matches do not.
         XCTAssertTrue(response.generated[0].recipe.isGenerated)
         XCTAssertFalse(response.matches[0].recipe.isGenerated)
         // Suggestion.id proxies the recipe id (Identifiable for ForEach).
@@ -109,6 +109,6 @@ final class PantrySuggestionsDecodingTests: XCTestCase {
 
     func testSingularIngredientSummary() {
         let m = PantryMatchInfo(have: ["egg"], missing: [], haveCount: 1, totalCount: 1, coverage: 1.0, score: 0.5)
-        XCTAssertEqual(m.ingredientSummary, "1 of 1 ingredient")
+        XCTAssertEqual(m.ingredientSummary, "1/1 ingredient")
     }
 }

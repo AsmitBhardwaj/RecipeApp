@@ -27,7 +27,6 @@ struct KitchenView: View {
     @ObservedObject private var cookbooks: CookbooksModel
 
     @State private var showingAddItem = false
-    @State private var newItemText = ""
     /// Tapping a suggestion opens it in a detail sheet (the Kitchen tab has its
     /// own NavigationStack; a sheet keeps this self-contained across the segment
     /// picker without touching the Grocery segment's navigation).
@@ -72,22 +71,29 @@ struct KitchenView: View {
                     .accessibilityLabel("Add item")
                 }
             }
-            .alert("Add to kitchen", isPresented: $showingAddItem) {
-                TextField("e.g. olive oil", text: $newItemText)
-                Button("Add") {
-                    model.add(name: newItemText)
-                    newItemText = ""
-                }
-                Button("Cancel", role: .cancel) { newItemText = "" }
-            } message: {
-                Text("Add something you have on hand.")
+            // Custom bottom sheet (matches the app card system + adds ingredient
+            // type-ahead) in place of the old system alert. Add path is unchanged:
+            // it still calls PantryModel.add with the submitted text.
+            .addToKitchenSheet(isPresented: $showingAddItem) { name in
+                model.add(name: name)
             }
-            // Reload suggestions whenever the pantry changes (add/remove). Matches
-            // against the LOCAL names so results track what's on screen without
-            // waiting for the pantry to sync.
-            .task(id: model.items) {
+            // Refresh on appear so pantry changes made elsewhere (or in a previous
+            // session) show without a manual pull-to-refresh. Immediate (no
+            // debounce). Matches against the LOCAL names so results track what's
+            // on screen without waiting for the pantry to sync.
+            .task {
                 guard let sync else { return }
-                await suggestions.load(pantryNames: model.items.map(\.name), via: sync)
+                suggestions.refresh(pantryNames: model.items.map(\.name), via: sync)
+            }
+            // Pantry edits refresh on a DEBOUNCE, not per-add: the add sheet's
+            // dismissal (Cancel or post-Add close) is the single trigger, and a
+            // burst of adds within the window collapses into one call. Both the
+            // "Cook with what you have" matches and the "Ideas to try" generated
+            // list come from the same endpoint response, so they share this one
+            // trigger — there is no separate local data path to recompute.
+            .onChange(of: showingAddItem) { _, isShowing in
+                guard !isShowing, let sync else { return }
+                suggestions.refresh(pantryNames: model.items.map(\.name), via: sync, debounce: .seconds(1.5))
             }
             .sheet(item: $selectedRecipe) { recipe in
                 NavigationStack {
@@ -112,6 +118,11 @@ struct KitchenView: View {
                         .swipeActions(edge: .trailing) {
                             Button(role: .destructive) {
                                 model.remove(item)
+                                // Removals are pantry edits too — refresh on the
+                                // same debounce as adds so rapid deletes coalesce.
+                                if let sync {
+                                    suggestions.refresh(pantryNames: model.items.map(\.name), via: sync, debounce: .seconds(1.5))
+                                }
                             } label: {
                                 Label("Remove", systemImage: "trash")
                             }
@@ -128,18 +139,30 @@ struct KitchenView: View {
     }
 
     /// Recipe suggestions from the current pantry: cache `matches` first, then the
-    /// generation-fallback `generated` ideas (each badged "Suggested recipe").
+    /// generation-fallback `generated` ideas (each carrying an inline "AI
+    /// suggested" note on its metadata line).
     @ViewBuilder
     private var suggestionsSections: some View {
         if suggestions.isInitialLoading {
             Section {
                 HStack(spacing: 10) {
+                    // Tint with the sage accent instead of the system default gray.
                     ProgressView()
-                    Text("Finding recipes you can make…")
+                        .tint(Color.accentColor)
+                    // Generic, persistent label: results resolve into one OR two
+                    // sections ("Cook with what you have" / "Ideas to try"), so a
+                    // single-list phrasing would over-promise. Matches the
+                    // "Suggestions" header above.
+                    Text("Finding suggestions…")
                         .font(.subheadline)
                         .foregroundStyle(Color.textSecondary)
+                    Spacer(minLength: 0)
                 }
                 .padding(.vertical, 4)
+                // Same card background / corner radius as the suggestion + kitchen
+                // rows, so the loading state reads as part of the Kitchen tab
+                // rather than a plain rect.
+                .tornEdgeCardRow(bordered: false)
             } header: {
                 sectionHeader("Suggestions")
             }
@@ -155,7 +178,17 @@ struct KitchenView: View {
                 Section {
                     ForEach(suggestions.generated) { suggestionRow($0) }
                 } header: {
-                    sectionHeader("Ideas to try")
+                    HStack(spacing: 8) {
+                        sectionHeader("Ideas to try")
+                        // Lightweight in-section indicator while a debounced
+                        // refresh is in flight — the existing ideas stay visible
+                        // and tappable, so pantry edits still feel responsive.
+                        if suggestions.isRefreshing {
+                            ProgressView()
+                                .controlSize(.mini)
+                                .tint(Color.accentColor)
+                        }
+                    }
                 }
             }
         }
@@ -209,7 +242,7 @@ private struct KitchenRow: View {
     }
 }
 
-// MARK: - Suggestion row (image + title + match chip + "Suggested recipe" badge)
+// MARK: - Suggestion row (image + title + inline match/AI metadata line)
 
 private struct SuggestionRow: View {
     let suggestion: PantrySuggestion
@@ -225,26 +258,39 @@ private struct SuggestionRow: View {
             .frame(width: 56, height: 56)
             .clipShape(RoundedRectangle(cornerRadius: 12))
 
-            VStack(alignment: .leading, spacing: 5) {
+            // Title + a single muted metadata line (no pills). Spacing is tight
+            // now that the old two-pill row collapsed to one line of text.
+            VStack(alignment: .leading, spacing: 3) {
                 Text(suggestion.recipe.title)
                     .font(.appRowTitle)
                     .lineLimit(2)
 
-                HStack(spacing: 6) {
-                    MatchContextBadge(match: suggestion.match)
-                    // GeneratedBadge is revived ONLY here, and only for the
-                    // generation-fallback recipes, labeled "Suggested recipe"
-                    // (PANTRY_SCOPE.md §4). Cache matches carry no such badge.
-                    if suggestion.recipe.isGenerated {
-                        GeneratedBadge(label: "Suggested recipe")
-                    }
-                }
+                metadataLine
             }
 
             Spacer(minLength: 0)
         }
         .padding(.vertical, 4)
         .contentShape(Rectangle())
+    }
+
+    /// One muted, container-less line beneath the title: the ingredient fraction,
+    /// and — only for generation-fallback results (same gate as before) — a
+    /// middle-dot, a small sparkle, and an italic "AI suggested". Cache matches
+    /// (e.g. "Cook with what you have") show only the fraction. A single
+    /// `textSecondary` from the existing palette carries the whole line.
+    private var metadataLine: some View {
+        var text = Text(suggestion.match.ingredientSummary)
+        if suggestion.recipe.isGenerated {
+            text = text
+                + Text("  ·  ")
+                + Text(Image(systemName: "sparkles"))
+                + Text(" AI suggested").italic()
+        }
+        return text
+            .font(.caption)
+            .foregroundStyle(Color.textSecondary)
+            .lineLimit(1)
     }
 }
 
