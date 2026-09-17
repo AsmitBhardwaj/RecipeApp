@@ -33,16 +33,46 @@ final class PantrySuggestionsModel: ObservableObject {
     @Published private(set) var matches: [PantrySuggestion] = []
     @Published private(set) var generated: [PantrySuggestion] = []
 
+    /// The single in-flight/pending refresh. Every trigger cancels this before
+    /// starting a new one, so a burst of pantry edits (or repeated sheet
+    /// dismissals) collapses into exactly ONE /v1/pantry/suggestions call.
+    private var refreshTask: Task<Void, Never>?
+
     /// True while a fetch is in flight AND we have nothing to show yet — lets the
     /// view show a spinner on first load but not flicker on a refresh.
     var isInitialLoading: Bool {
         phase == .loading && matches.isEmpty && generated.isEmpty
     }
 
+    /// True while re-fetching but we still have prior results on screen — drives
+    /// the lightweight, in-section indicator (not the full-section loader) so
+    /// pantry edits stay responsive while suggestions catch up.
+    var isRefreshing: Bool { phase == .loading && hasResults }
+
     var hasResults: Bool { !matches.isEmpty || !generated.isEmpty }
 
+    /// Schedule a suggestions refresh, cancelling any pending one first.
+    ///
+    /// `debounce` collapses bursts: pass a delay (e.g. 1.5s) for pantry edits so
+    /// rapid adds/removes coalesce into one call, or `.zero` for an immediate
+    /// refresh (e.g. on the Pantry segment appearing). `pantryNames` is captured
+    /// at call time; since every edit reschedules with the latest list, the last
+    /// scheduled call carries the current pantry.
+    func refresh(pantryNames: [String], via sync: SyncCoordinator, debounce: Duration = .zero) {
+        refreshTask?.cancel()
+        let names = pantryNames
+        refreshTask = Task { [weak self] in
+            if debounce > .zero {
+                try? await Task.sleep(for: debounce)
+                if Task.isCancelled { return }
+            }
+            await self?.load(pantryNames: names, via: sync)
+        }
+    }
+
     /// Fetch suggestions for the given local pantry names. Empty pantry clears the
-    /// section without a network call.
+    /// section without a network call. Prefer `refresh(...)` from views so calls
+    /// stay debounced/serialized; this stays accessible for direct/testing use.
     func load(pantryNames: [String], via sync: SyncCoordinator) async {
         let names = pantryNames.filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
         guard !names.isEmpty else {

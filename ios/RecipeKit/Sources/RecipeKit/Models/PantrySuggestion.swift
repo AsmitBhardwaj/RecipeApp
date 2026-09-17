@@ -12,9 +12,10 @@
 //  recipe cache) and `generated` (freshly synthesized when cache-search came up
 //  short). The client keeps them separate rather than inferring from
 //  `source_type`, so the UI can label and section them independently. In
-//  particular the "Suggested recipe" badge is a decision of WHICH ARRAY a recipe
-//  came from, made at the UI layer — there is no backend field distinguishing a
-//  pantry-generated recipe from a paste-fallback generated one (PANTRY_SCOPE.md §4).
+//  particular the inline "AI suggested" note is a decision of WHICH ARRAY a
+//  recipe came from, made at the UI layer — there is no backend field
+//  distinguishing a pantry-generated recipe from a paste-fallback generated one
+//  (PANTRY_SCOPE.md §4).
 //
 
 import Foundation
@@ -47,9 +48,9 @@ public struct PantryMatchInfo: Codable, Hashable {
         case totalCount = "total_count"
     }
 
-    /// Chip copy for the match-context badge, e.g. "3 of 6 ingredients".
+    /// Copy for the match-context metadata line, e.g. "3/6 ingredients".
     public var ingredientSummary: String {
-        "\(haveCount) of \(totalCount) ingredient\(totalCount == 1 ? "" : "s")"
+        "\(haveCount)/\(totalCount) ingredient\(totalCount == 1 ? "" : "s")"
     }
 
     /// Coverage as a whole percent (0–100) for a compact secondary label.
