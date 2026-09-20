@@ -26,14 +26,33 @@ struct RootView: View {
 
     @ViewBuilder
     private var content: some View {
-        if !hasCompletedOnboarding {
-            // Value first: show the illustrated onboarding before any auth wall.
-            OnboardingView { hasCompletedOnboarding = true }
-        } else if auth.isSignedIn {
+        #if DEBUG
+        if ProcessInfo.processInfo.environment["UI_SCREENSHOT_MAIN"] == "1" {
+            // Screenshot harness only: render the signed-in app shell (empty
+            // library) without a live account. Never reachable in release.
             MainTabView(recipeProvider: recipeProvider, auth: auth)
                 .environmentObject(auth)
         } else {
-            // Mandatory account gate, after onboarding.
+            gate
+        }
+        #else
+        gate
+        #endif
+    }
+
+    @ViewBuilder
+    private var gate: some View {
+        if auth.isSignedIn {
+            // Already signed in (this device or a prior session) → straight to the
+            // app, skipping onboarding entirely.
+            MainTabView(recipeProvider: recipeProvider, auth: auth)
+                .environmentObject(auth)
+        } else if !hasCompletedOnboarding {
+            // First run: the 4-screen flow, which ends in sign-in (screen 4).
+            OnboardingView(auth: auth, onComplete: { hasCompletedOnboarding = true })
+        } else {
+            // Onboarded before but signed out → the plain account gate, not a
+            // replay of onboarding.
             SignInView(auth: auth)
         }
     }

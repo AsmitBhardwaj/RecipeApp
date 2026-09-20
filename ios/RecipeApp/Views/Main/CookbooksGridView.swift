@@ -119,7 +119,22 @@ struct CookbooksGridView: View {
 
     // MARK: - Content
 
+    /// Fresh account: nothing saved and nothing in flight → show the first-run
+    /// empty state instead of a grid whose only tiles are "All Recipes (0)".
+    private var isLibraryEmpty: Bool {
+        jobs.recipes.isEmpty && jobs.pending.isEmpty && jobs.failed.isEmpty && cookbooks.cookbooks.isEmpty
+    }
+
+    @ViewBuilder
     private var content: some View {
+        if isLibraryEmpty {
+            ScrollView { EmptyLibraryView() }
+        } else {
+            gridContent
+        }
+    }
+
+    private var gridContent: some View {
         ScrollView {
             LazyVStack(spacing: 14) {
                 // In-flight / failed job cards first, so a just-submitted share is
