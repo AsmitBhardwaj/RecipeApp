@@ -27,19 +27,8 @@ struct OnboardingView: View {
     /// Called once the user is signed in (records onboarding completion).
     let onComplete: () -> Void
 
-    @State private var page = OnboardingView.initialPage
+    @State private var page = 0
     private let pageCount = 4
-
-    /// DEBUG-only: lets a screenshot/UI harness open the flow on a specific
-    /// screen via the `ONBOARDING_PAGE` env var. Always 0 in release.
-    private static var initialPage: Int {
-        #if DEBUG
-        if let raw = ProcessInfo.processInfo.environment["ONBOARDING_PAGE"], let p = Int(raw) {
-            return max(0, min(p, 3))
-        }
-        #endif
-        return 0
-    }
 
     var body: some View {
         ZStack(alignment: .top) {

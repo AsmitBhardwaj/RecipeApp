@@ -26,22 +26,6 @@ struct RootView: View {
 
     @ViewBuilder
     private var content: some View {
-        #if DEBUG
-        if ProcessInfo.processInfo.environment["UI_SCREENSHOT_MAIN"] == "1" {
-            // Screenshot harness only: render the signed-in app shell (empty
-            // library) without a live account. Never reachable in release.
-            MainTabView(recipeProvider: recipeProvider, auth: auth)
-                .environmentObject(auth)
-        } else {
-            gate
-        }
-        #else
-        gate
-        #endif
-    }
-
-    @ViewBuilder
-    private var gate: some View {
         if auth.isSignedIn {
             // Already signed in (this device or a prior session) → straight to the
             // app, skipping onboarding entirely.
