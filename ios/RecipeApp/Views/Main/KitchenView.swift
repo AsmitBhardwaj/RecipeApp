@@ -25,6 +25,8 @@ struct KitchenView: View {
     /// detail sheet writes to the shared state — no second instance, no
     /// cross-tab desync.
     @ObservedObject private var cookbooks: CookbooksModel
+    /// Pantry suggestions are a Platter Pro feature — gate the fetch behind it.
+    @EnvironmentObject private var paywall: PaywallCenter
 
     @State private var showingAddItem = false
     /// Tapping a suggestion opens it in a detail sheet (the Kitchen tab has its
@@ -82,8 +84,8 @@ struct KitchenView: View {
             // debounce). Matches against the LOCAL names so results track what's
             // on screen without waiting for the pantry to sync.
             .task {
-                guard let sync else { return }
-                suggestions.refresh(pantryNames: model.items.map(\.name), via: sync)
+                suggestions.onProRequired = { paywall.present(.pantry) }
+                refreshSuggestions()
             }
             // Pantry edits refresh on a DEBOUNCE, not per-add: the add sheet's
             // dismissal (Cancel or post-Add close) is the single trigger, and a
@@ -92,14 +94,24 @@ struct KitchenView: View {
             // list come from the same endpoint response, so they share this one
             // trigger — there is no separate local data path to recompute.
             .onChange(of: showingAddItem) { _, isShowing in
-                guard !isShowing, let sync else { return }
-                suggestions.refresh(pantryNames: model.items.map(\.name), via: sync, debounce: .seconds(1.5))
+                guard !isShowing else { return }
+                refreshSuggestions(debounce: .seconds(1.5))
             }
             .sheet(item: $selectedRecipe) { recipe in
                 NavigationStack {
                     RecipeDetailView(recipe: recipe, cookbooks: cookbooks, userScope: userScope)
                 }
             }
+    }
+
+    /// Refresh pantry suggestions — but only for Pro users. For non-Pro users we
+    /// skip the request entirely (no wasted call) and present the pantry paywall
+    /// instead (§8). The server `pro_required` path is handled by the model's
+    /// `onProRequired` as a backstop.
+    private func refreshSuggestions(debounce: Duration = .zero) {
+        guard let sync else { return }
+        guard paywall.requirePro(trigger: .pantry) else { return }
+        suggestions.refresh(pantryNames: model.items.map(\.name), via: sync, debounce: debounce)
     }
 
     @ViewBuilder
@@ -120,9 +132,7 @@ struct KitchenView: View {
                                 model.remove(item)
                                 // Removals are pantry edits too — refresh on the
                                 // same debounce as adds so rapid deletes coalesce.
-                                if let sync {
-                                    suggestions.refresh(pantryNames: model.items.map(\.name), via: sync, debounce: .seconds(1.5))
-                                }
+                                refreshSuggestions(debounce: .seconds(1.5))
                             } label: {
                                 Label("Remove", systemImage: "trash")
                             }

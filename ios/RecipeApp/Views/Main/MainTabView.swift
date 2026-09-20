@@ -52,6 +52,10 @@ struct MainTabView: View {
         _cookbooks = StateObject(wrappedValue: CookbooksModel(userScope: userId, sync: coordinator))
     }
 
+    /// Owns paywall dependencies + presentation (placeholder mock deps until
+    /// the real EntitlementManager/RevenueCat adapter lands — see PaywallCenter).
+    @StateObject private var paywall = PaywallCenter()
+
     var body: some View {
         TabView(selection: $selectedTab) {
             NavigationStack {
@@ -95,7 +99,19 @@ struct MainTabView: View {
             if url.scheme == "recipeapp" {
                 selectedTab = .recipes
                 jobs.reconcile()
+                // Deep link from the Share Extension's "Open Platter to continue"
+                // when an extension import hit the free limit (§9): present the
+                // import-limit paywall on arrival.
+                if url.host == "paywall" { paywall.present(.importLimit) }
             }
+        }
+        .environmentObject(paywall)
+        // Platter Pro paywall, presented app-wide by PaywallCenter (import limit,
+        // pantry, or the account row).
+        .sheet(item: $paywall.active) { active in
+            PaywallView(trigger: active.trigger,
+                        entitlements: paywall.entitlements,
+                        purchasing: paywall.purchasing)
         }
         // One-time failure modal, app-wide so it surfaces over whatever tab the
         // user is on when a live poll or foreground reconcile detects a failure.

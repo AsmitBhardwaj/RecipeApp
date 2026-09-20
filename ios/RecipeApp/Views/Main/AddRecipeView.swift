@@ -21,6 +21,9 @@ struct AddRecipeView: View {
     @ObservedObject var jobs: PendingJobsModel
 
     @Environment(\.dismiss) private var dismiss
+    /// Injected by the app shell (MainTabView). Used to present the Platter Pro
+    /// paywall when an import hits the free limit (HTTP 402 quota_exceeded).
+    @EnvironmentObject private var paywall: PaywallCenter
 
     @State private var urlText = ""
     @State private var phase: Phase = .idle
@@ -93,6 +96,11 @@ struct AddRecipeView: View {
                 try await jobs.submit(url: urlText)
                 // Job enqueued and now tracked as a processing card — close.
                 dismiss()
+            } catch RecipeProviderError.quotaExceeded {
+                // Free import limit reached → close this sheet and let the app
+                // shell present the import-limit paywall.
+                dismiss()
+                paywall.present(.importLimit)
             } catch let error as RecipeProviderError {
                 phase = .failed(error.userMessage)
             } catch {
@@ -104,4 +112,5 @@ struct AddRecipeView: View {
 
 #Preview {
     AddRecipeView(jobs: PendingJobsModel(provider: MockRecipeProvider()))
+        .environmentObject(PaywallCenter())
 }

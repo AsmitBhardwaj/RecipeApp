@@ -33,6 +33,12 @@ final class PantrySuggestionsModel: ObservableObject {
     @Published private(set) var matches: [PantrySuggestion] = []
     @Published private(set) var generated: [PantrySuggestion] = []
 
+    /// Set by the owning view: invoked when the server reports the feature is
+    /// Pro-only (HTTP 402 `pro_required`). Presents the pantry paywall. The view
+    /// also gates *before* calling (skipping the request entirely for non-Pro
+    /// users); this is the belt-and-suspenders server-side signal.
+    var onProRequired: (() -> Void)?
+
     /// The single in-flight/pending refresh. Every trigger cancels this before
     /// starting a new one, so a burst of pantry edits (or repeated sheet
     /// dismissals) collapses into exactly ONE /v1/pantry/suggestions call.
@@ -88,6 +94,10 @@ final class PantrySuggestionsModel: ObservableObject {
             matches = response.matches
             generated = response.generated
             phase = .loaded
+        } catch RecipeProviderError.proRequired {
+            // Pro-only feature per the server → present the paywall, don't error.
+            phase = .idle
+            onProRequired?()
         } catch let error as RecipeProviderError {
             phase = .failed(error.userMessage)
         } catch {

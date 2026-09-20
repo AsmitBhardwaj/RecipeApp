@@ -17,8 +17,16 @@ struct AccountView: View {
     @AppStorage("hasCompletedOnboarding") private var hasCompletedOnboarding = false
     @AppStorage(AppAppearance.storageKey, store: .appGroup) private var appearance: AppAppearance = .system
 
+    @EnvironmentObject private var paywall: PaywallCenter
+    @Environment(\.openURL) private var openURL
+
     @State private var showDeleteConfirm = false
     @State private var deleteError: String?
+
+    /// Opens the system's manage-subscriptions page. (The real Pro build should
+    /// prefer StoreKit's `AppStore.showManageSubscriptions(in:)` — see
+    /// docs/PAYWALL_WIRING.md; this URL is the SDK-free equivalent.)
+    private let manageSubscriptionsURL = URL(string: "https://apps.apple.com/account/subscriptions")!
 
     private var displayName: String {
         auth.currentUser?.fullName ?? auth.currentUser?.email ?? "Your account"
@@ -56,6 +64,36 @@ struct AccountView: View {
                     }
                 }
                 .padding(.vertical, 6)
+            }
+
+            Section {
+                if paywall.isPro {
+                    Button {
+                        openURL(manageSubscriptionsURL)
+                    } label: {
+                        Label {
+                            Text("Platter Pro · Manage subscription")
+                        } icon: {
+                            Image(systemName: "checkmark.seal.fill").foregroundStyle(Color.accentColor)
+                        }
+                    }
+                } else {
+                    Button {
+                        paywall.present(.settings)
+                    } label: {
+                        HStack {
+                            Label {
+                                Text("Platter Pro")
+                            } icon: {
+                                Image(systemName: "sparkles").foregroundStyle(Color.accentColor)
+                            }
+                            Spacer()
+                            Text("Upgrade").font(.subheadline).foregroundStyle(.secondary)
+                            Image(systemName: "chevron.right").font(.caption).foregroundStyle(.tertiary)
+                        }
+                    }
+                    .foregroundStyle(.primary)
+                }
             }
 
             Section("Appearance") {
@@ -142,4 +180,5 @@ struct AccountView: View {
         AccountView()
     }
     .environmentObject(AuthModel())
+    .environmentObject(PaywallCenter())
 }

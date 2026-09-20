@@ -27,6 +27,14 @@ public enum RecipeProviderError: Error, Equatable {
     /// The response wasn't shaped as expected (decoding failed, or a completed
     /// job carried no recipe).
     case invalidResponse(String)
+    /// HTTP 402 `quota_exceeded`: the free import limit is used up. The UI
+    /// responds by presenting the Platter Pro paywall (trigger `.importLimit`),
+    /// not a plain error.
+    case quotaExceeded
+    /// HTTP 402 `pro_required`: a Pro-only feature (e.g. pantry suggestions) was
+    /// requested without an active subscription. The UI presents the paywall
+    /// (trigger `.pantry`).
+    case proRequired
 
     /// A short, user-facing message suitable for an alert or error state.
     public var userMessage: String {
@@ -47,6 +55,10 @@ public enum RecipeProviderError: Error, Equatable {
             return "That doesn't look like a valid link. Paste an Instagram, TikTok, or recipe-website URL."
         case .invalidResponse:
             return "We got an unexpected response from the server. Please try again."
+        case .quotaExceeded:
+            return "You've used your free recipes. Upgrade to Platter Pro to keep importing."
+        case .proRequired:
+            return "This is a Platter Pro feature."
         }
     }
 

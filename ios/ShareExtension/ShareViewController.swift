@@ -37,7 +37,8 @@ final class ShareViewController: UIViewController {
     private func presentRoot() {
         let root = ShareRootView(
             urlBox: urlBox,
-            onFinish: { [weak self] in self?.finish() }
+            onFinish: { [weak self] in self?.finish() },
+            onOpenApp: { [weak self] in self?.openMainApp() }
         )
         let host = UIHostingController(rootView: root)
         host.view.backgroundColor = .clear
@@ -56,6 +57,14 @@ final class ShareViewController: UIViewController {
 
     private func finish() {
         extensionContext?.completeRequest(returningItems: [], completionHandler: nil)
+    }
+
+    /// Deep-link into the main app to present the Platter Pro paywall (§9). A
+    /// share extension can't present it itself. `open(_:)` is the supported path;
+    /// if the host blocks it, the completion returns false and we just close.
+    private func openMainApp() {
+        guard let url = URL(string: "recipeapp://paywall") else { finish(); return }
+        extensionContext?.open(url) { [weak self] _ in self?.finish() }
     }
 
     // MARK: - URL extraction

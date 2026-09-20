@@ -208,6 +208,15 @@ public struct APIRecipeProvider: RecipeProvider {
         guard let http = response as? HTTPURLResponse else {
             throw RecipeProviderError.invalidResponse("non-HTTP response")
         }
+        // HTTP 402 carries a machine `error_code` that maps to a paywall trigger
+        // rather than a generic HTTP error, so the UI can present Platter Pro.
+        if http.statusCode == 402 {
+            switch Self.errorCode(in: data) {
+            case "quota_exceeded": throw RecipeProviderError.quotaExceeded
+            case "pro_required": throw RecipeProviderError.proRequired
+            default: throw RecipeProviderError.httpStatus(402)
+            }
+        }
         guard (200..<300).contains(http.statusCode) else {
             throw RecipeProviderError.httpStatus(http.statusCode)
         }
@@ -216,6 +225,17 @@ public struct APIRecipeProvider: RecipeProvider {
         } catch {
             throw RecipeProviderError.invalidResponse("could not decode response: \(error)")
         }
+    }
+
+    /// Pull a machine `error_code` out of an error response body. Tolerates the
+    /// code sitting at the top level or nested under FastAPI's `detail`.
+    private static func errorCode(in data: Data) -> String? {
+        struct Flat: Decodable { let error_code: String? }
+        struct Nested: Decodable { struct D: Decodable { let error_code: String? }; let detail: D? }
+        if let code = (try? JSONDecoder().decode(Flat.self, from: data))?.error_code {
+            return code
+        }
+        return (try? JSONDecoder().decode(Nested.self, from: data))?.detail?.error_code
     }
 }
 

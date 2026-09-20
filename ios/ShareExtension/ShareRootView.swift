@@ -63,6 +63,10 @@ struct ShareRootView: View {
     /// Called to complete the extension request and dismiss the sheet
     /// (returns to Instagram/TikTok) — the "Keep browsing" action.
     let onFinish: () -> Void
+    /// Opens the main Platter app via deep link (recipeapp://paywall). Used by
+    /// the free-limit state, since the extension can't present the paywall
+    /// itself (§9).
+    let onOpenApp: () -> Void
 
     @State private var phase: Phase = .working
 
@@ -76,6 +80,7 @@ struct ShareRootView: View {
         case working
         case success
         case failure(String)
+        case limitReached   // free import limit hit (HTTP 402 quota_exceeded)
     }
 
     var body: some View {
@@ -142,6 +147,19 @@ struct ShareRootView: View {
             Button("Close") { onFinish() }
                 .buttonStyle(.borderedProminent)
                 .padding(.top, 4)
+
+        case .limitReached:
+            Image(systemName: "lock.fill")
+                .font(.largeTitle)
+                .foregroundStyle(sage)
+            Text("You've used your free recipes. Open Platter to continue.")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+            filledButton("Open Platter", action: onOpenApp)
+                .padding(.top, 6)
+            Button("Not now") { onFinish() }
+                .padding(.top, 2)
         }
     }
 
@@ -187,6 +205,8 @@ struct ShareRootView: View {
             // No auto-dismiss: the user taps "Keep browsing" to return to
             // Instagram/TikTok from the success state.
             phase = .success
+        } catch RecipeProviderError.quotaExceeded {
+            phase = .limitReached
         } catch let error as RecipeProviderError {
             phase = .failure(error.userMessage)
         } catch {
