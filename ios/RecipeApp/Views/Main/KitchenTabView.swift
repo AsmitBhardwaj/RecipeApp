@@ -2,23 +2,16 @@
 //  KitchenTabView.swift
 //  RecipeApp
 //
-//  Container for the merged "Kitchen" tab: the former standalone Grocery List
-//  and Kitchen (Pantry) tabs, now switched by a segmented picker at the top
-//  ("Grocery List" | "Pantry", Grocery List default).
+//  Container for the merged "Kitchen" tab. It owns the shared chrome — a large
+//  serif "Kitchen" header with the segment's action buttons (share + add for
+//  Grocery, add for Pantry), and the SINGLE segmented control ("Grocery list" |
+//  "Pantry") — then embeds the active segment's view beneath it.
 //
-//  UI-shell ONLY. Each segment embeds the existing view unchanged, so their view
-//  models, checked/sync state, and sync collections (grocery_manual /
-//  grocery_check for the list, pantry_items for the pantry) are untouched. The
-//  embedded views keep supplying their own nav-bar chrome (title + add button)
-//  via the ambient NavigationStack that MainTabView wraps this container in — so
-//  this view adds no NavigationStack of its own.
-//
-//  Note: the two segments are swapped with an if/else (not held side-by-side),
-//  because each embedded view declares its own principal title + toolbar and
-//  keeping both mounted would put two competing titles/add-buttons in one nav
-//  bar. A consequence is that a segment's transient view state (e.g. the grocery
-//  list's day/week scope) is recreated when you switch away and back — see the
-//  report accompanying this change.
+//  The header buttons drive the embedded child through bindings (`addPresented`,
+//  `sharePresented`): the child still owns its models and presents its own
+//  sheets/alerts from those bindings, so no view-model state moves up here. The
+//  navigation bar is hidden (this view supplies its own header), and the children
+//  run `embedded: true` so they suppress their own titles/toolbars.
 //
 
 import SwiftUI
@@ -32,50 +25,64 @@ struct KitchenTabView: View {
     @ObservedObject var cookbooks: CookbooksModel
     let userScope: String
     let sync: SyncCoordinator
+    /// Switches the app to the Meal Plan tab (grocery empty-state "Plan a meal").
+    var onSwitchToMealPlan: () -> Void = {}
 
     private enum Segment: Hashable { case grocery, pantry }
     @State private var segment: Segment = .grocery
 
+    // Header-button triggers, handed to the active child as bindings.
+    @State private var groceryAddPresented = false
+    @State private var grocerySharePresented = false
+    @State private var pantryAddPresented = false
+
     var body: some View {
         VStack(spacing: 0) {
-            Picker("Section", selection: $segment) {
-                Text("Grocery List").tag(Segment.grocery)
-                Text("Pantry").tag(Segment.pantry)
+            ScreenHeader("Kitchen") {
+                if segment == .grocery {
+                    CircleHeaderButton(systemImage: "square.and.arrow.up",
+                                       accessibilityLabel: "Share today's grocery list") {
+                        grocerySharePresented = true
+                    }
+                    CircleHeaderButton(systemImage: "plus", primary: true,
+                                       accessibilityLabel: "Add item") {
+                        groceryAddPresented = true
+                    }
+                } else {
+                    CircleHeaderButton(systemImage: "plus", primary: true,
+                                       accessibilityLabel: "Add item") {
+                        pantryAddPresented = true
+                    }
+                }
             }
-            .pickerStyle(.segmented)
-            .padding(.horizontal)
-            .padding(.top, 8)
-            .padding(.bottom, 4)
+
+            SegmentedPill(
+                segments: [.init(title: "Grocery list", value: .grocery),
+                           .init(title: "Pantry", value: .pantry)],
+                selection: $segment
+            )
+            .padding(.horizontal, Theme.Spacing.lg)
+            .padding(.bottom, Theme.Spacing.sm)
 
             switch segment {
             case .grocery:
-                GroceryListView(jobs: jobs, userScope: userScope, sync: sync, embedded: true)
+                GroceryListView(jobs: jobs, userScope: userScope, sync: sync, embedded: true,
+                                addPresented: $groceryAddPresented,
+                                sharePresented: $grocerySharePresented,
+                                onPlanMeal: onSwitchToMealPlan)
             case .pantry:
-                KitchenView(cookbooks: cookbooks, userScope: userScope, sync: sync, embedded: true)
+                KitchenView(cookbooks: cookbooks, userScope: userScope, sync: sync, embedded: true,
+                            addPresented: $pantryAddPresented)
             }
         }
         .appBackground()
-        // Consistent container title regardless of the active segment. The
-        // children are `embedded: true`, so they suppress their own principal
-        // title + navigationTitle and defer to this one (see their `embedded`
-        // flag). Rendered as a principal item in the app's editorial font to
-        // match the look the children previously had.
-        .navigationTitle("Kitchen")
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .principal) {
-                Text("Kitchen")
-                    .font(.editorialTitle(size: 22))
-                    .foregroundStyle(Color.textPrimary)
-            }
-        }
+        .toolbar(.hidden, for: .navigationBar)
     }
 }
 
 extension View {
     /// Applies `navigationTitle` only when `active`. Lets an embedded child view
-    /// defer its title to an ancestor (KitchenTabView) instead of stamping its
-    /// own — a deeper `.navigationTitle` would otherwise override the container's.
+    /// defer its title to an ancestor instead of stamping its own.
     @ViewBuilder
     func navigationTitle(_ title: String, active: Bool) -> some View {
         if active { self.navigationTitle(title) } else { self }

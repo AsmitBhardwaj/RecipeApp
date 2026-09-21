@@ -71,7 +71,8 @@ struct MainTabView: View {
             .tag(Tab.mealPlan)
 
             NavigationStack {
-                KitchenTabView(jobs: jobs, cookbooks: cookbooks, userScope: userScope, sync: sync)
+                KitchenTabView(jobs: jobs, cookbooks: cookbooks, userScope: userScope, sync: sync,
+                               onSwitchToMealPlan: { selectedTab = .mealPlan })
             }
             .tabItem {
                 Label("Kitchen", systemImage: "refrigerator")

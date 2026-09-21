@@ -26,7 +26,6 @@ struct KitchenView: View {
     /// cross-tab desync.
     @ObservedObject private var cookbooks: CookbooksModel
 
-    @State private var showingAddItem = false
     /// Tapping a suggestion opens it in a detail sheet (the Kitchen tab has its
     /// own NavigationStack; a sheet keeps this self-contained across the segment
     /// picker without touching the Grocery segment's navigation).
@@ -40,12 +39,18 @@ struct KitchenView: View {
     /// consistent "Kitchen" title. Presentation only — logic/state unchanged.
     private let embedded: Bool
 
-    init(cookbooks: CookbooksModel, userScope: String? = nil, sync: SyncCoordinator? = nil, embedded: Bool = false) {
+    /// The "add pantry item" sheet trigger. Owned by the container's header add
+    /// button when embedded; the standalone toolbar button drives it otherwise.
+    @Binding private var addPresented: Bool
+
+    init(cookbooks: CookbooksModel, userScope: String? = nil, sync: SyncCoordinator? = nil,
+         embedded: Bool = false, addPresented: Binding<Bool> = .constant(false)) {
         _model = StateObject(wrappedValue: PantryModel(userScope: userScope, sync: sync))
         _cookbooks = ObservedObject(wrappedValue: cookbooks)
         self.userScope = userScope
         self.sync = sync
         self.embedded = embedded
+        _addPresented = addPresented
     }
 
     var body: some View {
@@ -62,19 +67,21 @@ struct KitchenView: View {
                             .foregroundStyle(Color.textPrimary)
                     }
                 }
-                ToolbarItem(placement: .primaryAction) {
-                    Button {
-                        showingAddItem = true
-                    } label: {
-                        Image(systemName: "plus")
+                if !embedded {
+                    ToolbarItem(placement: .primaryAction) {
+                        Button {
+                            addPresented = true
+                        } label: {
+                            Image(systemName: "plus")
+                        }
+                        .accessibilityLabel("Add item")
                     }
-                    .accessibilityLabel("Add item")
                 }
             }
             // Custom bottom sheet (matches the app card system + adds ingredient
             // type-ahead) in place of the old system alert. Add path is unchanged:
             // it still calls PantryModel.add with the submitted text.
-            .addToKitchenSheet(isPresented: $showingAddItem) { name in
+            .addToKitchenSheet(isPresented: $addPresented) { name in
                 model.add(name: name)
             }
             // Refresh on appear so pantry changes made elsewhere (or in a previous
@@ -91,7 +98,7 @@ struct KitchenView: View {
             // "Cook with what you have" matches and the "Ideas to try" generated
             // list come from the same endpoint response, so they share this one
             // trigger — there is no separate local data path to recompute.
-            .onChange(of: showingAddItem) { _, isShowing in
+            .onChange(of: addPresented) { _, isShowing in
                 guard !isShowing, let sync else { return }
                 suggestions.refresh(pantryNames: model.items.map(\.name), via: sync, debounce: .seconds(1.5))
             }
