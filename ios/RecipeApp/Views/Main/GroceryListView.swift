@@ -172,22 +172,67 @@ struct GroceryListView: View {
         }
     }
 
-    /// Selected date on the left, whole-week toggle on the right.
+    /// A compact week switcher (prev/next chevrons + week range) with the
+    /// whole-week toggle, and — in day scope — the selected date beneath it.
+    ///
+    /// Grocery keeps its OWN MealPlanModel (not shared with the Meal Plan tab), so
+    /// this switcher is how the user reaches another week's list from here.
     private var captionRow: some View {
-        HStack {
-            Text(periodLabel)
-                .font(.subheadline)
-                .foregroundStyle(Color.textSecondary)
-            Spacer()
-            Button {
-                withAnimation(.easeInOut(duration: 0.2)) { showWholeWeek.toggle() }
-            } label: {
-                Text(showWholeWeek ? "Show single day" : "Show whole week")
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 4) {
+                weekChevron("chevron.left", label: "Previous week") { plan.goToPreviousWeek() }
+                Text(weekRangeLabel)
                     .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(Color.accentColor)
+                    .foregroundStyle(Color.textPrimary)
+                    .lineLimit(1)
+                weekChevron("chevron.right", label: "Next week") { plan.goToNextWeek() }
+
+                Spacer(minLength: 8)
+
+                Button {
+                    withAnimation(.easeInOut(duration: 0.2)) { showWholeWeek.toggle() }
+                } label: {
+                    Text(showWholeWeek ? "Show single day" : "Show whole week")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(Color.accentColor)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.85)
+                }
+                .buttonStyle(.plain)
             }
-            .buttonStyle(.plain)
+
+            if scope == .day {
+                Text(periodLabel)
+                    .font(.caption)
+                    .foregroundStyle(Color.textSecondary)
+            }
         }
+    }
+
+    private func weekChevron(_ symbol: String, label: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(Color.accentColor)
+                .frame(width: 44, height: 44)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(label)
+    }
+
+    /// The visible week's range, collapsing the second month when it's the same
+    /// (e.g. "Sep 21 – 27", or "Sep 29 – Oct 5").
+    private var weekRangeLabel: String {
+        guard let first = plan.weekDays.first, let last = plan.weekDays.last else { return "" }
+        let cal = Calendar.current
+        let monthDay = DateFormatter(); monthDay.dateFormat = "MMM d"
+        let start = monthDay.string(from: first)
+        if cal.component(.month, from: first) == cal.component(.month, from: last) {
+            let dayOnly = DateFormatter(); dayOnly.dateFormat = "d"
+            return "\(start) – \(dayOnly.string(from: last))"
+        }
+        return "\(start) – \(monthDay.string(from: last))"
     }
 
     private var completionBanner: some View {
