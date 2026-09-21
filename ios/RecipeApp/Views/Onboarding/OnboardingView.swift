@@ -2,147 +2,65 @@
 //  OnboardingView.swift
 //  RecipeApp
 //
-//  A short, swipeable intro to the app: capture a recipe (Reel/TikTok/link),
-//  plan the week, auto-build the grocery list, and organize with cookbooks.
-//  Keeps the swipe + page-dot + Next/Skip mechanics; illustrations are vector,
-//  SwiftUI-drawn, and adapt to light/dark via the app's color tokens
-//  (see OnboardingIllustrations).
+//  The first-run flow: a 4-screen intro that ends in sign-in. Replaces the old
+//  6-page swipe intro entirely.
+//
+//    1. Promise      — rounded dish photo card, "Get started"
+//    2. Share import — vector share-sheet illustration, "Continue"
+//    3. Kitchen      — pantry + "you could make" panel, "Continue"
+//    4. Sign in      — app mark + the shared AuthMethodsView (no skip)
+//
+//  Each screen is built from `OnboardingScaffold`: a 44pt header (brand lockup +
+//  Skip on 1–3, empty on 4) and a pinned bottom block of page dots + button.
+//  "Skip" on screens 1–3 jumps straight to sign-in; there is no skip on screen
+//  4. Completion is driven by auth: reaching a signed-in state ends onboarding
+//  (RootView then shows the app), and we record `hasCompletedOnboarding` so a
+//  later sign-out lands on the plain sign-in gate rather than replaying this
+//  flow.
+//
+//  No notification permission is requested here (it is requested on the first
+//  Cook Mode timer start — see CookTimerNotificationScheduler).
 //
 
 import SwiftUI
 
 struct OnboardingView: View {
-    /// Called when the user finishes the flow.
-    let onFinish: () -> Void
+    @ObservedObject var auth: AuthModel
+    /// Called once the user is signed in (records onboarding completion).
+    let onComplete: () -> Void
 
     @State private var page = 0
-
-    private let pages: [OnboardingPage] = [
-        OnboardingPage(
-            art: .welcomePhoto,
-            title: "turn any reel into a recipe",
-            message: "ingredients, steps, and photos — done for you"
-        ),
-        OnboardingPage(
-            art: .share,
-            title: "share from instagram or tiktok",
-            message: "tap share, choose recipeapp, done"
-        ),
-        OnboardingPage(
-            art: .link,
-            title: "or paste a link",
-            message: "no video to share? tap + and drop in any recipe blog URL — we'll read that too."
-        ),
-        OnboardingPage(
-            art: .week,
-            title: "plan your week",
-            message: "drag recipes into any day"
-        ),
-        OnboardingPage(
-            art: .grocery,
-            title: "a grocery list that fills itself",
-            message: "everything from your meal plan, gathered into one checklist"
-        ),
-        OnboardingPage(
-            art: .cookbooks,
-            title: "organize with cookbooks",
-            message: "group saved recipes into collections — weeknight, baking, whatever you like"
-        ),
-    ]
+    private let pageCount = 4
 
     var body: some View {
-        VStack(spacing: 0) {
-            TabView(selection: $page) {
-                ForEach(Array(pages.enumerated()), id: \.offset) { index, page in
-                    OnboardingPageView(page: page)
-                        .tag(index)
-                }
-            }
-            .tabViewStyle(.page(indexDisplayMode: .never))
-
-            pageDots
-                .padding(.bottom, 24)
-
-            Button(action: advance) {
-                Text(isLastPage ? "Get started" : "Next")
-                    .font(.headline)
-                    .foregroundStyle(.white)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 14)
-                    .background(Color.accentColor, in: RoundedRectangle(cornerRadius: 14))
-            }
-            .buttonStyle(.plain)
-            .padding(.horizontal, 24)
-
-            Button("Skip", action: onFinish)
-                .font(.subheadline)
-                .foregroundStyle(Color.textSecondary)
-                .padding(.top, 14)
-                .padding(.bottom, 8)
-                .opacity(isLastPage ? 0 : 1)
-                .disabled(isLastPage)
+        TabView(selection: $page) {
+            OnboardingPromiseScreen(page: page, total: pageCount, onSkip: skip, onContinue: advance).tag(0)
+            OnboardingShareScreen(page: page, total: pageCount, onSkip: skip, onContinue: advance).tag(1)
+            OnboardingKitchenScreen(page: page, total: pageCount, onSkip: skip, onContinue: advance).tag(2)
+            OnboardingSignInScreen(auth: auth, page: page, total: pageCount).tag(3)
         }
-        .foregroundStyle(Color.textPrimary)
+        .tabViewStyle(.page(indexDisplayMode: .never))
+        // Single full-screen background (cream + paper grain) behind the
+        // transparent pages, so the grain is uniform and extends under the home
+        // indicator instead of leaving a flat strip.
         .appBackground()
-    }
-
-    /// Sage for the active dot, muted `cardEdge` outline for inactive.
-    private var pageDots: some View {
-        HStack(spacing: 9) {
-            ForEach(0..<pages.count, id: \.self) { index in
-                Circle()
-                    .fill(index == page ? Color.accentColor : Color.clear)
-                    .overlay(Circle().strokeBorder(Color.cardEdge, lineWidth: 1.5))
-                    .frame(width: 8, height: 8)
-            }
+        .foregroundStyle(Color.textPrimary)
+        .onChange(of: auth.isSignedIn) { _, signedIn in
+            if signedIn { onComplete() }
         }
-        .animation(.easeInOut(duration: 0.2), value: page)
+        // If already signed in when this appears (edge case), finish immediately.
+        .onAppear { if auth.isSignedIn { onComplete() } }
     }
-
-    private var isLastPage: Bool { page == pages.count - 1 }
 
     private func advance() {
-        if isLastPage {
-            onFinish()
-        } else {
-            withAnimation { page += 1 }
-        }
+        withAnimation { page = min(page + 1, pageCount - 1) }
     }
-}
 
-// MARK: - Page model & single-page view
-
-private struct OnboardingPage {
-    let art: OnboardingArt
-    let title: String
-    let message: String
-}
-
-private struct OnboardingPageView: View {
-    let page: OnboardingPage
-
-    var body: some View {
-        VStack(spacing: 32) {
-            Spacer()
-            page.art.view
-                .frame(height: 200)
-            VStack(spacing: 14) {
-                Text(page.title)
-                    .font(.editorialTitle(size: 30, relativeTo: .largeTitle))
-                    .multilineTextAlignment(.center)
-                Text(page.message)
-                    .font(.callout)
-                    .foregroundStyle(Color.textSecondary)
-                    .multilineTextAlignment(.center)
-            }
-            .padding(.horizontal, 32)
-            Spacer()
-            Spacer()
-        }
-        .frame(maxWidth: .infinity)
+    private func skip() {
+        withAnimation { page = pageCount - 1 }
     }
 }
 
 #Preview {
-    OnboardingView(onFinish: {})
+    OnboardingView(auth: AuthModel(), onComplete: {})
 }
