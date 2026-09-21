@@ -25,8 +25,29 @@ import SwiftUI
 struct AuthMethodsView: View {
     @ObservedObject var auth: AuthModel
     var emailStyle: EmailStyle = .inline
+    var style: Style = .gate
 
     enum EmailStyle { case inline, disclosure }
+
+    /// Visual styling for the button stack. The gate (`SignInView`) keeps its
+    /// original bordered 50pt look; onboarding screen 4 uses taller, borderless
+    /// buttons on the `secondaryAuthFill` token and always offers all three
+    /// providers so the flow presents a consistent three-button choice.
+    struct Style {
+        var buttonHeight: CGFloat
+        var cornerRadius: CGFloat
+        var appleLabel: SignInWithAppleButton.Label
+        var providerFill: Color
+        var providerBordered: Bool
+        var alwaysShowGoogle: Bool
+
+        static let gate = Style(buttonHeight: 50, cornerRadius: 12, appleLabel: .signIn,
+                                providerFill: Color.textSecondary.opacity(0.10),
+                                providerBordered: true, alwaysShowGoogle: false)
+        static let onboarding = Style(buttonHeight: 56, cornerRadius: 16, appleLabel: .continue,
+                                      providerFill: Color.secondaryAuthFill,
+                                      providerBordered: false, alwaysShowGoogle: true)
+    }
 
     @Environment(\.colorScheme) private var colorScheme
     @State private var mode: Mode = .signIn
@@ -41,18 +62,18 @@ struct AuthMethodsView: View {
 
     var body: some View {
         VStack(spacing: 12) {
-            // Native Apple button — 50pt tall meets the 44pt minimum touch target.
-            SignInWithAppleButton(.signIn) { request in
+            // Native Apple button — height meets the 44pt minimum touch target.
+            SignInWithAppleButton(style.appleLabel) { request in
                 request.requestedScopes = [.fullName, .email]
             } onCompletion: { result in
                 handleApple(result)
             }
             .signInWithAppleButtonStyle(colorScheme == .dark ? .white : .black)
-            .frame(height: 50)
-            .clipShape(RoundedRectangle(cornerRadius: 12))
-            .accessibilityLabel("Sign in with Apple")
+            .frame(height: style.buttonHeight)
+            .clipShape(RoundedRectangle(cornerRadius: style.cornerRadius))
+            .accessibilityLabel("Continue with Apple")
 
-            if AppConfig.isGoogleConfigured {
+            if AppConfig.isGoogleConfigured || style.alwaysShowGoogle {
                 providerButton("Continue with Google", systemImage: "g.circle.fill", action: signInWithGoogle)
             }
 
@@ -133,9 +154,14 @@ struct AuthMethodsView: View {
                 Text(title).font(.headline)
             }
             .frame(maxWidth: .infinity)
-            .frame(height: 50)
-            .background(fieldFill, in: RoundedRectangle(cornerRadius: 12))
-            .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Color.textSecondary.opacity(0.2)))
+            .frame(height: style.buttonHeight)
+            .background(style.providerFill, in: RoundedRectangle(cornerRadius: style.cornerRadius))
+            .overlay {
+                if style.providerBordered {
+                    RoundedRectangle(cornerRadius: style.cornerRadius)
+                        .strokeBorder(Color.textSecondary.opacity(0.2))
+                }
+            }
         }
         .foregroundStyle(Color.textPrimary)
     }
