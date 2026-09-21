@@ -479,7 +479,7 @@ struct OnboardingSignInScreen: View {
             .font(.caption2)
             .foregroundStyle(Color.bodyText)
             .multilineTextAlignment(.center)
-            .tint(Color.secondaryAccent)
+            .tint(Color.accentColor)
     }
 
     private var legalText: AttributedString {

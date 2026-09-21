@@ -40,5 +40,10 @@ enum Theme {
         static let lg: CGFloat = 16
         static let xl: CGFloat = 24
         static let xxl: CGFloat = 32
+
+        /// Extra bottom clearance added to scroll/list content so the last row
+        /// never sits under the native floating tab bar. Applied as a bottom
+        /// content inset on each tab's scroll container.
+        static let tabBarClearance: CGFloat = 96
     }
 }

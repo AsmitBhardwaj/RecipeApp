@@ -53,7 +53,7 @@ struct MainTabView: View {
     }
 
     var body: some View {
-        TabView(selection: $selectedTab) {
+        TabView(selection: $selectedTab) {  // sage active tint applied below
             NavigationStack {
                 CookbooksGridView(jobs: jobs, cookbooks: cookbooks, userScope: userScope)
             }
@@ -78,6 +78,9 @@ struct MainTabView: View {
             }
             .tag(Tab.kitchen)
         }
+        // Sage is the app's only accent: active tab icon/label render sage; the
+        // muted inactive colour comes from TabBarAppearance (UIKit) at launch.
+        .tint(Color.accentColor)
         .task {
             jobs.reconcile()
             sync.triggerSync()  // pull remote changes + flush outbox on launch/sign-in

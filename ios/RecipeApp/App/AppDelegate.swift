@@ -23,6 +23,8 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
     ) -> Bool {
         UNUserNotificationCenter.current().delegate = self
+        // Palette the native tab bar (muted inactive, sage active) before first render.
+        TabBarAppearance.configure()
         return true
     }
 

@@ -180,7 +180,7 @@ struct StarRating: View {
             ForEach(1...5, id: \.self) { index in
                 Image(systemName: index <= rating ? "star.fill" : "star")
                     .font(.title2)
-                    .foregroundStyle(index <= rating ? Color.secondaryAccent : Color.textSecondary.opacity(0.5))
+                    .foregroundStyle(index <= rating ? Color.accentColor : Color.textSecondary.opacity(0.5))
                     .onTapGesture {
                         // Tapping the current rating clears it (back to none).
                         rating = (rating == index) ? 0 : index
