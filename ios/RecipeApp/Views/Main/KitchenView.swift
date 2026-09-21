@@ -111,91 +111,98 @@ struct KitchenView: View {
 
     @ViewBuilder
     private var content: some View {
-        if model.items.isEmpty {
-            emptyState
-        } else {
-            List {
-                Section {
-                    ForEach(model.items) { item in
-                        KitchenRow(
-                            text: item.name,
-                            icon: GroceryItemIconResolver.icon(for: item.name)
-                        )
-                        .cardRow(bordered: false)
-                        .swipeActions(edge: .trailing) {
-                            Button(role: .destructive) {
-                                model.remove(item)
-                                // Removals are pantry edits too — refresh on the
-                                // same debounce as adds so rapid deletes coalesce.
-                                if let sync {
-                                    suggestions.refresh(pantryNames: model.items.map(\.name), via: sync, debounce: .seconds(1.5))
-                                }
-                            } label: {
-                                Label("Remove", systemImage: "trash")
-                            }
-                        }
-                    }
-                } header: {
-                    sectionHeader("In your kitchen")
-                }
-
-                suggestionsSections
+        ScrollView {
+            VStack(alignment: .leading, spacing: 24) {
+                pantrySection
+                suggestionsContent
             }
-            .listStyle(.plain)
+            .padding(.horizontal, 16)
+            .padding(.top, 8)
+            .padding(.bottom, Theme.Spacing.tabBarClearance)
         }
     }
 
-    /// Recipe suggestions from the current pantry: cache `matches` first, then the
-    /// generation-fallback `generated` ideas (each carrying an inline "AI
-    /// suggested" note on its metadata line).
+    // MARK: - Pantry chips ("In your kitchen")
+
+    private var pantrySection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            sectionHeader("In your kitchen")
+
+            FlowLayout(spacing: 8, lineSpacing: 8) {
+                ForEach(model.items) { item in
+                    PantryChip(name: Self.displayName(item.name)) {
+                        model.remove(item)
+                        // Removals are pantry edits too — refresh on the same
+                        // debounce as adds so rapid deletes coalesce.
+                        if let sync {
+                            suggestions.refresh(pantryNames: model.items.map(\.name), via: sync, debounce: .seconds(1.5))
+                        }
+                    }
+                }
+                AddPantryChip { addPresented = true }
+            }
+
+            if model.items.isEmpty {
+                Text("Add what's in your kitchen so we can suggest recipes using it.")
+                    .font(.footnote)
+                    .foregroundStyle(Color.textSecondary)
+            }
+        }
+    }
+
+    /// Sentence-case a stored pantry name for DISPLAY only (stored value is
+    /// unchanged): first letter upper, remainder lower — so "avocado", "AVOCADO"
+    /// and "Avocado" all render as "Avocado".
+    static func displayName(_ raw: String) -> String {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let first = trimmed.first else { return trimmed }
+        return first.uppercased() + trimmed.dropFirst().lowercased()
+    }
+
+    // MARK: - Suggestions
+
+    /// Cache matches to display, ranked. (The ranking function + its unit test
+    /// land in RecipeKit; this reads the server order until then.)
+    private var rankedMatches: [PantrySuggestion] { suggestions.matches }
+
     @ViewBuilder
-    private var suggestionsSections: some View {
+    private var suggestionsContent: some View {
         if suggestions.isInitialLoading {
-            Section {
+            VStack(alignment: .leading, spacing: 10) {
+                sectionHeader("Suggestions")
                 HStack(spacing: 10) {
-                    // Tint with the sage accent instead of the system default gray.
-                    ProgressView()
-                        .tint(Color.accentColor)
-                    // Generic, persistent label: results resolve into one OR two
-                    // sections ("Cook with what you have" / "Ideas to try"), so a
-                    // single-list phrasing would over-promise. Matches the
-                    // "Suggestions" header above.
+                    ProgressView().tint(Color.accentColor)
                     Text("Finding suggestions…")
                         .font(.subheadline)
                         .foregroundStyle(Color.textSecondary)
                     Spacer(minLength: 0)
                 }
                 .padding(.vertical, 4)
-                // Same card background / corner radius as the suggestion + kitchen
-                // rows, so the loading state reads as part of the Kitchen tab
-                // rather than a plain rect.
-                .cardRow(bordered: false)
-            } header: {
-                sectionHeader("Suggestions")
             }
         } else {
-            if !suggestions.matches.isEmpty {
-                Section {
-                    ForEach(suggestions.matches) { suggestionRow($0) }
-                } header: {
-                    sectionHeader("Cook with what you have")
+            if !rankedMatches.isEmpty {
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack(spacing: 8) {
+                        sectionHeader("Cook with what you have")
+                        if suggestions.isRefreshing {
+                            ProgressView().controlSize(.mini).tint(Color.accentColor)
+                        }
+                    }
+                    Text("Closest matches first")
+                        .font(.caption)
+                        .foregroundStyle(Color.textSecondary)
+                    ForEach(rankedMatches) { suggestionRow($0) }
                 }
             }
             if !suggestions.generated.isEmpty {
-                Section {
-                    ForEach(suggestions.generated) { suggestionRow($0) }
-                } header: {
+                VStack(alignment: .leading, spacing: 10) {
                     HStack(spacing: 8) {
                         sectionHeader("Ideas to try")
-                        // Lightweight in-section indicator while a debounced
-                        // refresh is in flight — the existing ideas stay visible
-                        // and tappable, so pantry edits still feel responsive.
                         if suggestions.isRefreshing {
-                            ProgressView()
-                                .controlSize(.mini)
-                                .tint(Color.accentColor)
+                            ProgressView().controlSize(.mini).tint(Color.accentColor)
                         }
                     }
+                    ForEach(suggestions.generated) { suggestionRow($0) }
                 }
             }
         }
@@ -206,18 +213,9 @@ struct KitchenView: View {
             selectedRecipe = suggestion.recipe
         } label: {
             SuggestionRow(suggestion: suggestion)
+                .card(bordered: false)
         }
         .buttonStyle(.plain)
-        .cardRow(bordered: false)
-    }
-
-    private var emptyState: some View {
-        ContentUnavailableView {
-            Label("Your kitchen is empty", systemImage: "refrigerator")
-        } description: {
-            Text("Add what's in your kitchen so we can suggest recipes using it")
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private func sectionHeader(_ title: String) -> some View {
@@ -228,31 +226,55 @@ struct KitchenView: View {
     }
 }
 
-// MARK: - Row (ingredient glyph + name; no checked-state affordance)
+// MARK: - Pantry chip (cream, name only — no emoji; long-press to remove)
 
-private struct KitchenRow: View {
-    let text: String
-    let icon: GroceryItemIcon
+private struct PantryChip: View {
+    let name: String
+    let onRemove: () -> Void
 
     var body: some View {
-        HStack(spacing: 12) {
-            IngredientIconGlyph(icon: icon, size: 30)
-                .accessibilityHidden(true)
-
-            Text(text)
-                .font(.body)
-                .foregroundStyle(Color.textPrimary)
-
-            Spacer(minLength: 0)
-        }
-        .contentShape(Rectangle())
+        Text(name)
+            .font(.subheadline)
+            .foregroundStyle(Color.textPrimary)
+            .lineLimit(1)
+            .padding(.horizontal, 14)
+            .frame(height: 40)
+            .background(Capsule().fill(Color.creamTint))  // 40pt high → 20pt radius
+            .contextMenu {
+                Button(role: .destructive, action: onRemove) {
+                    Label("Remove", systemImage: "trash")
+                }
+            }
     }
 }
 
-// MARK: - Suggestion row (image + title + inline match/AI metadata line)
+/// The trailing outlined "+ Add" chip that opens the add-item sheet.
+private struct AddPantryChip: View {
+    let onAdd: () -> Void
+
+    var body: some View {
+        Button(action: onAdd) {
+            Label("Add", systemImage: "plus")
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(Color.accentColor)
+                .padding(.horizontal, 14)
+                .frame(height: 40)
+                .overlay(Capsule().strokeBorder(Color.hairline, lineWidth: 1))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Add pantry item")
+    }
+}
+
+// MARK: - Suggestion row (photo + serif name + coverage bar + AI-suggested pill)
 
 private struct SuggestionRow: View {
     let suggestion: PantrySuggestion
+
+    private var fraction: CGFloat {
+        let total = suggestion.match.totalCount
+        return total > 0 ? CGFloat(suggestion.match.haveCount) / CGFloat(total) : 0
+    }
 
     var body: some View {
         HStack(spacing: 14) {
@@ -260,19 +282,28 @@ private struct SuggestionRow: View {
                 imageUrl: suggestion.recipe.imageUrl,
                 fallbackSeed: suggestion.recipe.recipeId,
                 fallbackTitle: suggestion.recipe.title,
-                placeholderSymbolSize: 20
+                placeholderSymbolSize: 22
             )
-            .frame(width: 56, height: 56)
-            .clipShape(RoundedRectangle(cornerRadius: 12))
+            .frame(width: 60, height: 60)
+            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
 
-            // Title + a single muted metadata line (no pills). Spacing is tight
-            // now that the old two-pill row collapsed to one line of text.
-            VStack(alignment: .leading, spacing: 3) {
+            VStack(alignment: .leading, spacing: 6) {
                 Text(suggestion.recipe.title)
-                    .font(.appRowTitle)
+                    .font(.editorialTitle(size: 16, relativeTo: .body))
+                    .foregroundStyle(Color.textPrimary)
                     .lineLimit(2)
 
-                metadataLine
+                HStack(spacing: 8) {
+                    Text("\(suggestion.match.haveCount) of \(suggestion.match.totalCount) ingredients")
+                        .font(.caption)
+                        .foregroundStyle(Color.textSecondary)
+                    Spacer(minLength: 0)
+                    if suggestion.recipe.isGenerated {
+                        AISuggestedPill()
+                    }
+                }
+
+                CoverageBar(fraction: fraction)
             }
 
             Spacer(minLength: 0)
@@ -280,24 +311,35 @@ private struct SuggestionRow: View {
         .padding(.vertical, 4)
         .contentShape(Rectangle())
     }
+}
 
-    /// One muted, container-less line beneath the title: the ingredient fraction,
-    /// and — only for generation-fallback results (same gate as before) — a
-    /// middle-dot, a small sparkle, and an italic "AI suggested". Cache matches
-    /// (e.g. "Cook with what you have") show only the fraction. A single
-    /// `textSecondary` from the existing palette carries the whole line.
-    private var metadataLine: some View {
-        var text = Text(suggestion.match.ingredientSummary)
-        if suggestion.recipe.isGenerated {
-            text = text
-                + Text("  ·  ")
-                + Text(Image(systemName: "sparkles"))
-                + Text(" AI suggested").italic()
+/// A thin coverage bar: sage fill over a hairline track, 4pt tall.
+private struct CoverageBar: View {
+    let fraction: CGFloat
+
+    var body: some View {
+        GeometryReader { geo in
+            ZStack(alignment: .leading) {
+                Capsule().fill(Color.hairline)
+                Capsule().fill(Color.accentColor)
+                    .frame(width: max(0, geo.size.width * fraction))
+            }
         }
-        return text
-            .font(.caption)
-            .foregroundStyle(Color.textSecondary)
-            .lineLimit(1)
+        .frame(height: 4)
+        .accessibilityHidden(true)
+    }
+}
+
+/// The "AI suggested" marker: a small cream pill with a sparkle symbol,
+/// replacing the previous inline italic text.
+private struct AISuggestedPill: View {
+    var body: some View {
+        Label("AI suggested", systemImage: "sparkles")
+            .font(.caption2.weight(.semibold))
+            .foregroundStyle(Color.accentColor)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 3)
+            .background(Capsule().fill(Color.creamTint))
     }
 }
 
