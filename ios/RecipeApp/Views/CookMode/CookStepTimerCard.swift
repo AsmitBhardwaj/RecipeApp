@@ -66,7 +66,7 @@ struct CookStepTimerCard: View {
             }
             .padding(.vertical, 4)
         }
-        .tornEdgeCard(padding: 18)
+        .card(padding: 18)
     }
 
     private func statusLabel(expired: Bool, running: Bool) -> String {

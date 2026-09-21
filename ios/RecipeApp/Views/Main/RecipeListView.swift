@@ -65,11 +65,11 @@ struct RecipeListView: View {
                             onDismiss: { jobs.dismissFailed(jobId: failedJob.jobId) },
                             onPasteText: failedJob.canPasteText ? { pasteTarget = failedJob } : nil
                         )
-                        .tornEdgeCardRow(bordered: false)
+                        .cardRow(bordered: false)
                     }
                     ForEach(pendingJobs) { pendingJob in
                         ProcessingCardView(job: pendingJob)
-                            .tornEdgeCardRow(bordered: false)
+                            .cardRow(bordered: false)
                     }
                     ForEach(displayedRecipes) { recipe in
                         NavigationLink(value: recipe) {
@@ -77,7 +77,7 @@ struct RecipeListView: View {
                         }
                         // Recipes list uses plain solid cards (no dashed border);
                         // the torn-edge border stays the default elsewhere.
-                        .tornEdgeCardRow(bordered: false)
+                        .cardRow(bordered: false)
                     }
                 }
                 .listStyle(.plain)

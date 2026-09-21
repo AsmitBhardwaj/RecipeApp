@@ -108,7 +108,7 @@ struct MealPlanView: View {
             Text("Nothing planned")
                 .font(.subheadline)
                 .foregroundStyle(Color.textSecondary)
-                .tornEdgeCardRow(bordered: false)
+                .cardRow(bordered: false)
         } else {
             ForEach(MealSlot.allCases) { slot in
                 let slotEntries = dayEntries.filter { $0.mealSlot == slot }
@@ -121,7 +121,7 @@ struct MealPlanView: View {
                             MealPlanEntryRow(entry: entry)
                         }
                         .buttonStyle(.plain)
-                        .tornEdgeCardRow(bordered: false)
+                        .cardRow(bordered: false)
                         .swipeActions(edge: .trailing) {
                             Button(role: .destructive) {
                                 plan.remove(entry)
@@ -402,7 +402,7 @@ private struct SlotList: View {
                           systemImage: slot.iconName,
                           tint: Color.accentColor)
             }
-            .tornEdgeCardRow()
+            .cardRow()
         }
         .listStyle(.plain)
         .scrollContentBackground(.hidden)
@@ -438,7 +438,7 @@ private struct SourceList: View {
                 AssignRow(title: "All Recipes", subtitle: nil,
                           systemImage: "square.stack", tint: Color.secondaryAccent)
             }
-            .tornEdgeCardRow()
+            .cardRow()
 
             if !cookbooks.cookbooks.isEmpty {
                 SectionLabel(text: "Cookbooks")
@@ -447,7 +447,7 @@ private struct SourceList: View {
                         AssignRow(title: cookbook.name, subtitle: nil,
                                   systemImage: "book.closed", tint: Color.accentColor)
                     }
-                    .tornEdgeCardRow()
+                    .cardRow()
                 }
             }
         }
@@ -513,7 +513,7 @@ private struct RecipeList: View {
                         RecipeRowView(recipe: recipe)
                     }
                     .buttonStyle(.plain)
-                    .tornEdgeCardRow()
+                    .cardRow()
                 }
                 .listStyle(.plain)
                 .searchable(text: $search, prompt: "Search recipes")

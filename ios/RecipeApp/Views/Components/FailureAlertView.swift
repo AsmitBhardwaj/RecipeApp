@@ -73,7 +73,7 @@ struct FailureAlertView: View {
 
 #Preview {
     FailureAlertView(
-        title: "Couldn't add recipe 😔",
+        title: "Couldn’t add recipe",
         message: "We couldn't find a recipe on this page.",
         onDismiss: {}
     )

@@ -18,26 +18,14 @@
 import SwiftUI
 
 extension View {
-    /// Replaces the default system background of a screen with the warm cream
-    /// app background, plus a very subtle tiled paper-grain texture. Hides the
-    /// default scroll/list background so `List` and `Form` show cream rather than
+    /// Fills a screen with the flat app background — pure white in light mode,
+    /// near-black in dark (the adaptive `Theme.background` / `AppBackground`
+    /// token). No texture, gradient or tint. Hides the default scroll/list
+    /// background so `List` and `Form` sit on the same flat colour rather than
     /// `systemGroupedBackground`.
-    ///
-    /// The grain is the single, app-wide texture seam: it lives strictly BEHIND
-    /// content here (never on cards, buttons, or text), tiles a light/dark
-    /// `PaperGrain` asset at low opacity, and never intercepts touches.
     func appBackground() -> some View {
         self
             .scrollContentBackground(.hidden)
-            .background {
-                Color.appBackground
-                    .overlay {
-                        Image("PaperGrain")
-                            .resizable(resizingMode: .tile)
-                            .opacity(0.6)
-                            .allowsHitTesting(false)
-                    }
-                    .ignoresSafeArea()
-            }
+            .background(Theme.background.ignoresSafeArea())
     }
 }

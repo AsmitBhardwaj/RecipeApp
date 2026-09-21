@@ -95,7 +95,7 @@ struct FeedbackView: View {
     private func card<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
         VStack(alignment: .leading, spacing: 8, content: content)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .tornEdgeCard()
+            .card()
     }
 
     private var submitButton: some View {

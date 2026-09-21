@@ -145,11 +145,11 @@ struct CookbooksGridView: View {
                         onDismiss: { jobs.dismissFailed(jobId: failedJob.jobId) },
                         onPasteText: failedJob.canPasteText ? { pasteTarget = failedJob } : nil
                     )
-                    .tornEdgeCard()
+                    .card()
                 }
                 ForEach(jobs.pending) { pendingJob in
                     ProcessingCardView(job: pendingJob)
-                        .tornEdgeCard()
+                        .card()
                 }
 
                 LazyVGrid(columns: columns, spacing: 14) {
@@ -221,7 +221,7 @@ private struct CookbookCard: View {
                 .foregroundStyle(Color.textSecondary)
         }
         .frame(maxWidth: .infinity, minHeight: 132, alignment: .leading)
-        .tornEdgeCard(bordered: false)
+        .card(bordered: false)
     }
 }
 

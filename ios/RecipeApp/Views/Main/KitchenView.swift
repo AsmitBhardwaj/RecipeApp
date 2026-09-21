@@ -114,7 +114,7 @@ struct KitchenView: View {
                             text: item.name,
                             icon: GroceryItemIconResolver.icon(for: item.name)
                         )
-                        .tornEdgeCardRow(bordered: false)
+                        .cardRow(bordered: false)
                         .swipeActions(edge: .trailing) {
                             Button(role: .destructive) {
                                 model.remove(item)
@@ -162,7 +162,7 @@ struct KitchenView: View {
                 // Same card background / corner radius as the suggestion + kitchen
                 // rows, so the loading state reads as part of the Kitchen tab
                 // rather than a plain rect.
-                .tornEdgeCardRow(bordered: false)
+                .cardRow(bordered: false)
             } header: {
                 sectionHeader("Suggestions")
             }
@@ -201,7 +201,7 @@ struct KitchenView: View {
             SuggestionRow(suggestion: suggestion)
         }
         .buttonStyle(.plain)
-        .tornEdgeCardRow(bordered: false)
+        .cardRow(bordered: false)
     }
 
     private var emptyState: some View {

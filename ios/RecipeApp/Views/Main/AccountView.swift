@@ -62,7 +62,7 @@ struct AccountView: View {
                 Toggle(isOn: darkModeBinding) {
                     Text("Dark Mode")
                 }
-                .tint(.green)  // native switch green, not the app's sage
+                .tint(Theme.accent)  // sage — selected state
             }
 
             Section("Feedback") {

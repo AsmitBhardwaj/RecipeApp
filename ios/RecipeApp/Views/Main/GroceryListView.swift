@@ -169,7 +169,7 @@ struct GroceryListView: View {
     }
 
     private var completionBanner: some View {
-        Text("All done! 🎉")
+        Label("All done!", systemImage: "checkmark.circle.fill")
             .font(.headline)
             .foregroundStyle(Color.white)
             .padding(.vertical, 10)
@@ -194,7 +194,7 @@ struct GroceryListView: View {
                         Text(unresolvedNote)
                             .font(.caption)
                             .foregroundStyle(Color.textSecondary)
-                            .tornEdgeCardRow(bordered: false)
+                            .cardRow(bordered: false)
                     }
                 }
 
@@ -210,7 +210,7 @@ struct GroceryListView: View {
                             ) {
                                 toggle(key)
                             }
-                            .tornEdgeCardRow(bordered: false)
+                            .cardRow(bordered: false)
                         }
                     } header: {
                         sectionHeader(section.category.displayName)
@@ -228,7 +228,7 @@ struct GroceryListView: View {
                             ) {
                                 toggle(item.checkKey)
                             }
-                            .tornEdgeCardRow(bordered: false)
+                            .cardRow(bordered: false)
                             .swipeActions(edge: .trailing) {
                                 Button(role: .destructive) {
                                     model.removeManual(item)

@@ -105,7 +105,7 @@ struct MainTabView: View {
         .overlay {
             if let alert = jobs.failureAlert {
                 FailureAlertView(
-                    title: "Couldn't add recipe 😔",
+                    title: "Couldn’t add recipe",
                     message: alert.message,
                     onDismiss: { jobs.clearFailureAlert() }
                 )
