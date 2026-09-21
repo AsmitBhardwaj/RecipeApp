@@ -4,8 +4,9 @@
 //
 //  The single place the editorial display font is defined. DM Serif Display
 //  (SIL OFL, bundled under RecipeApp/Fonts/ with its OFL.txt) is used ONLY as a
-//  deliberate accent — page titles and recipe titles — never for body text, UI
-//  chrome, or small labels. Everything else stays on the system sans font.
+//  deliberate accent — screen titles, recipe names, and empty-state headlines —
+//  never for body text, UI chrome, day headers, section labels, or small labels.
+//  Everything else stays on the system sans font.
 //
 //  The font name string lives here and nowhere else, so swapping the display
 //  face later is a one-line change.
@@ -17,8 +18,9 @@ extension Font {
     /// The editorial/cookbook display face (DM Serif Display). `relativeTo`
     /// keeps it scaling with Dynamic Type rather than pinning a fixed size.
     ///
-    /// Reserved for HEADERS: screen titles, section titles, and card/collection
-    /// titles. Body text uses the system styles below, never this face.
+    /// Reserved for: screen titles, recipe names, and empty-state headlines.
+    /// Everything else — day headers, section labels, body text — uses the system
+    /// styles below, never this face.
     static func editorialTitle(size: CGFloat, relativeTo style: Font.TextStyle = .title) -> Font {
         .custom("DMSerifDisplay-Regular", size: size, relativeTo: style)
     }

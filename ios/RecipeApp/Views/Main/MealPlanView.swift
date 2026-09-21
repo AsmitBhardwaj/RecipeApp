@@ -257,7 +257,8 @@ private struct WeekSwitcherBar: View {
 
 /// The leading date column: weekday abbreviation, day number, and — only when a
 /// day holds 2+ meals — a small "N meals" caption. Today reads in the sage
-/// accent (system font throughout; serif is reserved for titles + recipe names).
+/// accent (system font throughout; serif is reserved for screen titles, recipe
+/// names, and empty-state headlines).
 private struct DateColumn: View {
     let date: Date
     let isToday: Bool
