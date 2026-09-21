@@ -66,6 +66,10 @@ struct AccountView: View {
                 .padding(.vertical, 6)
             }
 
+            // Platter Pro row — DEBUG-only. The paywall runs on mock purchasing,
+            // so the whole row (upgrade + manage) is compiled out of Release until
+            // the real RevenueCat/EntitlementManager implementation exists.
+            #if DEBUG
             Section {
                 if paywall.isPro {
                     Button {
@@ -95,6 +99,7 @@ struct AccountView: View {
                     .foregroundStyle(.primary)
                 }
             }
+            #endif
 
             Section("Appearance") {
                 Toggle(isOn: darkModeBinding) {

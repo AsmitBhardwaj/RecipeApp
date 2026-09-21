@@ -341,6 +341,9 @@ struct SafariView: UIViewControllerRepresentable {
 
 // MARK: - Previews
 
+// DEBUG-only: these previews construct the mock store, which is compiled out of
+// Release (see MockPaywall.swift), so the previews must be gated to match.
+#if DEBUG
 #Preview("importLimit · trial") {
     PaywallView(trigger: .importLimit,
                 entitlements: MockEntitlementProvider(freeImportLimit: 10),
@@ -365,3 +368,4 @@ struct SafariView: UIViewControllerRepresentable {
                 purchasing: MockPaywallPurchasing(scenario: .trialEligible))
         .environment(\.dynamicTypeSize, .accessibility5)
 }
+#endif

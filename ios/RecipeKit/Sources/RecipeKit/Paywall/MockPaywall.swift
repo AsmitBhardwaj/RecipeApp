@@ -13,6 +13,11 @@
 
 import Foundation
 
+// The paywall's mock "store" is DEBUG-only: it must never be compiled into a
+// Release build. Previews, unit tests and the screenshot harness (all DEBUG)
+// are the only callers until the real RevenueCat/EntitlementManager lands.
+#if DEBUG
+
 /// Switchable behaviors for `MockPaywallPurchasing`.
 public enum PaywallMockScenario: Equatable {
     case trialEligible
@@ -106,3 +111,5 @@ public final class MockPaywallPurchasing: PaywallPurchasing {
         }
     }
 }
+
+#endif

@@ -107,12 +107,17 @@ struct MainTabView: View {
         }
         .environmentObject(paywall)
         // Platter Pro paywall, presented app-wide by PaywallCenter (import limit,
-        // pantry, or the account row).
+        // pantry, or the account row). DEBUG-only: it runs on mock purchasing,
+        // so it is compiled out of Release until RevenueCat lands. In Release
+        // `paywall.active` is never set (present() is a no-op) and the mock-typed
+        // entitlements/purchasing don't exist, so this whole modifier is gated.
+        #if DEBUG
         .sheet(item: $paywall.active) { active in
             PaywallView(trigger: active.trigger,
                         entitlements: paywall.entitlements,
                         purchasing: paywall.purchasing)
         }
+        #endif
         // One-time failure modal, app-wide so it surfaces over whatever tab the
         // user is on when a live poll or foreground reconcile detects a failure.
         // Custom overlay (not a native .alert) so the OK button can be a filled
