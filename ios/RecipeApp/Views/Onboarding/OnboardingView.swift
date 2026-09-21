@@ -40,7 +40,10 @@ struct OnboardingView: View {
             OnboardingSignInScreen(auth: auth, page: page, total: pageCount).tag(3)
         }
         .tabViewStyle(.page(indexDisplayMode: .never))
-        .background(Color.appBackground.ignoresSafeArea())   // no black band while paging
+        // Single full-screen background (cream + paper grain) behind the
+        // transparent pages, so the grain is uniform and extends under the home
+        // indicator instead of leaving a flat strip.
+        .appBackground()
         .foregroundStyle(Color.textPrimary)
         .onChange(of: auth.isSignedIn) { _, signedIn in
             if signedIn { onComplete() }

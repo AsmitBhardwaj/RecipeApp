@@ -74,7 +74,7 @@ struct AuthMethodsView: View {
             .accessibilityLabel("Continue with Apple")
 
             if AppConfig.isGoogleConfigured || style.alwaysShowGoogle {
-                providerButton("Continue with Google", systemImage: "g.circle.fill", action: signInWithGoogle)
+                providerButton("Continue with Google", icon: { GoogleGLogo(size: 20) }, action: signInWithGoogle)
             }
 
             switch emailStyle {
@@ -86,7 +86,7 @@ struct AuthMethodsView: View {
                     emailForm
                         .transition(.opacity.combined(with: .move(edge: .top)))
                 } else {
-                    providerButton("Continue with Email", systemImage: "envelope.fill") {
+                    providerButton("Continue with Email", icon: { Image(systemName: "envelope.fill") }) {
                         withAnimation { showEmailForm = true }
                     }
                 }
@@ -147,10 +147,10 @@ struct AuthMethodsView: View {
         }
     }
 
-    private func providerButton(_ title: String, systemImage: String, action: @escaping () -> Void) -> some View {
+    private func providerButton<Icon: View>(_ title: String, @ViewBuilder icon: () -> Icon, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             HStack(spacing: 10) {
-                Image(systemName: systemImage)
+                icon()
                 Text(title).font(.headline)
             }
             .frame(maxWidth: .infinity)
@@ -243,5 +243,143 @@ struct AuthMethodsView: View {
 
     private func present(_ error: Error) {
         errorMessage = (error as? AuthError)?.userMessage ?? error.localizedDescription
+    }
+}
+
+// MARK: - Google "G" mark
+
+/// The official multicolour Google "G", drawn from Google's canonical logo
+/// geometry (48×48 viewBox) so it stays crisp at any size and needs no bundled
+/// SDK asset. Used on the Google sign-in button in place of a generic glyph.
+struct GoogleGLogo: View {
+    var size: CGFloat = 20
+
+    // (path data, fill) for the four coloured strokes of the mark.
+    private static let strokes: [(String, Color)] = [
+        ("M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z",
+         Color(red: 0.918, green: 0.263, blue: 0.208)),   // #EA4335 red
+        ("M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z",
+         Color(red: 0.259, green: 0.522, blue: 0.957)),   // #4285F4 blue
+        ("M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z",
+         Color(red: 0.984, green: 0.737, blue: 0.020)),   // #FBBC05 yellow
+        ("M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z",
+         Color(red: 0.204, green: 0.659, blue: 0.325))    // #34A853 green
+    ]
+
+    var body: some View {
+        ZStack {
+            ForEach(0..<GoogleGLogo.strokes.count, id: \.self) { i in
+                SVGPath(GoogleGLogo.strokes[i].0).fill(GoogleGLogo.strokes[i].1)
+            }
+        }
+        .frame(width: size, height: size)
+        .accessibilityHidden(true)
+    }
+}
+
+/// Minimal renderer for a 48×48-viewBox SVG path — supports just the commands
+/// used by the Google mark (M/m L/l H/h V/v C/c S/s Z), scaled to the frame.
+private struct SVGPath: Shape {
+    let commands: String
+    init(_ d: String) { commands = d }
+
+    func path(in rect: CGRect) -> Path {
+        let scale = min(rect.width, rect.height) / 48
+        func point(_ x: CGFloat, _ y: CGFloat) -> CGPoint {
+            CGPoint(x: rect.minX + x * scale, y: rect.minY + y * scale)
+        }
+        var path = Path()
+        var cur = CGPoint.zero
+        var start = CGPoint.zero
+        var reflection = CGPoint.zero   // reflection of last cubic's 2nd control
+
+        for (cmd, n) in SVGPath.tokenize(commands) {
+            let rel = cmd.first!.isLowercase
+            switch Character(cmd.uppercased()) {
+            case "M":
+                var x = n[0], y = n[1]
+                if rel { x += cur.x; y += cur.y }
+                cur = CGPoint(x: x, y: y); start = cur
+                path.move(to: point(cur.x, cur.y))
+                var i = 2
+                while i + 1 < n.count {   // extra pairs are implicit line-tos
+                    var lx = n[i], ly = n[i + 1]
+                    if rel { lx += cur.x; ly += cur.y }
+                    cur = CGPoint(x: lx, y: ly); path.addLine(to: point(cur.x, cur.y)); i += 2
+                }
+            case "L":
+                var i = 0
+                while i + 1 < n.count {
+                    var lx = n[i], ly = n[i + 1]
+                    if rel { lx += cur.x; ly += cur.y }
+                    cur = CGPoint(x: lx, y: ly); path.addLine(to: point(cur.x, cur.y)); i += 2
+                }
+            case "H":
+                for v in n { var x = v; if rel { x += cur.x }; cur.x = x; path.addLine(to: point(cur.x, cur.y)) }
+            case "V":
+                for v in n { var y = v; if rel { y += cur.y }; cur.y = y; path.addLine(to: point(cur.x, cur.y)) }
+            case "C":
+                var i = 0
+                while i + 5 < n.count {
+                    var c1 = CGPoint(x: n[i], y: n[i + 1])
+                    var c2 = CGPoint(x: n[i + 2], y: n[i + 3])
+                    var end = CGPoint(x: n[i + 4], y: n[i + 5])
+                    if rel {
+                        c1.x += cur.x; c1.y += cur.y; c2.x += cur.x; c2.y += cur.y; end.x += cur.x; end.y += cur.y
+                    }
+                    path.addCurve(to: point(end.x, end.y), control1: point(c1.x, c1.y), control2: point(c2.x, c2.y))
+                    reflection = CGPoint(x: 2 * end.x - c2.x, y: 2 * end.y - c2.y)
+                    cur = end; i += 6
+                }
+            case "S":
+                var i = 0
+                while i + 3 < n.count {
+                    var c2 = CGPoint(x: n[i], y: n[i + 1])
+                    var end = CGPoint(x: n[i + 2], y: n[i + 3])
+                    if rel { c2.x += cur.x; c2.y += cur.y; end.x += cur.x; end.y += cur.y }
+                    let c1 = reflection   // first control mirrors the previous curve
+                    path.addCurve(to: point(end.x, end.y), control1: point(c1.x, c1.y), control2: point(c2.x, c2.y))
+                    reflection = CGPoint(x: 2 * end.x - c2.x, y: 2 * end.y - c2.y)
+                    cur = end; i += 4
+                }
+            case "Z":
+                path.closeSubpath(); cur = start
+            default:
+                break
+            }
+        }
+        return path
+    }
+
+    /// Split a path string into (command, numbers) groups.
+    private static func tokenize(_ d: String) -> [(String, [CGFloat])] {
+        let commandSet = Set("MmLlHhVvCcSsZz")
+        var result: [(String, [CGFloat])] = []
+        var currentCmd: Character?
+        var numbers: [CGFloat] = []
+        func flush() { if let c = currentCmd { result.append((String(c), numbers)); numbers = [] } }
+
+        var i = d.startIndex
+        while i < d.endIndex {
+            let ch = d[i]
+            if commandSet.contains(ch) {
+                flush(); currentCmd = ch; numbers = []; i = d.index(after: i)
+            } else if ch == " " || ch == "," || ch == "\n" || ch == "\t" {
+                i = d.index(after: i)
+            } else {
+                var s = ""
+                if ch == "-" || ch == "+" { s.append(ch); i = d.index(after: i) }
+                var seenDot = false
+                while i < d.endIndex {
+                    let c = d[i]
+                    if c.isNumber { s.append(c); i = d.index(after: i) }
+                    else if c == "." && !seenDot { seenDot = true; s.append(c); i = d.index(after: i) }
+                    else { break }
+                }
+                if let v = Double(s) { numbers.append(CGFloat(v)) }
+            }
+        }
+        flush()
+        return result
     }
 }

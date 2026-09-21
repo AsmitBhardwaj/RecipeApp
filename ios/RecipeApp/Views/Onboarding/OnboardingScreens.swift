@@ -6,53 +6,64 @@
 //  OnboardingView for the paging container and auth-driven completion.
 //
 //  Every screen uses `OnboardingScaffold`: a 44pt header row (brand lockup +
-//  Skip on 1–3, empty on 4), a vertically-centred content group that scrolls
-//  when it is taller than the space, and a pinned bottom block (page dots + a
-//  primary button, or the sign-in stack on screen 4). All colours come from the
-//  app's adaptive tokens so the flow follows light/dark like every other screen.
+//  Skip on 1–3, empty on 4), a vertically-centred content group, and a pinned
+//  bottom block (page dots + a primary button, or the sign-in stack on screen
+//  4). All colours come from the app's adaptive tokens so the flow follows
+//  light/dark like every other screen.
+//
+//  Dynamic Type: only headlines, body copy and buttons scale. The header lockup
+//  and the decorative sample illustrations (screen 2 mock post + share sheet,
+//  screen 3 pantry panel) are capped at `.large` so they stay fixed. At
+//  accessibility sizes the decorative art (screen 1 photo, screen 2
+//  illustration, screen 3 panel) is hidden so the text gets the room; the middle
+//  group scrolls only if it still doesn't fit, with the dots and button pinned.
 //
 
 import SwiftUI
 
 // MARK: - Shared chrome
 
-/// Header, centred content, pinned bottom block. The content is wrapped in a
-/// ScrollView sized to the available height so it centres when short and scrolls
-/// when tall (largest Dynamic Type / small devices) without ever pushing the
-/// dots and button off-screen.
+/// Header, centred content, pinned bottom block. `content` receives the full
+/// screen height so a screen can size its illustration relative to the device.
+/// The content is wrapped in a ScrollView sized to the available height so it
+/// centres when it fits and scrolls only when it doesn't, without ever pushing
+/// the dots and button off-screen.
 struct OnboardingScaffold<Content: View, Bottom: View>: View {
     let page: Int
     let total: Int
     let showsLockup: Bool
     let onSkip: (() -> Void)?
-    @ViewBuilder var content: () -> Content
+    @ViewBuilder var content: (_ screenHeight: CGFloat) -> Content
     @ViewBuilder var bottom: () -> Bottom
 
     var body: some View {
-        VStack(spacing: 0) {
-            OnboardingHeader(showsLockup: showsLockup, onSkip: onSkip)
-                .frame(height: 44)
-                .padding(.horizontal, 20)
-                .padding(.top, 6)
-
-            GeometryReader { geo in
-                ScrollView(.vertical, showsIndicators: false) {
-                    content()
-                        .frame(maxWidth: .infinity, minHeight: geo.size.height, alignment: .center)
-                }
-            }
-
+        GeometryReader { screen in
             VStack(spacing: 0) {
-                OnboardingPageDots(current: page, total: total)
-                    .padding(.bottom, 20)
-                bottom()
+                OnboardingHeader(showsLockup: showsLockup, onSkip: onSkip)
+                    .frame(height: 44)
+                    .padding(.horizontal, 20)
+                    .padding(.top, 6)
+                    // The lockup + Skip are chrome, not content — keep them fixed.
+                    .dynamicTypeSize(...DynamicTypeSize.large)
+
+                GeometryReader { geo in
+                    ScrollView(.vertical, showsIndicators: false) {
+                        content(screen.size.height)
+                            .frame(maxWidth: .infinity, minHeight: geo.size.height, alignment: .center)
+                    }
+                }
+
+                VStack(spacing: 0) {
+                    OnboardingPageDots(current: page, total: total)
+                        .padding(.bottom, 20)
+                    bottom()
+                }
+                .padding(.horizontal, 24)
+                .padding(.top, 14)      // keep the dots clear of scrolled content on small screens
+                .padding(.bottom, 34)
             }
-            .padding(.horizontal, 24)
-            .padding(.top, 14)      // keep the dots clear of scrolled content on small screens
-            .padding(.bottom, 34)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .appBackground()
     }
 }
 
@@ -113,7 +124,8 @@ struct OnboardingPageDots: View {
 }
 
 /// The one primary button shape, used identically on every screen: 56pt tall,
-/// 16pt radius, sage fill, white semibold 17pt.
+/// 16pt radius, sage fill, white semibold. The label uses `.headline` so it
+/// participates in Dynamic Type, clamping only at the largest sizes.
 struct OnboardingPrimaryButton: View {
     let title: String
     let action: () -> Void
@@ -121,8 +133,10 @@ struct OnboardingPrimaryButton: View {
     var body: some View {
         Button(action: action) {
             Text(title)
-                .font(.system(size: 17, weight: .semibold))
+                .font(.headline)
                 .foregroundStyle(.white)
+                .lineLimit(1)
+                .minimumScaleFactor(0.75)
                 .frame(maxWidth: .infinity)
                 .frame(height: 56)
                 .background(Color.accentColor, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
@@ -131,8 +145,8 @@ struct OnboardingPrimaryButton: View {
     }
 }
 
-/// Centred body copy: 16pt (scales), 1.5 line height, body-text colour, wraps
-/// (never clips), 28pt side padding.
+/// Centred body copy: scales with Dynamic Type, 1.5 line height, body-text
+/// colour, wraps (never clips), 28pt side padding.
 private struct OnboardingBody: View {
     let text: String
 
@@ -144,6 +158,36 @@ private struct OnboardingBody: View {
             .multilineTextAlignment(.center)
             .fixedSize(horizontal: false, vertical: true)
             .padding(.horizontal, 28)
+    }
+}
+
+/// Scales a view down (never up) so its laid-out height fits `maxHeight`,
+/// reclaiming the freed vertical space (unlike a bare `.scaleEffect`). Used to
+/// shrink the screen-2 illustration on short devices so the copy still fits.
+private struct ScaleToFitHeight: ViewModifier {
+    let maxHeight: CGFloat
+    @State private var natural: CGFloat = 0
+
+    func body(content: Content) -> some View {
+        let scale = (natural > maxHeight && natural > 0) ? maxHeight / natural : 1
+        content
+            .background(GeometryReader { geo in
+                Color.clear.preference(key: HeightPreferenceKey.self, value: geo.size.height)
+            })
+            .onPreferenceChange(HeightPreferenceKey.self) { natural = $0 }
+            .scaleEffect(scale, anchor: .center)
+            .frame(height: natural > 0 ? natural * scale : nil)
+    }
+
+    private struct HeightPreferenceKey: PreferenceKey {
+        static var defaultValue: CGFloat = 0
+        static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = max(value, nextValue()) }
+    }
+}
+
+private extension View {
+    func scaleToFitHeight(_ maxHeight: CGFloat) -> some View {
+        modifier(ScaleToFitHeight(maxHeight: maxHeight))
     }
 }
 
@@ -191,17 +235,23 @@ struct OnboardingPromiseScreen: View {
     let onSkip: () -> Void
     let onContinue: () -> Void
 
-    var body: some View {
-        OnboardingScaffold(page: page, total: total, showsLockup: true, onSkip: onSkip) {
-            VStack(spacing: 0) {
-                Image("defaultRecipeImage1")
-                    .resizable()
-                    .scaledToFill()
-                    .frame(width: 300, height: 260)
-                    .clipShape(RoundedRectangle(cornerRadius: 28, style: .continuous))
-                    .accessibilityHidden(true)
+    @Environment(\.dynamicTypeSize) private var typeSize
 
-                Spacer().frame(height: 32)
+    var body: some View {
+        OnboardingScaffold(page: page, total: total, showsLockup: true, onSkip: onSkip) { screenHeight in
+            VStack(spacing: 0) {
+                if !typeSize.isAccessibilitySize {
+                    Image("defaultRecipeImage1")
+                        .resizable()
+                        .scaledToFill()
+                        // Scale the hero to the device so it never crowds the
+                        // copy on short screens (SE).
+                        .frame(width: 300, height: min(260, screenHeight * 0.28))
+                        .clipShape(RoundedRectangle(cornerRadius: 28, style: .continuous))
+                        .accessibilityHidden(true)
+
+                    Spacer().frame(height: 24)
+                }
 
                 VStack(spacing: 6) {
                     Text("Save the recipe.")
@@ -215,7 +265,7 @@ struct OnboardingPromiseScreen: View {
                 .fixedSize(horizontal: false, vertical: true)
                 .padding(.horizontal, 28)
 
-                Spacer().frame(height: 14)
+                Spacer().frame(height: 12)
 
                 OnboardingBody(text: "Platter pulls recipes out of Reels, TikToks and blogs, then helps you cook with what's already in your kitchen.")
             }
@@ -234,13 +284,20 @@ struct OnboardingShareScreen: View {
     let onSkip: () -> Void
     let onContinue: () -> Void
 
-    var body: some View {
-        OnboardingScaffold(page: page, total: total, showsLockup: true, onSkip: onSkip) {
-            VStack(spacing: 0) {
-                ShareImportIllustration()
-                    .padding(.horizontal, 32)
+    @Environment(\.dynamicTypeSize) private var typeSize
 
-                Spacer().frame(height: 32)
+    var body: some View {
+        OnboardingScaffold(page: page, total: total, showsLockup: true, onSkip: onSkip) { screenHeight in
+            VStack(spacing: 0) {
+                if !typeSize.isAccessibilitySize {
+                    ShareImportIllustration()
+                        // Shrink the illustration on short devices (SE) so the
+                        // headline and body still fit without scrolling.
+                        .scaleToFitHeight(screenHeight < 700 ? 210 : .infinity)
+                        .padding(.horizontal, 32)
+
+                    Spacer().frame(height: 16)
+                }
 
                 Text("Share it to Platter.\nThat's the whole trick.")
                     .font(.editorialTitle(size: 34, relativeTo: .title))
@@ -249,7 +306,7 @@ struct OnboardingShareScreen: View {
                     .fixedSize(horizontal: false, vertical: true)
                     .padding(.horizontal, 28)
 
-                Spacer().frame(height: 14)
+                Spacer().frame(height: 12)
 
                 OnboardingBody(text: "From Instagram, TikTok or any recipe site, tap Share and pick Platter. We pull out the ingredients and steps for you.")
             }
@@ -268,14 +325,18 @@ struct OnboardingKitchenScreen: View {
     let onSkip: () -> Void
     let onContinue: () -> Void
 
+    @Environment(\.dynamicTypeSize) private var typeSize
+
     private let pantry = ["Eggs", "Spinach", "Feta", "Rice", "Lemon", "Chickpeas"]
 
     var body: some View {
-        OnboardingScaffold(page: page, total: total, showsLockup: true, onSkip: onSkip) {
-            VStack(spacing: 30) {
-                kitchenPanel
+        OnboardingScaffold(page: page, total: total, showsLockup: true, onSkip: onSkip) { _ in
+            VStack(spacing: 16) {
+                if !typeSize.isAccessibilitySize {
+                    kitchenPanel
+                }
 
-                VStack(spacing: 14) {
+                VStack(spacing: 8) {
                     Text("Cook it with what you've got.")
                         .font(.editorialTitle(size: 34, relativeTo: .title))
                         .foregroundStyle(Color.textPrimary)
@@ -293,7 +354,9 @@ struct OnboardingKitchenScreen: View {
         }
     }
 
-    // One panel: pantry chips, a hairline, then two "you could make" rows.
+    // One compact panel: pantry chips, a hairline, then two "you could make"
+    // rows. It is a decorative sample (accessibilityHidden), so its text is
+    // capped at `.large` and it stays tight enough to fit alongside the copy.
     private var kitchenPanel: some View {
         VStack(alignment: .leading, spacing: 0) {
             sectionLabel("In your pantry")
@@ -301,22 +364,23 @@ struct OnboardingKitchenScreen: View {
             WrapLayout(spacing: 8, lineSpacing: 8) {
                 ForEach(pantry, id: \.self) { chip($0) }
             }
-            .padding(.top, 12)
+            .padding(.top, 8)
 
             Rectangle().fill(Color.hairline).frame(height: 1)
-                .padding(.top, 18)
-                .padding(.bottom, 16)
+                .padding(.top, 10)
+                .padding(.bottom, 10)
 
             sectionLabel("You could make")
-                .padding(.bottom, 4)
+                .padding(.bottom, 2)
 
             suggestionRow(thumb: "catRice1", title: "Lemon chickpea bowl",
                           subtitle: "Uses 4 of your items", showDivider: true)
             suggestionRow(thumb: "catBreakfast1", title: "Spinach & feta omelette",
                           subtitle: "Uses 3 of your items", showDivider: false)
         }
-        .padding(EdgeInsets(top: 18, leading: 18, bottom: 8, trailing: 18))
+        .padding(EdgeInsets(top: 12, leading: 16, bottom: 8, trailing: 16))
         .background(Color.surfacePanel, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+        .dynamicTypeSize(...DynamicTypeSize.large)
         .accessibilityElement()
         .accessibilityLabel("Example: with eggs, spinach, feta, rice, lemon and chickpeas in your pantry, Platter suggests a lemon chickpea bowl and a spinach and feta omelette.")
     }
@@ -333,7 +397,7 @@ struct OnboardingKitchenScreen: View {
         Text(text)
             .font(.system(size: 14, weight: .medium))
             .foregroundStyle(Color.chipText)
-            .padding(.vertical, 6)
+            .padding(.vertical, 5)
             .padding(.horizontal, 14)
             .background(Color.chipFill, in: Capsule())
     }
@@ -344,7 +408,7 @@ struct OnboardingKitchenScreen: View {
                 Image(thumb)
                     .resizable()
                     .scaledToFill()
-                    .frame(width: 44, height: 44)
+                    .frame(width: 38, height: 38)
                     .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                     .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 2) {
@@ -357,7 +421,7 @@ struct OnboardingKitchenScreen: View {
                 }
                 Spacer(minLength: 0)
             }
-            .padding(.vertical, 12)
+            .padding(.vertical, 8)
 
             if showDivider {
                 Rectangle().fill(Color.hairline).frame(height: 1)
@@ -373,18 +437,22 @@ struct OnboardingSignInScreen: View {
     let page: Int
     let total: Int
 
+    @Environment(\.dynamicTypeSize) private var typeSize
+
     // Terms falls back to Apple's standard app EULA until a Platter Terms page
     // exists; Privacy points at the live page.
     private let termsURL = URL(string: "https://www.apple.com/legal/internet-services/itunes/dev/stdeula/")!
     private let privacyURL = URL(string: "https://platterapp.tech/privacy")!
 
     var body: some View {
-        OnboardingScaffold(page: page, total: total, showsLockup: false, onSkip: nil) {
+        OnboardingScaffold(page: page, total: total, showsLockup: false, onSkip: nil) { _ in
             VStack(spacing: 0) {
-                PlatterMark(size: 88)
-                    .accessibilityHidden(true)
+                if !typeSize.isAccessibilitySize {
+                    PlatterMark(size: 88)
+                        .accessibilityHidden(true)
 
-                Spacer().frame(height: 28)
+                    Spacer().frame(height: 28)
+                }
 
                 Text("One account, every device.")
                     .font(.editorialTitle(size: 36, relativeTo: .largeTitle))
@@ -419,11 +487,11 @@ struct OnboardingSignInScreen: View {
         var terms = AttributedString("Terms")
         terms.link = termsURL
         terms.underlineStyle = .single
-        var mid = AttributedString(" and ")
+        let mid = AttributedString(" and ")
         var privacy = AttributedString("Privacy Policy")
         privacy.link = privacyURL
         privacy.underlineStyle = .single
-        var end = AttributedString(".")
+        let end = AttributedString(".")
         string.append(terms); string.append(mid); string.append(privacy); string.append(end)
         return string
     }

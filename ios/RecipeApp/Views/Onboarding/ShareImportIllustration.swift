@@ -39,6 +39,8 @@ struct ShareImportIllustration: View {
             shareSheet
         }
         .frame(maxWidth: 320)
+        // Decorative sample — its labels shouldn't grow with Dynamic Type.
+        .dynamicTypeSize(...DynamicTypeSize.large)
         .accessibilityElement()
         .accessibilityLabel("Tap Share on a recipe post, then choose Platter.")
     }
