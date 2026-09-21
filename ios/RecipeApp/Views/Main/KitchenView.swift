@@ -161,9 +161,11 @@ struct KitchenView: View {
 
     // MARK: - Suggestions
 
-    /// Cache matches to display, ranked. (The ranking function + its unit test
-    /// land in RecipeKit; this reads the server order until then.)
-    private var rankedMatches: [PantrySuggestion] { suggestions.matches }
+    /// Cache matches to display, ranked client-side (coverage desc, tie-break by
+    /// matched count; drop < 20% coverage unless that leaves fewer than 3).
+    private var rankedMatches: [PantrySuggestion] {
+        PantrySuggestionRanking.rank(suggestions.matches)
+    }
 
     @ViewBuilder
     private var suggestionsContent: some View {
