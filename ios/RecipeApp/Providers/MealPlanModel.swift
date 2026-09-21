@@ -121,6 +121,27 @@ final class MealPlanModel: ObservableObject {
         reload()
     }
 
+    /// Move an assignment to another day (the "Move to another day" long-press
+    /// action), keeping its meal slot. Like `replace`, this is remove-then-add at
+    /// the store level; the moved entry sorts to the end of the target day's
+    /// order (a fresh `addedAt`). No-op when the target day is unchanged.
+    func move(_ entry: MealPlanEntry, to date: Date) {
+        let targetKey = dayKey(for: date)
+        guard targetKey != entry.dayKey else { return }
+        store.remove(id: entry.id)
+        recordDelete(entry.id)
+        let moved = MealPlanEntry(
+            dayKey: targetKey,
+            mealSlot: entry.mealSlot,
+            recipeId: entry.recipeId,
+            recipeTitle: entry.recipeTitle,
+            recipeImageURL: entry.recipeImageURL
+        )
+        store.add(moved)
+        recordUpsert(moved)
+        reload()
+    }
+
     private func recordUpsert(_ entry: MealPlanEntry) {
         sync?.record(.mealPlan, itemId: entry.id, payload: SyncCodec.encode(entry))
     }

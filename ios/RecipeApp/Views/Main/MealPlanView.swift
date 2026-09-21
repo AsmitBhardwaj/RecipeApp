@@ -30,24 +30,28 @@ struct MealPlanView: View {
     @State private var assignFlow: AssignFlow?
     /// The assigned entry the user tapped, for the Change/Remove dialog.
     @State private var actionEntry: MealPlanEntry?
+    /// The entry being moved (long-press → "Move to another day"), drives the
+    /// day-picker dialog.
+    @State private var moveEntry: MealPlanEntry?
+
+    /// Resolves an entry's ingredient count from the in-session recipe list. The
+    /// meal-plan entry itself only snapshots title + image (see MealPlanEntry), so
+    /// the "N ingredients" caption is only shown when the full recipe is loaded
+    /// this session; otherwise it's omitted rather than guessed.
+    private var recipesById: [String: Recipe] {
+        Dictionary(jobs.recipes.map { ($0.recipeId, $0) }, uniquingKeysWith: { first, _ in first })
+    }
 
     var body: some View {
         VStack(spacing: 0) {
+            ScreenHeader("Meal Plan")
             WeekSwitcherBar(plan: plan)
             Divider()
             dayList
         }
         .foregroundStyle(Color.textPrimary)
         .appBackground()
-        .navigationTitle("Meal Plan")
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .principal) {
-                Text("Meal Plan")
-                    .font(.editorialTitle(size: 22))
-                    .foregroundStyle(Color.textPrimary)
-            }
-        }
+        .toolbar(.hidden, for: .navigationBar)
         .sheet(item: $assignFlow) { flow in
             MealAssignSheet(
                 mode: flow.mode,
@@ -75,74 +79,89 @@ struct MealPlanView: View {
         } message: { entry in
             Text(entry.recipeTitle)
         }
+        .confirmationDialog(
+            "Move to another day",
+            isPresented: Binding(get: { moveEntry != nil }, set: { if !$0 { moveEntry = nil } }),
+            presenting: moveEntry
+        ) { entry in
+            ForEach(otherDays(for: entry), id: \.self) { day in
+                Button(moveDayLabel(day)) { plan.move(entry, to: day); moveEntry = nil }
+            }
+            Button("Cancel", role: .cancel) { moveEntry = nil }
+        } message: { entry in
+            Text(entry.recipeTitle)
+        }
     }
 
     private var dayList: some View {
         List {
             ForEach(plan.weekDays, id: \.self) { day in
                 Section {
-                    daySlots(for: day)
-
-                    Button {
-                        assignFlow = .add(date: day)
-                    } label: {
-                        Label("Add to a meal", systemImage: "plus")
-                            .font(.subheadline)
-                            .foregroundStyle(.tint)
-                    }
-                    .listRowSeparator(.hidden)
-                    .listRowBackground(Color.clear)
-                } header: {
-                    DayHeader(date: day, isToday: plan.isToday(day))
+                    dayRows(for: day)
                 }
             }
         }
         .listStyle(.plain)
+        // Bottom inset so the last day never sits under the floating tab bar.
+        .contentMargins(.bottom, Theme.Spacing.tabBarClearance, for: .scrollContent)
     }
 
-    /// The four slots for a day, rendering only those that have assignments.
+    /// The rows for one day: an "Add a meal" row when empty, otherwise one row per
+    /// meal in order added — the date column on the first row, the single trailing
+    /// "+" on the last.
     @ViewBuilder
-    private func daySlots(for day: Date) -> some View {
-        let dayEntries = plan.entries(for: day)
-        if dayEntries.isEmpty {
-            Text("Nothing planned")
-                .font(.subheadline)
-                .foregroundStyle(Color.textSecondary)
-                .cardRow(bordered: false)
+    private func dayRows(for day: Date) -> some View {
+        let entries = plan.entries(for: day)
+        if entries.isEmpty {
+            EmptyDayRow(date: day, isToday: plan.isToday(day)) {
+                assignFlow = .add(date: day)
+            }
+            .listRowSeparator(.hidden)
+            .listRowBackground(Color.clear)
+            .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
         } else {
-            ForEach(MealSlot.allCases) { slot in
-                let slotEntries = dayEntries.filter { $0.mealSlot == slot }
-                if !slotEntries.isEmpty {
-                    slotLabel(slot)
-                    ForEach(slotEntries) { entry in
-                        Button {
-                            actionEntry = entry
-                        } label: {
-                            MealPlanEntryRow(entry: entry)
-                        }
-                        .buttonStyle(.plain)
-                        .cardRow(bordered: false)
-                        .swipeActions(edge: .trailing) {
-                            Button(role: .destructive) {
-                                plan.remove(entry)
-                            } label: {
-                                Label("Remove", systemImage: "trash")
-                            }
-                        }
+            ForEach(Array(entries.enumerated()), id: \.element.id) { index, entry in
+                MealAgendaRow(
+                    date: day,
+                    isToday: plan.isToday(day),
+                    showDateColumn: index == 0,
+                    mealCount: entries.count,
+                    entry: entry,
+                    ingredientCount: recipesById[entry.recipeId]?.ingredients.count,
+                    showAdd: index == entries.count - 1,
+                    onAdd: { assignFlow = .add(date: day) },
+                    onTap: { actionEntry = entry }
+                )
+                .listRowSeparator(.hidden)
+                .listRowBackground(Color.clear)
+                .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
+                .swipeActions(edge: .trailing) {
+                    Button(role: .destructive) { plan.remove(entry) } label: {
+                        Label("Remove", systemImage: "trash")
+                    }
+                }
+                .contextMenu {
+                    Button { moveEntry = entry } label: {
+                        Label("Move to another day", systemImage: "calendar")
+                    }
+                    Button(role: .destructive) { plan.remove(entry) } label: {
+                        Label("Remove", systemImage: "trash")
                     }
                 }
             }
         }
     }
 
-    private func slotLabel(_ slot: MealSlot) -> some View {
-        Text(slot.displayName.uppercased())
-            .font(.caption2.weight(.semibold))
-            .tracking(0.5)
-            .foregroundStyle(Color.textSecondary)
-            .listRowSeparator(.hidden)
-            .listRowBackground(Color.clear)
-            .padding(.top, 6)
+    /// The visible week's days other than the entry's current one — the targets in
+    /// the "Move to another day" picker.
+    private func otherDays(for entry: MealPlanEntry) -> [Date] {
+        plan.weekDays.filter { plan.dayKey(for: $0) != entry.dayKey }
+    }
+
+    private func moveDayLabel(_ day: Date) -> String {
+        let f = DateFormatter()
+        f.dateFormat = "EEEE, MMM d"
+        return f.string(from: day)
     }
 }
 
@@ -234,52 +253,125 @@ private struct WeekSwitcherBar: View {
     }
 }
 
-// MARK: - Day header
+// MARK: - Date column (left of each day's agenda rows)
 
-private struct DayHeader: View {
+/// The leading date column: weekday abbreviation, day number, and — only when a
+/// day holds 2+ meals — a small "N meals" caption. Today reads in the sage
+/// accent (system font throughout; serif is reserved for titles + recipe names).
+private struct DateColumn: View {
     let date: Date
     let isToday: Bool
+    /// 0 for an empty day; the caption shows only at 2+.
+    let mealCount: Int
+
+    private let width: CGFloat = 52
 
     var body: some View {
-        HStack(spacing: 6) {
-            Text(weekdayText)
-            if isToday {
-                Text("Today")
-                    .font(.caption2.weight(.bold))
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
-                    .background(Color.secondaryAccent, in: Capsule())
-                    .foregroundStyle(.white)
+        VStack(alignment: .leading, spacing: 1) {
+            Text(weekday)
+                .font(.caption2.weight(.semibold))
+                .textCase(.uppercase)
+                .foregroundStyle(isToday ? Color.accentColor : Color.textSecondary)
+            Text(dayNumber)
+                .font(.title3.weight(.semibold))
+                .foregroundStyle(isToday ? Color.accentColor : Color.textPrimary)
+            if mealCount >= 2 {
+                Text("\(mealCount) meals")
+                    .font(.caption2)
+                    .foregroundStyle(Color.textSecondary)
             }
         }
+        .frame(width: width, alignment: .leading)
     }
 
-    private var weekdayText: String {
-        let f = DateFormatter()
-        f.dateFormat = "EEEE, MMM d"
+    private var weekday: String {
+        let f = DateFormatter(); f.dateFormat = "EEE"
+        return f.string(from: date)
+    }
+
+    private var dayNumber: String {
+        let f = DateFormatter(); f.dateFormat = "d"
         return f.string(from: date)
     }
 }
 
-// MARK: - Assigned recipe row
+// MARK: - Empty-day row ("+ Add a meal")
 
-private struct MealPlanEntryRow: View {
-    let entry: MealPlanEntry
+private struct EmptyDayRow: View {
+    let date: Date
+    let isToday: Bool
+    let onAdd: () -> Void
 
     var body: some View {
-        HStack(spacing: 12) {
-            RecipeImageView(imageUrl: entry.recipeImageURL, fallbackSeed: entry.recipeId, fallbackTitle: entry.recipeTitle, placeholderSymbolSize: 16)
-                .frame(width: 44, height: 44)
-                .clipShape(RoundedRectangle(cornerRadius: 8))
-
-            Text(entry.recipeTitle)
-                .font(.subheadline)
-                .lineLimit(2)
-
+        HStack(alignment: .center, spacing: 12) {
+            DateColumn(date: date, isToday: isToday, mealCount: 0)
+            Button(action: onAdd) {
+                Label("Add a meal", systemImage: "plus")
+                    .font(.subheadline)
+                    .foregroundStyle(Color.accentColor)
+            }
+            .buttonStyle(.plain)
             Spacer(minLength: 0)
         }
-        .padding(.vertical, 2)
-        .contentShape(Rectangle())
+    }
+}
+
+// MARK: - Meal agenda row (one meal within a day)
+
+/// One meal in a day's stack. The date column renders on the first row only
+/// (`showDateColumn`), top-aligned so it sits beside the first meal; the single
+/// trailing "+" renders on the last row only (`showAdd`). Tapping the meal opens
+/// the Change/Remove dialog.
+private struct MealAgendaRow: View {
+    let date: Date
+    let isToday: Bool
+    let showDateColumn: Bool
+    let mealCount: Int
+    let entry: MealPlanEntry
+    let ingredientCount: Int?
+    let showAdd: Bool
+    let onAdd: () -> Void
+    let onTap: () -> Void
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            // Date column reserves its width on every row so meals stay aligned;
+            // it's only drawn on the first row of the day.
+            DateColumn(date: date, isToday: isToday, mealCount: mealCount)
+                .opacity(showDateColumn ? 1 : 0)
+
+            Button(action: onTap) {
+                HStack(spacing: 12) {
+                    RecipeImageView(imageUrl: entry.recipeImageURL,
+                                    fallbackSeed: entry.recipeId,
+                                    fallbackTitle: entry.recipeTitle,
+                                    placeholderSymbolSize: 18)
+                        .frame(width: 48, height: 48)
+                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(entry.recipeTitle)
+                            .font(.editorialTitle(size: 16, relativeTo: .body))
+                            .foregroundStyle(Color.textPrimary)
+                            .lineLimit(2)
+                            .multilineTextAlignment(.leading)
+                        if let ingredientCount {
+                            Text("\(ingredientCount) ingredient\(ingredientCount == 1 ? "" : "s")")
+                                .font(.caption)
+                                .foregroundStyle(Color.textSecondary)
+                        }
+                    }
+                    Spacer(minLength: 0)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            if showAdd {
+                CircleHeaderButton(systemImage: "plus", primary: true,
+                                   accessibilityLabel: "Add a meal", action: onAdd)
+            }
+        }
     }
 }
 
