@@ -20,6 +20,15 @@
 import SwiftUI
 import RecipeKit
 
+/// Lifts the grocery "can share today" state up to the Kitchen container so its
+/// header share button can enable/disable in step with the list's contents.
+struct GroceryCanSharePreferenceKey: PreferenceKey {
+    static let defaultValue = false
+    static func reduce(value: inout Bool, nextValue: () -> Bool) {
+        value = value || nextValue()
+    }
+}
+
 struct GroceryListView: View {
     @ObservedObject var jobs: PendingJobsModel
     @StateObject private var plan: MealPlanModel
@@ -99,6 +108,8 @@ struct GroceryListView: View {
         }
         .foregroundStyle(Color.textPrimary)
         .appBackground()
+        // Surface share-availability to the Kitchen container's header button.
+        .preference(key: GroceryCanSharePreferenceKey.self, value: canShareToday)
         .navigationTitle("Grocery List", active: !embedded)
         .navigationBarTitleDisplayMode(.inline)
         // Standalone (non-embedded) chrome only — inside the Kitchen tab the

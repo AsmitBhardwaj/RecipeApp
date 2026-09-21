@@ -35,12 +35,16 @@ struct KitchenTabView: View {
     @State private var groceryAddPresented = false
     @State private var grocerySharePresented = false
     @State private var pantryAddPresented = false
+    /// Whether today's grocery list has anything to share — reported up from the
+    /// Grocery segment so the header share button disables when there's nothing.
+    @State private var groceryCanShare = false
 
     var body: some View {
         VStack(spacing: 0) {
             ScreenHeader("Kitchen") {
                 if segment == .grocery {
                     CircleHeaderButton(systemImage: "square.and.arrow.up",
+                                       disabled: !groceryCanShare,
                                        accessibilityLabel: "Share today's grocery list") {
                         grocerySharePresented = true
                     }
@@ -77,6 +81,7 @@ struct KitchenTabView: View {
         }
         .appBackground()
         .toolbar(.hidden, for: .navigationBar)
+        .onPreferenceChange(GroceryCanSharePreferenceKey.self) { groceryCanShare = $0 }
     }
 }
 

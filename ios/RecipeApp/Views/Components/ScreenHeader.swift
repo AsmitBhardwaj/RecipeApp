@@ -53,6 +53,9 @@ extension ScreenHeader where Trailing == EmptyView {
 struct CircleHeaderButton: View {
     let systemImage: String
     var primary: Bool = false
+    /// When true the button is non-interactive and dimmed (mirrors a toolbar
+    /// button's `.disabled` treatment).
+    var disabled: Bool = false
     let accessibilityLabel: String
     let action: () -> Void
 
@@ -73,6 +76,8 @@ struct CircleHeaderButton: View {
                 }
         }
         .buttonStyle(.plain)
+        .disabled(disabled)
+        .opacity(disabled ? 0.4 : 1)
         .accessibilityLabel(accessibilityLabel)
     }
 }
