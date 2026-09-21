@@ -2,25 +2,20 @@
 //  CookbooksGridView.swift
 //  RecipeApp
 //
-//  The Recipes-tab home: a grid of cookbook cards. "All Recipes" is a permanent,
-//  non-deletable card showing every recipe regardless of assignment; user
-//  cookbooks follow; a "New Cookbook" card creates one. Tapping a card pushes a
-//  scoped `RecipeListView`.
+//  The Recipes-tab home: a large serif header (Account + Add buttons), a
+//  horizontal cookbook filter chip row ("All · N", one chip per cookbook, and a
+//  "+ New cookbook" text button), and a 2-column photo grid of recipes. "All" is
+//  selected by default; picking a cookbook filters the grid in place (no push).
+//  The final grid cell is an "Add a recipe" tile.
 //
-//  This view also owns the tab-level concerns that used to live on the flat list:
-//  loading/failed states, the add-recipe (+) and Account affordances, and — so a
-//  share is acknowledged the moment the user lands here (CLAUDE.md §6) — the
-//  in-flight (processing) and failed job cards, shown above the grid.
+//  This view also owns the tab-level concerns: loading/failed states, the
+//  add-recipe / Account affordances, and — so a share is acknowledged the moment
+//  the user lands here (CLAUDE.md §6) — the in-flight (processing) and failed job
+//  cards, shown above the grid.
 //
 
 import SwiftUI
 import RecipeKit
-
-/// What a cookbook card navigates to. `.all` is the synthetic "All Recipes".
-enum RecipeScope: Hashable {
-    case all
-    case cookbook(Cookbook)
-}
 
 struct CookbooksGridView: View {
     @ObservedObject var jobs: PendingJobsModel
@@ -34,6 +29,8 @@ struct CookbooksGridView: View {
     @State private var newCookbookName = ""
     /// The failed job the user is pasting recipe text for (drives the sheet).
     @State private var pasteTarget: PendingJobsModel.FailedJob?
+    /// Which cookbook (or All) filters the grid. Defaults to All.
+    @State private var filter: RecipeFilter = .all
 
     private let columns = [GridItem(.flexible(), spacing: 14), GridItem(.flexible(), spacing: 14)]
 
@@ -57,24 +54,7 @@ struct CookbooksGridView: View {
         }
         .foregroundStyle(Color.textPrimary)
         .appBackground()
-        .overlay(alignment: .bottomTrailing) {
-            if jobs.loadState == .loaded { addButton }
-        }
-        .navigationTitle("Recipes")
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .principal) {
-                Text("Recipes")
-                    .font(.editorialTitle(size: 22))
-                    .foregroundStyle(Color.textPrimary)
-            }
-            ToolbarItem(placement: .topBarTrailing) {
-                Button { showingAccount = true } label: {
-                    Image(systemName: "person.crop.circle")
-                }
-                .accessibilityLabel("Account")
-            }
-        }
+        .toolbar(.hidden, for: .navigationBar)
         .sheet(isPresented: $showingAdd) {
             AddRecipeView(jobs: jobs)
         }
@@ -101,34 +81,50 @@ struct CookbooksGridView: View {
         } message: {
             Text("Name your new cookbook.")
         }
-        // Scoped list push (All Recipes / a cookbook).
-        .navigationDestination(for: RecipeScope.self) { scope in
-            switch scope {
-            case .all:
-                RecipeListView(jobs: jobs, cookbooks: cookbooks, cookbook: nil)
-            case .cookbook(let cookbook):
-                RecipeListView(jobs: jobs, cookbooks: cookbooks, cookbook: cookbook)
-            }
-        }
-        // Recipe detail push (from any scoped list).
+        // Recipe detail push (from any recipe tile).
         .navigationDestination(for: Recipe.self) { recipe in
             RecipeDetailView(recipe: recipe, cookbooks: cookbooks, userScope: userScope)
         }
         .task { await jobs.load() }
     }
 
+    // MARK: - Header (shared across content states)
+
+    private var header: some View {
+        ScreenHeader("Recipes") {
+            CircleHeaderButton(systemImage: "person.crop.circle",
+                               accessibilityLabel: "Account") { showingAccount = true }
+            CircleHeaderButton(systemImage: "plus", primary: true,
+                               accessibilityLabel: "Add recipe") { showingAdd = true }
+        }
+    }
+
     // MARK: - Content
 
     /// Fresh account: nothing saved and nothing in flight → show the first-run
-    /// empty state instead of a grid whose only tiles are "All Recipes (0)".
+    /// empty state (under the header) instead of an empty grid.
     private var isLibraryEmpty: Bool {
         jobs.recipes.isEmpty && jobs.pending.isEmpty && jobs.failed.isEmpty && cookbooks.cookbooks.isEmpty
+    }
+
+    /// Recipes shown for the current filter.
+    private var displayedRecipes: [Recipe] {
+        switch filter {
+        case .all:
+            return jobs.recipes
+        case .cookbook(let id):
+            let ids = cookbooks.recipeIds(in: id)
+            return jobs.recipes.filter { ids.contains($0.recipeId) }
+        }
     }
 
     @ViewBuilder
     private var content: some View {
         if isLibraryEmpty {
-            ScrollView { EmptyLibraryView() }
+            ScrollView {
+                header
+                EmptyLibraryView()
+            }
         } else {
             gridContent
         }
@@ -136,9 +132,11 @@ struct CookbooksGridView: View {
 
     private var gridContent: some View {
         ScrollView {
-            LazyVStack(spacing: 14) {
+            LazyVStack(spacing: 14, pinnedViews: []) {
+                header
+
                 // In-flight / failed job cards first, so a just-submitted share is
-                // acknowledged here on the tab home.
+                // acknowledged here on the tab home (shown across all filters).
                 ForEach(jobs.failed) { failedJob in
                     FailedJobCardView(
                         job: failedJob,
@@ -146,103 +144,181 @@ struct CookbooksGridView: View {
                         onPasteText: failedJob.canPasteText ? { pasteTarget = failedJob } : nil
                     )
                     .card()
+                    .padding(.horizontal, 16)
                 }
                 ForEach(jobs.pending) { pendingJob in
                     ProcessingCardView(job: pendingJob)
                         .card()
+                        .padding(.horizontal, 16)
                 }
 
-                LazyVGrid(columns: columns, spacing: 14) {
-                    // Permanent "All Recipes" first.
-                    NavigationLink(value: RecipeScope.all) {
-                        CookbookCard(title: "All Recipes",
-                                     count: jobs.recipes.count,
-                                     systemImage: "square.stack",
-                                     isAllRecipes: true)
-                    }
-                    .buttonStyle(.plain)
+                CookbookChipRow(
+                    allCount: jobs.recipes.count,
+                    cookbooks: cookbooks,
+                    filter: $filter,
+                    onNewCookbook: { showingNewCookbook = true }
+                )
 
-                    ForEach(cookbooks.cookbooks) { cookbook in
-                        NavigationLink(value: RecipeScope.cookbook(cookbook)) {
-                            CookbookCard(title: cookbook.name,
-                                         count: cookbooks.recipeCount(in: cookbook.id),
-                                         systemImage: "book.closed",
-                                         isAllRecipes: false)
+                LazyVGrid(columns: columns, spacing: 14) {
+                    ForEach(displayedRecipes) { recipe in
+                        NavigationLink(value: recipe) {
+                            RecipePhotoCard(recipe: recipe)
                         }
                         .buttonStyle(.plain)
                     }
-
-                    NewCookbookCard { showingNewCookbook = true }
+                    // Trailing "Add a recipe" tile, always last.
+                    AddRecipeTile { showingAdd = true }
                 }
+                .padding(.horizontal, 16)
+                .padding(.top, 2)
             }
-            .padding(.horizontal, 16)
-            .padding(.top, 8)
-            .padding(.bottom, 96)  // clear the floating add button
+            .padding(.bottom, Theme.Spacing.tabBarClearance)  // clear the floating tab bar
         }
     }
+}
 
-    private var addButton: some View {
-        Button { showingAdd = true } label: {
-            Image(systemName: "plus")
-                .font(.title2.weight(.semibold))
-                .foregroundStyle(.white)
-                .frame(width: 56, height: 56)
-                .background(.tint, in: Circle())
-                .shadow(radius: 4, y: 2)
+// MARK: - Filter
+
+/// The Recipes-tab grid filter: everything, or one cookbook's members.
+private enum RecipeFilter: Hashable {
+    case all
+    case cookbook(String)  // cookbook id
+}
+
+// MARK: - Cookbook chip row
+
+private struct CookbookChipRow: View {
+    let allCount: Int
+    @ObservedObject var cookbooks: CookbooksModel
+    @Binding var filter: RecipeFilter
+    let onNewCookbook: () -> Void
+
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                FilterChip(title: "All", count: allCount, isSelected: filter == .all) {
+                    filter = .all
+                }
+                ForEach(cookbooks.cookbooks) { cookbook in
+                    FilterChip(
+                        title: cookbook.name,
+                        count: cookbooks.recipeCount(in: cookbook.id),
+                        isSelected: filter == .cookbook(cookbook.id)
+                    ) {
+                        filter = .cookbook(cookbook.id)
+                    }
+                }
+                Button(action: onNewCookbook) {
+                    Text("+ New cookbook")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(Color.accentColor)
+                        .padding(.horizontal, 6)
+                        .frame(height: 34)
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(.horizontal, 16)
         }
-        .padding(.trailing, 20)
-        .padding(.bottom, 20)
-        .accessibilityLabel("Add recipe")
+    }
+}
+
+/// A pill filter chip: sage fill + white text when selected, hairline-bordered
+/// surface otherwise. Shows "Title · N".
+private struct FilterChip: View {
+    let title: String
+    let count: Int
+    let isSelected: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Text("\(title) · \(count)")
+                .font(.subheadline.weight(.medium))
+                .foregroundStyle(isSelected ? Color.white : Color.textPrimary)
+                .lineLimit(1)
+                .padding(.horizontal, 14)
+                .frame(height: 34)
+                .background {
+                    if isSelected {
+                        Capsule().fill(Color.accentColor)
+                    } else {
+                        Capsule().fill(Color.surface)
+                            .overlay(Capsule().strokeBorder(Color.hairline, lineWidth: 1))
+                    }
+                }
+        }
+        .buttonStyle(.plain)
     }
 }
 
 // MARK: - Cards
 
-/// A cookbook tile in the editorial torn-edge style with a serif title.
-private struct CookbookCard: View {
-    let title: String
-    let count: Int
-    let systemImage: String
-    let isAllRecipes: Bool
+/// A recipe tile in the 2-column grid: square photo, serif name, ingredient count.
+private struct RecipePhotoCard: View {
+    let recipe: Recipe
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Image(systemName: systemImage)
-                .font(.title2)
-                .foregroundStyle(isAllRecipes ? Color.secondaryAccent : Color.accentColor)
-            Spacer(minLength: 0)
-            Text(title)
-                .font(.editorialTitle(size: 20, relativeTo: .title3))
+        VStack(alignment: .leading, spacing: 8) {
+            Color.clear
+                .aspectRatio(1, contentMode: .fit)
+                .overlay {
+                    RecipeImageView(imageUrl: recipe.imageUrl,
+                                    fallbackSeed: recipe.recipeId,
+                                    fallbackTitle: recipe.title,
+                                    placeholderSymbolSize: 28)
+                }
+                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+
+            Text(recipe.title)
+                .font(.editorialTitle(size: 18, relativeTo: .headline))
                 .foregroundStyle(Color.textPrimary)
                 .lineLimit(2)
                 .multilineTextAlignment(.leading)
-            Text(count == 1 ? "1 recipe" : "\(count) recipes")
+
+            Text(ingredientCountText)
                 .font(.caption)
                 .foregroundStyle(Color.textSecondary)
         }
-        .frame(maxWidth: .infinity, minHeight: 132, alignment: .leading)
-        .card(bordered: false)
+    }
+
+    private var ingredientCountText: String {
+        let n = recipe.ingredients.count
+        return "\(n) ingredient\(n == 1 ? "" : "s")"
     }
 }
 
-/// The "+ New Cookbook" tile — a solid card matching the others (no dashed border).
-private struct NewCookbookCard: View {
+/// The trailing "Add a recipe" tile: cream background, plus icon, hint text.
+private struct AddRecipeTile: View {
     let action: () -> Void
 
     var body: some View {
         Button(action: action) {
-            VStack(spacing: 10) {
-                Image(systemName: "plus")
-                    .font(.title2.weight(.semibold))
-                    .foregroundStyle(.tint)
-                Text("New Cookbook")
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(Color.textSecondary)
+            VStack(alignment: .leading, spacing: 8) {
+                Color.clear
+                    .aspectRatio(1, contentMode: .fit)
+                    .overlay {
+                        VStack(spacing: 10) {
+                            Image(systemName: "plus")
+                                .font(.title.weight(.semibold))
+                                .foregroundStyle(Color.accentColor)
+                            Text("Share a link from Instagram, TikTok or the web")
+                                .font(.caption)
+                                .foregroundStyle(Color.textSecondary)
+                                .multilineTextAlignment(.center)
+                                .padding(.horizontal, 12)
+                        }
+                    }
+                    .background(Color.creamTint)
+                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+
+                Text("Add a recipe")
+                    .font(.editorialTitle(size: 18, relativeTo: .headline))
+                    .foregroundStyle(Color.textPrimary)
+                    .lineLimit(1)
             }
-            .frame(maxWidth: .infinity, minHeight: 132)
-            .background(Color.appBackground, in: RoundedRectangle(cornerRadius: 14))
         }
         .buttonStyle(.plain)
+        .accessibilityLabel("Add a recipe")
     }
 }
 
