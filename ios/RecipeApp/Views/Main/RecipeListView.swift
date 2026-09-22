@@ -24,8 +24,14 @@ struct RecipeListView: View {
     /// nil = "All Recipes"; non-nil = a specific cookbook's members.
     var cookbook: Cookbook? = nil
 
+    @EnvironmentObject private var subscriptions: SubscriptionService
+
     /// The failed job the user is pasting recipe text for (drives the sheet).
     @State private var pasteTarget: PendingJobsModel.FailedJob?
+    /// Platter Pro paywall shown when a paste hits the free import limit (handed
+    /// off via `pendingPaywall` so we never stack two sheets).
+    @State private var showPaywall = false
+    @State private var pendingPaywall = false
 
     private var title: String { cookbook?.name ?? "All Recipes" }
 
@@ -94,8 +100,20 @@ struct RecipeListView: View {
                     .foregroundStyle(Color.textPrimary)
             }
         }
-        .sheet(item: $pasteTarget) { failedJob in
-            PasteRecipeTextView(jobs: jobs, failedJob: failedJob)
+        .sheet(item: $pasteTarget, onDismiss: presentPaywallIfPending) { failedJob in
+            PasteRecipeTextView(jobs: jobs, failedJob: failedJob, onLimitReached: { pendingPaywall = true })
+        }
+        .sheet(isPresented: $showPaywall) {
+            PlatterProPaywallView()
+                .environmentObject(subscriptions)
+        }
+    }
+
+    /// Show the paywall once the paste sheet that hit the import limit dismisses.
+    private func presentPaywallIfPending() {
+        if pendingPaywall {
+            pendingPaywall = false
+            showPaywall = true
         }
     }
 

@@ -76,6 +76,11 @@ struct ShareRootView: View {
         case working
         case success
         case failure(String)
+        /// The signed-in free account has hit its monthly import limit. Distinct
+        /// from `.failure` so we show an upgrade-oriented message — and, crucially,
+        /// we never persisted a PendingJob for this attempt, so the app shows no
+        /// stuck "Extracting…" card afterward.
+        case limitReached
     }
 
     var body: some View {
@@ -142,6 +147,20 @@ struct ShareRootView: View {
             Button("Close") { onFinish() }
                 .buttonStyle(.borderedProminent)
                 .padding(.top, 4)
+
+        case .limitReached:
+            Image(systemName: "sparkles")
+                .font(.largeTitle)
+                .foregroundStyle(sage)
+            Text("You've used your free imports this month")
+                .font(.headline)
+                .multilineTextAlignment(.center)
+            Text("Open Platter to upgrade to Pro for unlimited imports. This link wasn't saved — nothing is processing.")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+            filledButton("Close", action: onFinish)
+                .padding(.top, 6)
         }
     }
 
@@ -187,6 +206,10 @@ struct ShareRootView: View {
             // No auto-dismiss: the user taps "Keep browsing" to return to
             // Instagram/TikTok from the success state.
             phase = .success
+        } catch RecipeProviderError.freeLimitReached {
+            // Do NOT persist a PendingJob — there is no job, so the app must not
+            // show a processing card for this. Just tell the user to upgrade.
+            phase = .limitReached
         } catch let error as RecipeProviderError {
             phase = .failure(error.userMessage)
         } catch {

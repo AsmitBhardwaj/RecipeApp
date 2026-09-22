@@ -24,6 +24,10 @@ public enum RecipeProviderError: Error, Equatable {
     case jobFailed(code: String?, message: String?)
     /// The URL passed in was empty or not a valid URL.
     case invalidURL
+    /// The signed-in free account has reached its monthly import limit (HTTP 402,
+    /// backend code "free_limit_reached"). A distinct case — never a generic
+    /// failure — so the UI can route straight to the Platter Pro paywall.
+    case freeLimitReached
     /// The response wasn't shaped as expected (decoding failed, or a completed
     /// job carried no recipe).
     case invalidResponse(String)
@@ -45,6 +49,8 @@ public enum RecipeProviderError: Error, Equatable {
             return Self.failedJobMessage(code: code, backendMessage: message)
         case .invalidURL:
             return "That doesn't look like a valid link. Paste an Instagram, TikTok, or recipe-website URL."
+        case .freeLimitReached:
+            return "You've reached this month's free import limit. Upgrade to Platter Pro for unlimited imports."
         case .invalidResponse:
             return "We got an unexpected response from the server. Please try again."
         }

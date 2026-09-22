@@ -16,8 +16,9 @@
 //
 //  Why a custom overlay instead of `.presentationDetents`: the suggestion list
 //  AND the action buttons sit BELOW the focused field, and must stay above the
-//  keyboard on every device size. A sheet detent keeps the focused field visible
-//  but not content beneath it, so we drive our own keyboard-height offset here.
+//  keyboard on every device size. The overlay follows SwiftUI's keyboard safe
+//  area so its bottom edge stays attached to the keyboard without a second,
+//  manually-calculated inset.
 //
 
 import SwiftUI
@@ -43,7 +44,6 @@ struct AddToKitchenSheet: View {
     /// (independent of the cover's own transition, which is invisible thanks to
     /// the clear background).
     @State private var revealed = false
-    @State private var keyboardHeight: CGFloat = 0
     @FocusState private var fieldFocused: Bool
 
     private let catalog = IngredientCatalog.shared
@@ -69,27 +69,15 @@ struct AddToKitchenSheet: View {
             card
                 .offset(y: revealed ? 0 : 40)
                 .opacity(revealed ? 1 : 0)
-                // Own the keyboard inset ourselves so the WHOLE card (field +
-                // suggestions + buttons) rides above the keyboard on every size.
-                .padding(.bottom, keyboardHeight)
         }
-        .ignoresSafeArea(.keyboard, edges: .bottom)
+        // Extend through the home-indicator inset while still respecting the
+        // keyboard safe area. This makes the sheet touch the screen edge when
+        // the keyboard is hidden and the keyboard edge when it is shown.
+        .ignoresSafeArea(.container, edges: .bottom)
         .onAppear {
             withAnimation(.spring(response: 0.38, dampingFraction: 0.86)) { revealed = true }
             // Slight delay so focus (and the keyboard) animate in after the card.
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { fieldFocused = true }
-        }
-        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillChangeFrameNotification)) { note in
-            guard
-                let frame = note.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect
-            else { return }
-            let screen = UIScreen.main.bounds
-            // Height of the keyboard's intrusion into the screen (0 when hidden).
-            let overlap = max(0, screen.maxY - frame.minY)
-            withAnimation(.easeOut(duration: 0.25)) { keyboardHeight = overlap }
-        }
-        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
-            withAnimation(.easeOut(duration: 0.25)) { keyboardHeight = 0 }
         }
     }
 
@@ -161,27 +149,31 @@ struct AddToKitchenSheet: View {
     // MARK: - Type-ahead suggestions
 
     private var suggestionList: some View {
-        VStack(spacing: 0) {
-            ForEach(Array(suggestions.enumerated()), id: \.element) { index, name in
-                Button {
-                    // Fill only — do NOT auto-submit; the user still taps Add.
-                    text = name
-                    fieldFocused = true
-                } label: {
-                    HStack {
-                        highlighted(name)
-                        Spacer(minLength: 0)
+        ScrollView {
+            VStack(spacing: 0) {
+                ForEach(Array(suggestions.enumerated()), id: \.element) { index, name in
+                    Button {
+                        // Fill only — do NOT auto-submit; the user still taps Add.
+                        text = name
+                        fieldFocused = true
+                    } label: {
+                        HStack {
+                            highlighted(name)
+                            Spacer(minLength: 0)
+                        }
+                        .padding(.vertical, 11)
+                        .contentShape(Rectangle())
                     }
-                    .padding(.vertical, 11)
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
+                    .buttonStyle(.plain)
 
-                if index < suggestions.count - 1 {
-                    Divider().overlay(Color.textSecondary.opacity(0.12))
+                    if index < suggestions.count - 1 {
+                        Divider().overlay(Color.textSecondary.opacity(0.12))
+                    }
                 }
             }
         }
+        .scrollIndicators(.hidden)
+        .frame(maxHeight: 176)
         .padding(.horizontal, 4)
     }
 
@@ -238,7 +230,6 @@ struct AddToKitchenSheet: View {
         fieldFocused = false
         withAnimation(.easeIn(duration: 0.2)) {
             revealed = false
-            keyboardHeight = 0
         }
         // Let the fade/slide finish before tearing down the cover.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.22) {

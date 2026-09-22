@@ -56,7 +56,26 @@ class Confidence(BaseModel):
     overall: float = 0.0
     ingredients_complete: bool = False
     instructions_complete: bool = False
+    # KNOWN ISSUE (tracked, not fixed): this list is the LLM's own self-report and
+    # is not always consistent with the actual populated fields. Observed during
+    # live nutrition testing: a recipe came back with `servings` listed here as
+    # missing even though `servings.amount` was in fact populated (2.0). Nothing
+    # currently depends on missing_fields being accurate (it's advisory only), so
+    # this is intentionally left as-is — but anything that later drives real logic
+    # off missing_fields (e.g. a UI "incomplete recipe" prompt) must not trust it
+    # blindly; reconcile it against the actual fields first.
     missing_fields: List[str] = Field(default_factory=list)
+
+
+class CostEstimate(BaseModel):
+    """A labeled, location-independent cost estimate for a recipe (Plan on a
+    Budget — docs/budget-meal-planning.md §3.1/§3.4). `amount` is a rough basket
+    cost; the per-user displayed cost is `amount × regional_multiplier`, computed
+    at plan time. Always an ESTIMATE, never store-accurate."""
+
+    amount: float
+    currency: str = "USD"
+    basis: str = "llm-v1"  # provenance tag so the estimate's origin is legible
 
 
 class Nutrition(BaseModel):
@@ -153,6 +172,14 @@ class Recipe(BaseModel):
     # migration: pre-nutrition cached recipes decode it as null.
     nutrition: Optional[Nutrition] = None
 
+    # Plan on a Budget annotations (docs/budget-meal-planning.md §3.1). Populated
+    # at generation time for budget-plan recipes; null for every other recipe.
+    # Additive + nullable → live in the `data` JSON blob, no migration.
+    #   baseline_cost_estimate — location-independent basket cost (see CostEstimate).
+    #   health_signal          — a short human string, e.g. "High protein, low sugar".
+    baseline_cost_estimate: Optional[CostEstimate] = None
+    health_signal: Optional[str] = None
+
 
 class Job(BaseModel):
     job_id: str
@@ -165,6 +192,13 @@ class Job(BaseModel):
     extraction_method: str = "caption_only"
     created_at: str
     recipe_id: Optional[str] = None
+    # Verified account id (JWT `sub`) when the import was submitted signed-in;
+    # None for anonymous/legacy submissions. Distinct from `user_id`, which is the
+    # spoofable per-device X-User-Id. This is the key the free-import limit counts
+    # against (app/importlimit.py) so the count is per account, across devices and
+    # the Share Extension. Nullable + additive: lives in the jobs.data JSON blob,
+    # so no migration — pre-feature jobs decode it as null.
+    account_id: Optional[str] = None
     # Not in CLAUDE.md §4 — added so failures surface as a clear state instead
     # of an exception. `error_code` is a stable machine string; `error` is the
     # human-readable detail.

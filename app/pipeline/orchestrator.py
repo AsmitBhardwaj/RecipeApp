@@ -11,7 +11,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 
-from .. import config, db
+from .. import config, db, importlimit
 from ..models import Confidence, DishIdentification, Job, LLMRecipe, Recipe, UserRecipe
 from . import fetch, images, jsonld, llm, netguard, signal, urls, web
 
@@ -73,19 +73,31 @@ def _finalize(job: Job, recipe: Recipe) -> Job:
     job.error_code = None
     job.error = None
     db.save_job(job)
+    # Count this successful import against the account's monthly free-tier total.
+    # This is the SINGLE success chokepoint every path funnels through (fresh,
+    # cache hit, paste retry, web), so it's the one right place to record — and
+    # it's idempotent per job_id, so a paste retry of the same job never
+    # double-counts. No-op for anonymous imports (job.account_id is None).
+    importlimit.record_success(job.account_id, job.job_id, job.created_at)
     return job
 
 
-def create_job(url: str, user_id: str) -> Job:
+def create_job(url: str, user_id: str, account_id: str | None = None) -> Job:
     """Create and persist a fresh `queued` Job, returning it immediately.
 
     Split out from `process_job` so the API can hand back a job_id in well under
     a second and run the (slow) extraction afterwards via BackgroundTasks. This
     does NO network work — it only writes the queued row.
+
+    `account_id` is the verified account (JWT `sub`) when the submitter is signed
+    in; it is stamped on the job so `_finalize` can count the import against the
+    right account (per-account free-tier limit), independent of the spoofable
+    per-device `user_id`.
     """
     job = Job(
         job_id=str(uuid.uuid4()),
         user_id=user_id,
+        account_id=account_id,
         url=url,
         created_at=_now(),
     )

@@ -42,6 +42,12 @@ class User:
     email_verified: bool
     full_name: Optional[str]
     has_password: bool
+    # ISO-8601 UTC account-creation timestamp. Used to grandfather accounts that
+    # predate the free-import limit (app/importlimit.py). Optional/defaulted so
+    # the freshly-constructed User returned by the create/link paths (which don't
+    # re-read the row) stays valid; it is always populated when a User is loaded
+    # from the DB via `_row_to_user`.
+    created_at: Optional[str] = None
 
 
 class EmailInUse(Exception):
@@ -55,6 +61,7 @@ def _row_to_user(row) -> User:
         email_verified=bool(row["email_verified"]),
         full_name=row["full_name"],
         has_password=bool(row["password_hash"]),
+        created_at=row["created_at"],
     )
 
 

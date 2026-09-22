@@ -25,6 +25,14 @@ extension Font {
         .custom("DMSerifDisplay-Regular", size: size, relativeTo: style)
     }
 
+    /// The italic cut of the same editorial face (DM Serif Display Italic), used
+    /// as a script-style accent line paired with `editorialTitle` — e.g. the
+    /// onboarding headlines. Same family and title-only usage rules as
+    /// `editorialTitle`; italic simply distinguishes the accent line.
+    static func scriptAccent(size: CGFloat, relativeTo style: Font.TextStyle = .title) -> Font {
+        .custom("DMSerifDisplay-Italic", size: size, relativeTo: style)
+    }
+
     // MARK: - Body typography (system / San Francisco)
     //
     // The counterpart to `editorialTitle`: all non-title text (row titles,

@@ -50,11 +50,18 @@
 			);
 			target = 3DBD10C33033BC7F00AE8028 /* ShareExtension */;
 		};
+		AA00000000000000000000F1 /* PBXFileSystemSynchronizedBuildFileExceptionSet */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Resources/PlatterPro.storekit,
+			);
+			target = AA0000000000000000000004 /* RecipeApp */;
+		};
 /* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		3DBD10C53033BC7F00AE8028 /* ShareExtension */ = {isa = PBXFileSystemSynchronizedRootGroup; exceptions = (3DBD10CF3033BC8000AE8028 /* PBXFileSystemSynchronizedBuildFileExceptionSet */, ); explicitFileTypes = {}; explicitFolders = (); path = ShareExtension; sourceTree = "<group>"; };
-		AA000000000000000000000F /* RecipeApp */ = {isa = PBXFileSystemSynchronizedRootGroup; explicitFileTypes = {}; explicitFolders = (); path = RecipeApp; sourceTree = "<group>"; };
+		AA000000000000000000000F /* RecipeApp */ = {isa = PBXFileSystemSynchronizedRootGroup; exceptions = (AA00000000000000000000F1 /* PBXFileSystemSynchronizedBuildFileExceptionSet */, ); explicitFileTypes = {}; explicitFolders = (); path = RecipeApp; sourceTree = "<group>"; };
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */

@@ -15,9 +15,11 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from pydantic import BaseModel, field_validator, model_validator
 
-from . import config, db, ratelimit
-from .auth.router import router as auth_router
+from . import config, db, importlimit, ratelimit
+from .auth.router import optional_current_user, router as auth_router
+from .auth.service import User
 from .models import Job, Recipe
+from .mealplan import router as mealplan_router
 from .pantry import router as pantry_router
 from .pipeline import orchestrator
 from .sync import router as sync_router
@@ -30,6 +32,8 @@ app.include_router(auth_router)
 app.include_router(sync_router)
 # Pantry suggestions (/v1/pantry/suggestions) — account-scoped, same app-key gate.
 app.include_router(pantry_router)
+# Plan on a Budget (/v1/meal-plan/budget) — Pro-gated LLM generation.
+app.include_router(mealplan_router)
 
 
 @app.on_event("startup")
@@ -79,6 +83,32 @@ def _resolve_user_id(request: Request) -> str:
     if raw and len(raw) <= 200:
         return raw
     return config.DEFAULT_USER_ID
+
+
+def _client_pro_claim(request: Request) -> bool:
+    """The client's self-reported Pro entitlement, from the `X-Pro-Entitled`
+    header ("1"/"true"). The backend cannot verify StoreKit purchases, so this is
+    a TRUSTED-BUT-SPOOFABLE claim used only to waive the free-import limit (see
+    app/importlimit.py). A forged claim costs only cheap LLM calls, still bounded
+    by the per-user/IP rate limiter — deliberately not worth server-side receipt
+    validation for MVP."""
+    return (request.headers.get("X-Pro-Entitled") or "").strip().lower() in ("1", "true", "yes")
+
+
+def _enforce_import_limit(account: Optional[User], request: Request) -> None:
+    """Reject with 402 + a distinct machine error_code when a free account is at
+    its monthly import cap. Pro, grandfathered, and anonymous callers pass."""
+    try:
+        importlimit.check_allowed(account, _client_pro_claim(request))
+    except importlimit.ImportLimitExceeded as exc:
+        raise HTTPException(
+            status_code=402,
+            detail={
+                "error_code": exc.code,
+                "message": "You've reached this month's free import limit. Upgrade to Platter Pro for unlimited imports.",
+                "limit": exc.limit,
+            },
+        )
 
 
 def _client_ip(request: Request) -> str:
@@ -145,7 +175,10 @@ def health_ready() -> JSONResponse:
 
 @app.post("/v1/jobs", response_model=JobResponse)
 def submit_job(
-    req: JobRequest, background_tasks: BackgroundTasks, request: Request
+    req: JobRequest,
+    background_tasks: BackgroundTasks,
+    request: Request,
+    account: Optional[User] = Depends(optional_current_user),
 ) -> JobResponse:
     # Rate-limit only the expensive submit path — GET polling (every ~1.5s) must
     # not burn the extraction budget. Both the per-user-id and per-IP dimensions
@@ -156,10 +189,18 @@ def submit_job(
     except ratelimit.RateLimitExceeded as exc:
         raise HTTPException(status_code=429, detail=str(exc))
 
+    # Free-tier monthly import cap (Pro is unlimited). Checked BEFORE any job is
+    # created so a capped user does no extraction work; returns 402 + a distinct
+    # error_code the client maps to the paywall.
+    _enforce_import_limit(account, request)
+
     # Persist a queued job and return its id immediately — the extension can't
     # hold the request open while we scrape + call the LLM. The actual work runs
-    # after the response is sent (CLAUDE.md §3: submit-and-close).
-    job = orchestrator.create_job(req.url, user_id)
+    # after the response is sent (CLAUDE.md §3: submit-and-close). The verified
+    # account id (if signed in) is stamped on the job so the eventual success is
+    # counted against the right account, across devices.
+    account_id = account.id if account else None
+    job = orchestrator.create_job(req.url, user_id, account_id=account_id)
     background_tasks.add_task(orchestrator.process_job, job)
     return _with_recipe(job)  # recipe is None while status == "queued"
 
@@ -178,7 +219,10 @@ class PasteRequest(BaseModel):
 
 @app.post("/v1/jobs/{job_id}/paste", response_model=JobResponse)
 def paste_job_text(
-    job_id: str, req: PasteRequest, request: Request
+    job_id: str,
+    req: PasteRequest,
+    request: Request,
+    account: Optional[User] = Depends(optional_current_user),
 ) -> JobResponse:
     """Retry a failed job with user-pasted recipe text (the remedy for the
     `site_blocked` state and its caption analog — see
@@ -195,6 +239,10 @@ def paste_job_text(
     except ratelimit.RateLimitExceeded as exc:
         raise HTTPException(status_code=429, detail=str(exc))
 
+    # A paste is itself an import attempt (it can turn a failed job into a saved
+    # recipe), so it is subject to the same free-tier cap, checked before work.
+    _enforce_import_limit(account, request)
+
     text = req.text.strip()
     if len(text) < 10:
         raise HTTPException(status_code=400, detail="pasted text is too short to extract a recipe")
@@ -202,6 +250,12 @@ def paste_job_text(
     job = db.get_job(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="job not found")
+
+    # Attribute the import to the signed-in account so its success is counted
+    # under the right account (the original job may have been created anonymously
+    # or before this field existed).
+    if account is not None:
+        job.account_id = account.id
 
     job = orchestrator.process_pasted_text(job, text)
     return _with_recipe(job)

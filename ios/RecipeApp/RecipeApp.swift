@@ -23,6 +23,8 @@ struct RecipeApp: App {
     /// The app-wide auth session. Owns the signed-in state, persists tokens in
     /// the shared Keychain, and (Stage 2b) vends access tokens to the sync engine.
     @StateObject private var auth = AuthModel()
+    /// The single StoreKit 2 source of truth for products and Pro entitlement.
+    @StateObject private var subscriptions = SubscriptionService()
 
     /// Cook Mode step-timer notification scheduler, backed by the real
     /// `UNUserNotificationCenter`. One instance for the app; Cook Mode sessions
@@ -38,9 +40,123 @@ struct RecipeApp: App {
 
     var body: some Scene {
         WindowGroup {
-            RootView(recipeProvider: recipeProvider, auth: auth)
-                .environmentObject(auth)
-                .environment(\.cookTimerScheduler, cookTimerScheduler)
+            Group {
+                #if DEBUG
+                if let forced = Self.debugForcedPaywallContent {
+                    // Screenshot/QA harness: launch straight into the paywall in a
+                    // fixed state via `-paywallState ready|loading|unavailable`.
+                    PlatterProPaywallView(forcedContent: forced)
+                        .environmentObject(subscriptions)
+                } else if let gate = debugGateView() {
+                    gate
+                } else {
+                    root
+                }
+                #else
+                root
+                #endif
+            }
         }
     }
+
+    private var root: some View {
+        RootView(recipeProvider: recipeProvider, auth: auth)
+            .environmentObject(auth)
+            .environmentObject(subscriptions)
+            .environment(\.cookTimerScheduler, cookTimerScheduler)
+            .task { await subscriptions.start() }
+    }
+
+    #if DEBUG
+    /// Reads `-paywallState <ready|loading|unavailable>` from the launch
+    /// arguments so the three paywall states can be launched and screenshotted in
+    /// the simulator. Ready uses obvious sample prices — this is a QA harness, not
+    /// production pricing (production maps `Product.displayPrice`).
+    private static var debugForcedPaywallContent: PlanContent? {
+        let args = ProcessInfo.processInfo.arguments
+        guard let i = args.firstIndex(of: "-paywallState"), i + 1 < args.count else { return nil }
+        switch args[i + 1] {
+        case "ready":
+            return .ready([
+                PlanCardData(id: "preview.yearly", name: "Yearly", price: "$39.99", periodLabel: "per year"),
+                PlanCardData(id: "preview.monthly", name: "Monthly", price: "$4.99", periodLabel: "per month"),
+            ])
+        case "loading": return .loading
+        case "unavailable": return .unavailable
+        default: return nil
+        }
+    }
+
+    /// Renders a single Pro-gated screen with a forced cached entitlement, so the
+    /// free and Pro states can be screenshotted without signing in or seeding
+    /// data. Launch with `-gatePreview nutritionFree|nutritionPro|pantryFree|pantryPro`.
+    /// Sets only the App-Group cache (which drives `isProUnlocked`) — no StoreKit
+    /// or purchase state is touched.
+    private func debugGateView() -> AnyView? {
+        let args = ProcessInfo.processInfo.arguments
+        guard let i = args.firstIndex(of: "-gatePreview"), i + 1 < args.count else { return nil }
+        let mode = args[i + 1]
+        // "…Free" → locked; anything else (…Pro, budgetResults) → entitled.
+        ProEntitlementCache.set(!mode.hasSuffix("Free"))
+        let inner: AnyView
+        switch mode {
+        case "nutritionFree", "nutritionPro":
+            inner = AnyView(NavigationStack {
+                RecipeDetailView(recipe: .spicyNoodles, cookbooks: CookbooksModel())
+            })
+        case "pantryFree", "pantryPro":
+            inner = AnyView(NavigationStack {
+                KitchenView(cookbooks: CookbooksModel())
+            })
+        case "onboardingPrefs", "onboardingRegion":
+            // Screenshot harness for the onboarding preferences (Screen 4) and the
+            // new grocery-region (Screen 5) steps, jumped to directly.
+            let startPage = mode == "onboardingRegion" ? 4 : 3
+            inner = AnyView(
+                OnboardingView(auth: auth, initialPage: startPage)
+                    .environmentObject(CookingPreferencesModel(userScope: "preview"))
+            )
+        case "budgetFree", "budgetPro", "budgetResults":
+            inner = AnyView(NavigationStack {
+                BudgetPlanContainer(
+                    householdSize: 2,
+                    dietary: [],
+                    pantryNames: { ["rice", "eggs", "spinach"] },
+                    generate: { _, _, _, _ in Self.sampleBudgetPlan() },
+                    commit: { _ in },
+                    onSaved: {},
+                    autoGenerate: mode == "budgetResults"
+                )
+                .environmentObject(CookingPreferencesModel(userScope: "preview"))
+            })
+        default:
+            return nil
+        }
+        return AnyView(inner
+            .environmentObject(subscriptions)
+            .environment(\.cookTimerScheduler, cookTimerScheduler))
+    }
+
+    /// Sample budget plan for the `-gatePreview budgetResults` screenshot harness.
+    private static func sampleBudgetPlan() -> BudgetPlanResponse {
+        func recipe(_ id: String, _ title: String) -> Recipe {
+            Recipe(
+                recipeId: id, canonicalVideoId: "budget:\(id)", title: title,
+                servings: Servings(amount: 2, unit: nil), prepTimeMinutes: nil,
+                cookTimeMinutes: nil, totalTimeMinutes: nil, ingredients: [], instructions: [],
+                confidence: nil, sourceType: .generated, imageUrl: nil, imageSource: .none, transcript: nil
+            )
+        }
+        let items: [(String, String, Double, String)] = [
+            ("b1", "Chickpea & Spinach Curry", 8, "High fiber, veg-forward"),
+            ("b2", "Egg Fried Rice", 6, "Quick, balanced"),
+            ("b3", "Lentil Soup", 7, "High protein, low fat"),
+            ("b4", "Veggie Pasta Bake", 9, "Comfort, veg-forward"),
+        ]
+        let planned = items.map { id, title, cost, health in
+            PlannedRecipe(recipe: recipe(id, title), estimatedCost: CostEstimate(amount: cost), healthSignal: health)
+        }
+        return BudgetPlanResponse(recipes: planned, currency: "USD", budget: 75, minBudget: 50, regionalMultiplier: 1.0)
+    }
+    #endif
 }

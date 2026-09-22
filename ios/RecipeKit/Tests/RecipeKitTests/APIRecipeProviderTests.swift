@@ -43,6 +43,8 @@ final class APIRecipeProviderTests: XCTestCase {
             baseURL: URL(string: "https://example.test")!,
             session: URLSession(configuration: config),
             userID: { "test-user" },
+            authToken: { nil },
+            proEntitled: { false },
             pollInterval: .milliseconds(5),
             maxWait: .seconds(2)
         )
@@ -189,5 +191,84 @@ final class APIRecipeProviderTests: XCTestCase {
         let (p, captured) = provider(appKey: { "" })
         _ = try await p.submitJob(url: "https://www.instagram.com/reel/x/")
         XCTAssertNil(captured()?.value(forHTTPHeaderField: "X-App-Key"))
+    }
+
+    // MARK: - Free-import-limit plumbing
+
+    /// A 402 (free monthly import limit) maps to the distinct `.freeLimitReached`
+    /// case — never a generic `.httpStatus` — so the UI can route to the paywall.
+    func testHTTP402MapsToFreeLimitReached() async {
+        StubURLProtocol.handler = { request in
+            (HTTPURLResponse(url: request.url!, statusCode: 402, httpVersion: nil, headerFields: nil)!,
+             Data("{\"detail\":{\"error_code\":\"free_limit_reached\"}}".utf8))
+        }
+        do {
+            _ = try await makeProvider().submitJob(url: "https://www.instagram.com/reel/x/")
+            XCTFail("expected failure")
+        } catch let error as RecipeProviderError {
+            XCTAssertEqual(error, .freeLimitReached)
+        } catch {
+            XCTFail("expected RecipeProviderError, got \(error)")
+        }
+    }
+
+    func testPasteAlsoMaps402ToFreeLimitReached() async {
+        StubURLProtocol.handler = { request in
+            (HTTPURLResponse(url: request.url!, statusCode: 402, httpVersion: nil, headerFields: nil)!,
+             Data("{}".utf8))
+        }
+        do {
+            _ = try await makeProvider().submitPastedText(jobId: "J1", text: String(repeating: "x", count: 40))
+            XCTFail("expected failure")
+        } catch let error as RecipeProviderError {
+            XCTAssertEqual(error, .freeLimitReached)
+        } catch {
+            XCTFail("expected RecipeProviderError, got \(error)")
+        }
+    }
+
+    /// Builds a provider capturing the outbound request, with injectable auth /
+    /// pro closures.
+    private func headerProvider(
+        authToken: @escaping () -> String?,
+        proEntitled: @escaping () -> Bool
+    ) -> (APIRecipeProvider, () -> URLRequest?) {
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [StubURLProtocol.self]
+        var captured: URLRequest?
+        StubURLProtocol.handler = { request in
+            captured = request
+            return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!,
+                    Data(self.queuedJSON.utf8))
+        }
+        let p = APIRecipeProvider(
+            baseURL: URL(string: "https://example.test")!,
+            session: URLSession(configuration: config),
+            userID: { "test-user" },
+            appKey: { "" },
+            authToken: authToken,
+            proEntitled: proEntitled,
+            pollInterval: .milliseconds(5),
+            maxWait: .seconds(2)
+        )
+        return (p, { captured })
+    }
+
+    func testSendsProHeaderWhenEntitled() async throws {
+        let (p, captured) = headerProvider(authToken: { nil }, proEntitled: { true })
+        _ = try await p.submitJob(url: "https://www.instagram.com/reel/x/")
+        XCTAssertEqual(captured()?.value(forHTTPHeaderField: "X-Pro-Entitled"), "1")
+    }
+
+    func testOmitsProHeaderWhenNotEntitled() async throws {
+        let (p, captured) = headerProvider(authToken: { nil }, proEntitled: { false })
+        _ = try await p.submitJob(url: "https://www.instagram.com/reel/x/")
+        XCTAssertNil(captured()?.value(forHTTPHeaderField: "X-Pro-Entitled"))
+    }
+
+    func testOmitsAuthHeaderWhenSignedOut() async throws {
+        let (p, captured) = headerProvider(authToken: { nil }, proEntitled: { false })
+        _ = try await p.submitJob(url: "https://www.instagram.com/reel/x/")
+        XCTAssertNil(captured()?.value(forHTTPHeaderField: "Authorization"))
     }
 }

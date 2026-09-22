@@ -33,6 +33,16 @@ public struct APIRecipeProvider: RecipeProvider {
     /// How the provider resolves the shared app key per request. Injectable for
     /// tests; defaults to the build-time value in the app bundle.
     let appKey: () -> String
+    /// The signed-in account's Bearer access token, or nil when not signed in.
+    /// Read from the shared App-Group keychain so BOTH the app and the Share
+    /// Extension attach it — this is what lets the backend enforce the free-import
+    /// limit per account, across devices. Injectable for tests.
+    let authToken: () -> String?
+    /// The client's Pro entitlement claim, cached in the App Group so the Share
+    /// Extension (which can't query StoreKit) can send it too. Sent as
+    /// `X-Pro-Entitled` and used only to waive the free-import limit. Injectable
+    /// for tests.
+    let proEntitled: () -> Bool
     /// Poll cadence and total budget for `submitRecipe`.
     let pollInterval: Duration
     let maxWait: Duration
@@ -42,6 +52,8 @@ public struct APIRecipeProvider: RecipeProvider {
         session: URLSession = .shared,
         userID: @escaping () -> String = { RecipeKit.currentUserID },
         appKey: @escaping () -> String = { AppConfig.appKey },
+        authToken: @escaping () -> String? = { AuthSessionStore().load()?.accessToken },
+        proEntitled: @escaping () -> Bool = { ProEntitlementCache.isEntitled },
         pollInterval: Duration = .seconds(1.5),
         maxWait: Duration = .seconds(120)
     ) {
@@ -49,6 +61,8 @@ public struct APIRecipeProvider: RecipeProvider {
         self.session = session
         self.userID = userID
         self.appKey = appKey
+        self.authToken = authToken
+        self.proEntitled = proEntitled
         self.pollInterval = pollInterval
         self.maxWait = maxWait
     }
@@ -187,6 +201,17 @@ public struct APIRecipeProvider: RecipeProvider {
         if !key.isEmpty {
             request.setValue(key, forHTTPHeaderField: "X-App-Key")
         }
+        // Verified account (Bearer) so the free-import limit counts per account,
+        // not per spoofable device id. Absent when signed out — the backend then
+        // treats the request as anonymous.
+        if let token = authToken(), !token.isEmpty {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        // Pro claim: waives the limit server-side. Sent only when entitled, so a
+        // free client sends nothing (the backend defaults to non-Pro).
+        if proEntitled() {
+            request.setValue("1", forHTTPHeaderField: "X-Pro-Entitled")
+        }
     }
 
     private func send<T: Decodable>(_ request: URLRequest) async throws -> T {
@@ -207,6 +232,12 @@ public struct APIRecipeProvider: RecipeProvider {
 
         guard let http = response as? HTTPURLResponse else {
             throw RecipeProviderError.invalidResponse("non-HTTP response")
+        }
+        // 402 Payment Required = the free-tier monthly import limit (backend code
+        // "free_limit_reached"). Surface it as a distinct case so callers route to
+        // the paywall rather than showing a generic HTTP error.
+        if http.statusCode == 402 {
+            throw RecipeProviderError.freeLimitReached
         }
         guard (200..<300).contains(http.statusCode) else {
             throw RecipeProviderError.httpStatus(http.statusCode)

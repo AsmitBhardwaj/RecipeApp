@@ -98,3 +98,41 @@ RATE_LIMIT_USER_PER_HOUR: int = int(os.getenv("RATE_LIMIT_USER_PER_HOUR", "40"))
 # single attacker who rotates X-User-Id (defense in depth).
 RATE_LIMIT_IP_PER_MIN: int = int(os.getenv("RATE_LIMIT_IP_PER_MIN", "15"))
 RATE_LIMIT_IP_PER_HOUR: int = int(os.getenv("RATE_LIMIT_IP_PER_HOUR", "100"))
+
+# --------------------------------------------------------------------------- #
+# Free-tier import limit (Platter Pro's "Unlimited imports" — CLAUDE.md §2).
+#
+# A signed-in FREE account may create at most FREE_IMPORT_LIMIT *successful*
+# imports per calendar month (UTC). Pro accounts are never limited (see
+# app/importlimit.py). Enforcement is per account and server-side, so it holds
+# across devices and the Share Extension. Only accounts identified by a valid
+# JWT are limited; unauthenticated/anonymous imports fall back to the existing
+# per-user/IP rate limiter only (documented gap — see importlimit.py).
+#
+# GRANDFATHERING: accounts whose `created_at` is strictly BEFORE
+# FREE_LIMIT_EFFECTIVE_DATE are exempt forever, so shipping this never
+# retroactively limits an existing user. Both values below are PLACEHOLDERS —
+# set them (here or via env) once the per-user monthly-import distribution has
+# been reviewed. With the effective date left in the far future, EVERY current
+# account is grandfathered, i.e. the limit is effectively OFF until you set a
+# real date. Recommended: pick FREE_IMPORT_LIMIT at/above the ~95th percentile
+# of real monthly imports, and set FREE_LIMIT_EFFECTIVE_DATE to the ship date so
+# only accounts created after launch are ever limited.
+FREE_IMPORT_LIMIT: int = int(os.getenv("FREE_IMPORT_LIMIT", "30"))  # PLACEHOLDER
+FREE_LIMIT_EFFECTIVE_DATE: str = os.getenv(
+    "FREE_LIMIT_EFFECTIVE_DATE", "2099-01-01T00:00:00+00:00"
+)  # PLACEHOLDER — far-future = limit disabled / everyone grandfathered
+
+# --------------------------------------------------------------------------- #
+# Plan on a Budget (docs/budget-meal-planning.md).
+#
+# The minimum weekly budget scales with household size: a household of N cannot
+# plan below `N × MIN_BUDGET_PER_PERSON`, rounded to the nearest $5 (see
+# app/budget.py). Enforced server-side in the budget-plan endpoint AND mirrored
+# client-side (RecipeKit BudgetMath) so the stepper never shows a sub-minimum
+# value. PLACEHOLDER value — tune once real basket costs are sanity-checked.
+MIN_BUDGET_PER_PERSON: int = int(os.getenv("MIN_BUDGET_PER_PERSON", "25"))  # PLACEHOLDER
+
+# How many recipes one budget-plan generation fans out to. Guards LLM cost — one
+# structured-output call returns this many recipes (not N separate calls).
+BUDGET_PLAN_RECIPE_COUNT: int = int(os.getenv("BUDGET_PLAN_RECIPE_COUNT", "7"))

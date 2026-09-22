@@ -13,7 +13,7 @@ struct RootView: View {
     let recipeProvider: RecipeProvider
     @ObservedObject var auth: AuthModel
 
-    @AppStorage("hasCompletedOnboarding") private var hasCompletedOnboarding = false
+    @AppStorage("hasCompletedOnboarding") private var legacyOnboardingCompletion = false
     /// In-app appearance override (App Group–backed). Applied here so it covers
     /// onboarding, the main app, and any sheets they present. Reading it here and
     /// writing it in Settings via the same key/store makes toggles apply live.
@@ -26,19 +26,43 @@ struct RootView: View {
 
     @ViewBuilder
     private var content: some View {
-        if auth.isSignedIn {
-            // Already signed in (this device or a prior session) → straight to the
-            // app, skipping onboarding entirely.
-            MainTabView(recipeProvider: recipeProvider, auth: auth)
-                .environmentObject(auth)
-        } else if !hasCompletedOnboarding {
-            // First run: the 4-screen flow, which ends in sign-in (screen 4).
-            OnboardingView(auth: auth, onComplete: { hasCompletedOnboarding = true })
-        } else {
-            // Onboarded before but signed out → the plain account gate, not a
-            // replay of onboarding.
+        if !auth.isSignedIn {
             SignInView(auth: auth)
+        } else if let userID = auth.currentUser?.id {
+            SignedInRoot(
+                recipeProvider: recipeProvider,
+                auth: auth,
+                userID: userID,
+                legacyCompletion: legacyOnboardingCompletion
+            )
         }
+    }
+}
+
+private struct SignedInRoot: View {
+    let recipeProvider: RecipeProvider
+    @ObservedObject var auth: AuthModel
+    @StateObject private var cookingPreferences: CookingPreferencesModel
+
+    init(recipeProvider: RecipeProvider, auth: AuthModel, userID: String, legacyCompletion: Bool) {
+        self.recipeProvider = recipeProvider
+        self.auth = auth
+        _cookingPreferences = StateObject(wrappedValue: CookingPreferencesModel(
+            userScope: userID,
+            legacyCompletion: legacyCompletion
+        ))
+    }
+
+    var body: some View {
+        Group {
+            if cookingPreferences.hasCompletedOnboarding {
+                MainTabView(recipeProvider: recipeProvider, auth: auth)
+            } else {
+                OnboardingView(auth: auth)
+            }
+        }
+        .environmentObject(auth)
+        .environmentObject(cookingPreferences)
     }
 }
 

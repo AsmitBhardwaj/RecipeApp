@@ -17,6 +17,8 @@ from __future__ import annotations
 
 import time
 
+from typing import Optional
+
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
@@ -117,6 +119,25 @@ def current_user(
             headers={"WWW-Authenticate": "Bearer"},
         )
     return user
+
+
+def optional_current_user(
+    credentials: HTTPAuthorizationCredentials = Depends(_bearer),
+) -> Optional[User]:
+    """Like `current_user`, but returns None instead of 401 when no (or an
+    invalid/expired) Bearer token is presented. Used by endpoints that are
+    reachable both signed-in and anonymously (the import path: the app is always
+    signed in, but the Share Extension may not carry a token). A present-and-valid
+    token yields the verified account so per-account policy (the free-import
+    limit) can key on it; anything else degrades to anonymous rather than
+    rejecting the request."""
+    if credentials is None or not credentials.credentials:
+        return None
+    try:
+        claims = security.decode_token(credentials.credentials, expected_type="access")
+    except security.TokenError:
+        return None
+    return service.get_user_by_id(claims["sub"])
 
 
 # --------------------------------------------------------------------------- #

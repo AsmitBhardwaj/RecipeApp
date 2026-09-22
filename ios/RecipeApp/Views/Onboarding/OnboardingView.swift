@@ -1,66 +1,169 @@
-//
-//  OnboardingView.swift
-//  RecipeApp
-//
-//  The first-run flow: a 4-screen intro that ends in sign-in. Replaces the old
-//  6-page swipe intro entirely.
-//
-//    1. Promise      — rounded dish photo card, "Get started"
-//    2. Share import — vector share-sheet illustration, "Continue"
-//    3. Kitchen      — pantry + "you could make" panel, "Continue"
-//    4. Sign in      — app mark + the shared AuthMethodsView (no skip)
-//
-//  Each screen is built from `OnboardingScaffold`: a 44pt header (brand lockup +
-//  Skip on 1–3, empty on 4) and a pinned bottom block of page dots + button.
-//  "Skip" on screens 1–3 jumps straight to sign-in; there is no skip on screen
-//  4. Completion is driven by auth: reaching a signed-in state ends onboarding
-//  (RootView then shows the app), and we record `hasCompletedOnboarding` so a
-//  later sign-out lands on the plain sign-in gate rather than replaying this
-//  flow.
-//
-//  No notification permission is requested here (it is requested on the first
-//  Cook Mode timer start — see CookTimerNotificationScheduler).
-//
-
+import RecipeKit
 import SwiftUI
 
 struct OnboardingView: View {
     @ObservedObject var auth: AuthModel
-    /// Called once the user is signed in (records onboarding completion).
-    let onComplete: () -> Void
+    @EnvironmentObject private var preferences: CookingPreferencesModel
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    @StateObject private var sync: SyncCoordinator
+    @StateObject private var pantry: PantryModel
+    @StateObject private var suggestions = PantrySuggestionsModel()
 
     @State private var page = 0
-    private let pageCount = 4
+    @State private var primaryGoal: PrimaryCookingGoal?
+    @State private var dietaryPreferences: Set<DietaryPreference> = []
+    @State private var householdSize = 2
+    @State private var region: GroceryRegion?
+    @State private var pantrySelections: Set<String> = []
+    @State private var hasLoadedAnswers = false
+
+    private let pageCount = 6
+    /// The pantry step is the last screen; its suggestion fetch keys off this index.
+    private let pantryPage = 5
+
+    init(auth: AuthModel, initialPage: Int = 0) {
+        self.auth = auth
+        let userID = auth.currentUser?.id ?? "unknown"
+        let coordinator = SyncCoordinator(userId: userID, tokenProvider: { try await auth.validAccessToken() })
+        _sync = StateObject(wrappedValue: coordinator)
+        _pantry = StateObject(wrappedValue: PantryModel(userScope: userID, sync: coordinator))
+        _page = State(initialValue: initialPage)
+    }
 
     var body: some View {
-        TabView(selection: $page) {
-            OnboardingPromiseScreen(page: page, total: pageCount, onSkip: skip, onContinue: advance).tag(0)
-            OnboardingShareScreen(page: page, total: pageCount, onSkip: skip, onContinue: advance).tag(1)
-            OnboardingKitchenScreen(page: page, total: pageCount, onSkip: skip, onContinue: advance).tag(2)
-            OnboardingSignInScreen(auth: auth, page: page, total: pageCount).tag(3)
+        ZStack {
+            switch page {
+            case 0: OnboardingValueScreen()
+            case 1: OnboardingSavingScreen()
+            case 2: OnboardingGoalScreen(selection: $primaryGoal)
+            case 3:
+                OnboardingPreferencesScreen(
+                    dietaryPreferences: $dietaryPreferences,
+                    householdSize: $householdSize
+                )
+            case 4:
+                OnboardingRegionScreen(region: $region)
+            default:
+                OnboardingPantryScreen(
+                    selections: $pantrySelections,
+                    suggestion: suggestions.matches.first ?? suggestions.generated.first,
+                    isLoading: suggestions.isInitialLoading
+                )
+            }
         }
-        .tabViewStyle(.page(indexDisplayMode: .never))
-        // Single full-screen background (cream + paper grain) behind the
-        // transparent pages, so the grain is uniform and extends under the home
-        // indicator instead of leaving a flat strip.
-        .appBackground()
+        .id(page)
+        .transition(reduceMotion ? .opacity : .asymmetric(
+            insertion: .move(edge: .trailing).combined(with: .opacity),
+            removal: .move(edge: .leading).combined(with: .opacity)
+        ))
+        .safeAreaInset(edge: .top, spacing: 0) { header }
+        .safeAreaInset(edge: .bottom, spacing: 0) { bottomBar }
+        .background(Color.creamTint.ignoresSafeArea())
         .foregroundStyle(Color.textPrimary)
-        .onChange(of: auth.isSignedIn) { _, signedIn in
-            if signedIn { onComplete() }
+        .onAppear(perform: loadExistingAnswers)
+        .onChange(of: pantrySelections) { _, names in
+            guard page == pantryPage else { return }
+            suggestions.refresh(pantryNames: names.sorted(), via: sync, debounce: .milliseconds(350))
         }
-        // If already signed in when this appears (edge case), finish immediately.
-        .onAppear { if auth.isSignedIn { onComplete() } }
+        .onChange(of: page) { _, newPage in
+            if newPage == pantryPage {
+                suggestions.refresh(pantryNames: pantrySelections.sorted(), via: sync)
+            }
+        }
+    }
+
+    private var header: some View {
+        ZStack {
+            HStack {
+                if page == 0 {
+                    PlatterMark(size: 36)
+                        .accessibilityLabel("Platter")
+                } else {
+                    Button(action: goBack) {
+                        Image(systemName: "chevron.left")
+                            .font(.system(size: 17, weight: .semibold))
+                            .frame(width: 44, height: 44)
+                            .background(Color.surface, in: Circle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Back")
+                }
+                Spacer()
+            }
+
+            HStack {
+                Spacer()
+                Button("Skip", action: finish)
+                    .font(.subheadline.weight(.medium))
+                    .foregroundStyle(Color.textSecondary)
+                    .frame(minWidth: 44, minHeight: 44)
+                    .accessibilityHint("Finishes onboarding without requiring more answers")
+            }
+        }
+        .padding(.horizontal, 24)
+        .padding(.top, 6)
+        .padding(.bottom, 4)
+        .background(Color.creamTint)
+    }
+
+    private var bottomBar: some View {
+        VStack(spacing: 14) {
+            OnboardingPageDots(current: page, total: pageCount)
+            OnboardingPrimaryButton(
+                title: page == pageCount - 1 ? "Start cooking" : "Continue",
+                isEnabled: page != 2 || primaryGoal != nil,
+                action: page == pageCount - 1 ? finish : advance
+            )
+        }
+        .padding(.horizontal, 24)
+        .padding(.top, 12)
+        .padding(.bottom, 10)
+        .background(Color.creamTint)
+    }
+
+    private func loadExistingAnswers() {
+        guard !hasLoadedAnswers else { return }
+        hasLoadedAnswers = true
+        primaryGoal = preferences.primaryGoal
+        dietaryPreferences = preferences.dietaryPreferences
+        householdSize = preferences.householdSize
+        // Prefill a stored region; on a first run with none, guess from device
+        // locale so the picker starts on a sensible bucket the user can change.
+        region = preferences.region ?? GroceryRegion.guessFromLocale()
+        let existing = Set(pantry.items.map { $0.name.lowercased() })
+        pantrySelections = Set(OnboardingPantryScreen.staples.filter { existing.contains($0.lowercased()) })
     }
 
     private func advance() {
-        withAnimation { page = min(page + 1, pageCount - 1) }
+        withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.28)) {
+            page = min(page + 1, pageCount - 1)
+        }
     }
 
-    private func skip() {
-        withAnimation { page = pageCount - 1 }
+    private func goBack() {
+        withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.28)) {
+            page = max(page - 1, 0)
+        }
+    }
+
+    private func finish() {
+        preferences.saveAnswers(
+            primaryGoal: primaryGoal,
+            dietaryPreferences: dietaryPreferences,
+            householdSize: householdSize,
+            region: region
+        )
+        let existing = Set(pantry.items.map { $0.name.lowercased() })
+        for item in pantrySelections where !existing.contains(item.lowercased()) {
+            pantry.add(name: item)
+        }
+        sync.triggerSync()
+        preferences.completeOnboarding()
     }
 }
 
 #Preview {
-    OnboardingView(auth: AuthModel(), onComplete: {})
+    OnboardingView(auth: AuthModel())
+        .environmentObject(CookingPreferencesModel(userScope: "preview"))
 }

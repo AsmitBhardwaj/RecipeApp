@@ -1,0 +1,83 @@
+{
+  "identifier" : "8CA09D31-61C5-4E91-B4EA-C561E2392E20",
+  "nonRenewingSubscriptions" : [
+
+  ],
+  "products" : [
+
+  ],
+  "settings" : {
+    "_failTransactionsEnabled" : false,
+    "_locale" : "en_US",
+    "_storefront" : "USA",
+    "_storeKitErrors" : [
+
+    ],
+    "_timeRate" : 0
+  },
+  "subscriptionGroups" : [
+    {
+      "id" : "3A5CC107-72CE-44C2-AF80-74984A38F334",
+      "localizations" : [
+
+      ],
+      "name" : "Platter Pro",
+      "subscriptions" : [
+        {
+          "adHocOffers" : [
+
+          ],
+          "codeOffers" : [
+
+          ],
+          "displayPrice" : "4.99",
+          "familyShareable" : false,
+          "groupNumber" : 1,
+          "internalID" : "7C7BBF3F-7E1B-478B-8CA8-5C996F56A5B6",
+          "introductoryOffer" : null,
+          "localizations" : [
+            {
+              "description" : "Monthly access to Platter Pro.",
+              "displayName" : "Platter Pro Monthly",
+              "locale" : "en_US"
+            }
+          ],
+          "productID" : "dev.platter.placeholder.pro.monthly",
+          "recurringSubscriptionPeriod" : "P1M",
+          "referenceName" : "Platter Pro Monthly",
+          "subscriptionGroupID" : "3A5CC107-72CE-44C2-AF80-74984A38F334",
+          "type" : "RecurringSubscription"
+        },
+        {
+          "adHocOffers" : [
+
+          ],
+          "codeOffers" : [
+
+          ],
+          "displayPrice" : "39.99",
+          "familyShareable" : false,
+          "groupNumber" : 1,
+          "internalID" : "A81E58A2-5E6D-4410-8A88-A421FC1ED24E",
+          "introductoryOffer" : null,
+          "localizations" : [
+            {
+              "description" : "Yearly access to Platter Pro.",
+              "displayName" : "Platter Pro Yearly",
+              "locale" : "en_US"
+            }
+          ],
+          "productID" : "dev.platter.placeholder.pro.yearly",
+          "recurringSubscriptionPeriod" : "P1Y",
+          "referenceName" : "Platter Pro Yearly",
+          "subscriptionGroupID" : "3A5CC107-72CE-44C2-AF80-74984A38F334",
+          "type" : "RecurringSubscription"
+        }
+      ]
+    }
+  ],
+  "version" : {
+    "major" : 4,
+    "minor" : 0
+  }
+}

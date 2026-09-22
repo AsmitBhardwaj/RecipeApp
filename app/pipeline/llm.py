@@ -17,6 +17,7 @@ from pydantic import BaseModel, Field, ValidationError
 
 from .. import config
 from ..models import (
+    CostEstimate,
     DishIdentification,
     Ingredient,
     LLMRecipe,
@@ -468,3 +469,88 @@ def estimate_nutrition(
         f"Ingredients:\n{lines}"
     )
     return _call_validated(NUTRITION_SYSTEM_PROMPT, user, _NutritionResponse).nutrition
+
+
+# --------------------------------------------------------------------------- #
+# Plan on a Budget — budget/On-Hand-aware generation (docs/budget-meal-planning.md
+# §3.3). ONE structured-output call returns the whole week's recipes (not N calls)
+# to guard LLM cost. Each recipe carries a location-INDEPENDENT baseline cost
+# estimate and a short health signal; the endpoint applies the regional multiplier.
+# --------------------------------------------------------------------------- #
+
+BUDGET_PLAN_SYSTEM_PROMPT = """\
+You are a budget grocery meal planner. Given a household's weekly grocery budget,
+size, dietary preferences, and the ingredients they already have on hand, propose
+a set of approachable, healthy dinner recipes for the week that TOGETHER fit
+within the budget. Output ONLY valid JSON matching the schema, no prose, no
+markdown fences.
+
+RULES:
+1. Prefer recipes that reuse the on-hand ingredients; do not assume the cook has
+   anything not listed except basic staples (salt, pepper, oil, water, common
+   spices).
+2. Respect the dietary preferences strictly (e.g. vegetarian, vegan, gluten-free).
+3. For each recipe provide a "baseline_cost" — a rough, LOCATION-INDEPENDENT
+   estimate of what the recipe's ingredients cost to buy in USD (a plain US
+   national-average estimate; the caller applies a regional multiplier). Use
+   "basis": "llm-v1".
+4. For each recipe provide a short "health_signal" string of at most ~6 words,
+   e.g. "High protein, veg-forward" or "Lighter, low added sugar".
+5. Keep the recipes realistic and varied; do not repeat the same dish.
+6. Split every ingredient into quantity/unit/name as in a normal recipe, and
+   write clear numbered instructions."""
+
+_BUDGET_PLAN_SCHEMA_HINT = """\
+Respond with ONLY a JSON object of this shape:
+{
+  "recipes": [
+    {
+      "recipe": { ...the recipe object (title, servings, ingredients[], instructions[], confidence)... },
+      "baseline_cost": { "amount": number, "currency": "USD", "basis": "llm-v1" },
+      "health_signal": "short string"
+    }
+  ]
+}"""
+
+
+class BudgetPlanRecipeLLM(BaseModel):
+    """One generated recipe plus its budget/health annotations."""
+
+    recipe: LLMRecipe
+    baseline_cost: CostEstimate
+    health_signal: str = ""
+
+
+class _BudgetPlanResponse(BaseModel):
+    """Wrapper so structured output can return a top-level object, not a bare list."""
+
+    recipes: List[BudgetPlanRecipeLLM] = Field(default_factory=list)
+
+
+def generate_budget_plan(
+    *,
+    budget: float,
+    currency: str,
+    household_size: int,
+    dietary_preferences: List[str],
+    on_hand: List[str],
+    count: int,
+) -> List[BudgetPlanRecipeLLM]:
+    """Generate up to `count` budget/On-Hand-aware recipes in ONE LLM call.
+
+    Same validate + retry-once path as every other call here. The returned
+    `baseline_cost` is location-independent; the caller multiplies it by the
+    regional multiplier to present a per-user estimate.
+    """
+    prefs = ", ".join(dietary_preferences) if dietary_preferences else "none"
+    on_hand_lines = "\n".join(f"- {i}" for i in on_hand) or "(nothing on hand)"
+    user = (
+        f"{_BUDGET_PLAN_SCHEMA_HINT}\n\n"
+        f"Weekly grocery budget: {budget:.0f} {currency}\n"
+        f"Household size: {household_size} people\n"
+        f"Dietary preferences: {prefs}\n"
+        f"Propose at most {count} dinner recipes for the week.\n\n"
+        f"On hand (prefer using these):\n{on_hand_lines}"
+    )
+    resp = _call_validated(BUDGET_PLAN_SYSTEM_PROMPT, user, _BudgetPlanResponse)
+    return resp.recipes[:count]

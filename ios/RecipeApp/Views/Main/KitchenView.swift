@@ -20,6 +20,11 @@ struct KitchenView: View {
     @StateObject private var model: PantryModel
     /// Recipe suggestions driven by the current pantry (PANTRY_SCOPE.md §4).
     @StateObject private var suggestions = PantrySuggestionsModel()
+    /// Pro entitlement — pantry suggestions are a Platter Pro feature. Adding/
+    /// editing pantry items stays free.
+    @EnvironmentObject private var subscriptions: SubscriptionService
+    /// Presents the Platter Pro paywall from the locked suggestions state.
+    @State private var showPaywall = false
     /// The app's single CookbooksModel, threaded down from MainTabView (the same
     /// instance the Recipes tab uses) so "add to cookbook" from the suggestion
     /// detail sheet writes to the shared state — no second instance, no
@@ -89,7 +94,10 @@ struct KitchenView: View {
             // debounce). Matches against the LOCAL names so results track what's
             // on screen without waiting for the pantry to sync.
             .task {
-                guard let sync else { return }
+                // Skip the fetch for free users: the suggestions endpoint does
+                // server-side LLM generation, so we don't spend on a feature the
+                // user can't see. It fires on upgrade (see onChange below).
+                guard let sync, subscriptions.isProUnlocked else { return }
                 suggestions.refresh(pantryNames: model.items.map(\.name), via: sync)
             }
             // Pantry edits refresh on a DEBOUNCE, not per-add: the add sheet's
@@ -99,13 +107,23 @@ struct KitchenView: View {
             // list come from the same endpoint response, so they share this one
             // trigger — there is no separate local data path to recompute.
             .onChange(of: addPresented) { _, isShowing in
-                guard !isShowing, let sync else { return }
+                guard !isShowing, let sync, subscriptions.isProUnlocked else { return }
                 suggestions.refresh(pantryNames: model.items.map(\.name), via: sync, debounce: .seconds(1.5))
+            }
+            // Upgrading in-session flips the gate: fetch now so the section fills
+            // in without needing a separate pantry edit.
+            .onChange(of: subscriptions.isProUnlocked) { _, unlocked in
+                guard unlocked, let sync else { return }
+                suggestions.refresh(pantryNames: model.items.map(\.name), via: sync)
             }
             .sheet(item: $selectedRecipe) { recipe in
                 NavigationStack {
                     RecipeDetailView(recipe: recipe, cookbooks: cookbooks, userScope: userScope)
                 }
+            }
+            .sheet(isPresented: $showPaywall) {
+                PlatterProPaywallView()
+                    .environmentObject(subscriptions)
             }
     }
 
@@ -122,24 +140,20 @@ struct KitchenView: View {
         }
     }
 
-    // MARK: - Pantry chips ("In your kitchen")
+    // MARK: - Pantry list ("In your kitchen")
 
     private var pantrySection: some View {
         VStack(alignment: .leading, spacing: 10) {
             sectionHeader("In your kitchen")
 
-            FlowLayout(spacing: 8, lineSpacing: 8) {
+            VStack(spacing: Theme.Spacing.md) {
                 ForEach(model.items) { item in
-                    PantryChip(name: Self.displayName(item.name)) {
-                        model.remove(item)
-                        // Removals are pantry edits too — refresh on the same
-                        // debounce as adds so rapid deletes coalesce.
-                        if let sync {
-                            suggestions.refresh(pantryNames: model.items.map(\.name), via: sync, debounce: .seconds(1.5))
-                        }
+                    PantryRow(name: Self.displayName(item.name)) {
+                        remove(item)
                     }
                 }
-                AddPantryChip { addPresented = true }
+
+                AddPantryRow { addPresented = true }
             }
 
             if model.items.isEmpty {
@@ -159,6 +173,15 @@ struct KitchenView: View {
         return first.uppercased() + trimmed.dropFirst().lowercased()
     }
 
+    private func remove(_ item: PantryItem) {
+        model.remove(item)
+        // Removals are pantry edits too — refresh on the same debounce as adds
+        // so rapid deletes coalesce.
+        if let sync, subscriptions.isProUnlocked {
+            suggestions.refresh(pantryNames: model.items.map(\.name), via: sync, debounce: .seconds(1.5))
+        }
+    }
+
     // MARK: - Suggestions
 
     /// Cache matches to display, ranked client-side (coverage desc, tie-break by
@@ -169,7 +192,14 @@ struct KitchenView: View {
 
     @ViewBuilder
     private var suggestionsContent: some View {
-        if suggestions.isInitialLoading {
+        if !subscriptions.isProUnlocked {
+            // Free users: locked state in place of the suggestions. Cached
+            // entitlement drives this, so a Pro user never flashes it.
+            VStack(alignment: .leading, spacing: 10) {
+                sectionHeader("Suggestions")
+                ProSuggestionsLockedCard(onUpgrade: { showPaywall = true })
+            }
+        } else if suggestions.isInitialLoading {
             VStack(alignment: .leading, spacing: 10) {
                 sectionHeader("Suggestions")
                 HStack(spacing: 10) {
@@ -228,30 +258,37 @@ struct KitchenView: View {
     }
 }
 
-// MARK: - Pantry chip (cream, name only — no emoji; long-press to remove)
+// MARK: - Pantry rows
 
-private struct PantryChip: View {
+private struct PantryRow: View {
     let name: String
     let onRemove: () -> Void
 
     var body: some View {
-        Text(name)
-            .font(.subheadline)
-            .foregroundStyle(Color.textPrimary)
-            .lineLimit(1)
-            .padding(.horizontal, 14)
-            .frame(height: 40)
-            .background(Capsule().fill(Color.creamTint))  // 40pt high → 20pt radius
-            .contextMenu {
-                Button(role: .destructive, action: onRemove) {
-                    Label("Remove", systemImage: "trash")
-                }
+        HStack(spacing: Theme.Spacing.lg) {
+            IngredientIconGlyph(name: name, size: 32)
+                .frame(width: 40, height: 40)
+                .accessibilityHidden(true)
+
+            Text(name)
+                .font(.body)
+                .foregroundStyle(Color.textPrimary)
+                .lineLimit(1)
+
+            Spacer(minLength: 0)
+        }
+        .frame(minHeight: 48)
+        .contentShape(Rectangle())
+        .contextMenu {
+            Button(role: .destructive, action: onRemove) {
+                Label("Remove", systemImage: "trash")
             }
+        }
     }
 }
 
-/// The trailing outlined "+ Add" chip that opens the add-item sheet.
-private struct AddPantryChip: View {
+/// Keeps the existing inline add affordance while matching the new list layout.
+private struct AddPantryRow: View {
     let onAdd: () -> Void
 
     var body: some View {
@@ -259,9 +296,8 @@ private struct AddPantryChip: View {
             Label("Add", systemImage: "plus")
                 .font(.subheadline.weight(.semibold))
                 .foregroundStyle(Color.accentColor)
-                .padding(.horizontal, 14)
-                .frame(height: 40)
-                .overlay(Capsule().strokeBorder(Color.hairline, lineWidth: 1))
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .frame(minHeight: 48)
         }
         .buttonStyle(.plain)
         .accessibilityLabel("Add pantry item")
@@ -349,4 +385,5 @@ private struct AISuggestedPill: View {
     NavigationStack {
         KitchenView(cookbooks: CookbooksModel())
     }
+    .environmentObject(SubscriptionService())
 }

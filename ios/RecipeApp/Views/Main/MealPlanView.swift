@@ -19,11 +19,25 @@ struct MealPlanView: View {
     @ObservedObject var jobs: PendingJobsModel
     @ObservedObject var cookbooks: CookbooksModel
     @StateObject private var plan: MealPlanModel
+    /// Pantry (Kitchen) items for the budget mode's "Use my Kitchen" toggle.
+    @StateObject private var pantry: PantryModel
+    @EnvironmentObject private var subscriptions: SubscriptionService
+    @EnvironmentObject private var cookingPreferences: CookingPreferencesModel
+
+    private let userScope: String?
+    private let sync: SyncCoordinator?
+
+    /// This Week (manual) vs Plan on a Budget (generated).
+    @State private var mode: PlanMode = .thisWeek
+    private enum PlanMode: String, CaseIterable { case thisWeek = "This Week", budget = "Plan on a Budget" }
 
     init(jobs: PendingJobsModel, cookbooks: CookbooksModel, userScope: String? = nil, sync: SyncCoordinator? = nil) {
         self.jobs = jobs
         self.cookbooks = cookbooks
+        self.userScope = userScope
+        self.sync = sync
         _plan = StateObject(wrappedValue: MealPlanModel(userScope: userScope, sync: sync))
+        _pantry = StateObject(wrappedValue: PantryModel(userScope: userScope, sync: sync))
     }
 
     /// Drives the add/change assignment sheet.
@@ -45,9 +59,14 @@ struct MealPlanView: View {
     var body: some View {
         VStack(spacing: 0) {
             ScreenHeader("Meal Plan")
-            WeekSwitcherBar(plan: plan)
-            Divider()
-            dayList
+            modePicker
+            if mode == .thisWeek {
+                WeekSwitcherBar(plan: plan)
+                Divider()
+                dayList
+            } else {
+                budgetContent
+            }
         }
         .foregroundStyle(Color.textPrimary)
         .appBackground()
@@ -57,10 +76,10 @@ struct MealPlanView: View {
                 mode: flow.mode,
                 recipes: jobs.recipes,
                 cookbooks: cookbooks,
-                plan: plan,
-                onPick: { slot, recipe in
+                onPick: { selectedDate, slot, recipe in
                     switch flow {
-                    case .add(let date): plan.add(recipe: recipe, to: date, slot: slot)
+                    case .add(let originalDate):
+                        plan.add(recipe: recipe, to: selectedDate ?? originalDate, slot: slot)
                     case .change(let entry): plan.replace(entry, with: recipe)
                     }
                     assignFlow = nil
@@ -90,6 +109,49 @@ struct MealPlanView: View {
             Button("Cancel", role: .cancel) { moveEntry = nil }
         } message: { entry in
             Text(entry.recipeTitle)
+        }
+    }
+
+    private var modePicker: some View {
+        Picker("Mode", selection: $mode) {
+            ForEach(PlanMode.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+        }
+        .pickerStyle(.segmented)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
+        .accessibilityLabel("Meal plan mode")
+    }
+
+    private var budgetContent: some View {
+        BudgetPlanContainer(
+            householdSize: cookingPreferences.householdSize,
+            dietary: Array(cookingPreferences.dietaryPreferences),
+            pantryNames: { pantry.items.map(\.name) },
+            generate: { budget, household, dietary, pantryItems in
+                guard let sync else { throw BudgetPlanError.invalidResponse("not signed in") }
+                return try await sync.budgetPlan(
+                    budget: budget, householdSize: household,
+                    dietaryPreferences: dietary, pantryItems: pantryItems,
+                    // The user's stored region drives the cost multiplier; when
+                    // unset the server falls back to the national average.
+                    region: cookingPreferences.region?.apiValue
+                )
+            },
+            commit: { recipes in commitBudgetRecipes(recipes) },
+            onSaved: { mode = .thisWeek }
+        )
+    }
+
+    /// Commit accepted budget recipes into the existing meal_plan collection: one
+    /// dinner per day starting today. Also persists each recipe body locally so it
+    /// can be opened / aggregated later (the plan entry only snapshots title+image).
+    private func commitBudgetRecipes(_ recipes: [PlannedRecipe]) {
+        let store = RecipeStore(userScope: userScope)
+        let today = Calendar.current.startOfDay(for: Date())
+        for (index, planned) in recipes.enumerated() {
+            let date = Calendar.current.date(byAdding: .day, value: index, to: today) ?? today
+            plan.add(recipe: planned.recipe, to: date, slot: .dinner)
+            store.upsert(planned.recipe)
         }
     }
 
@@ -384,8 +446,16 @@ private enum RecipeSource: Hashable {
     case cookbook(Cookbook)
 }
 
-private struct SourceRoute: Hashable { let slot: MealSlot }
-private struct RecipeRoute: Hashable { let slot: MealSlot; let source: RecipeSource }
+private struct SourceRoute: Hashable {
+    let date: Date?
+    let slot: MealSlot
+}
+
+private struct RecipeRoute: Hashable {
+    let date: Date?
+    let slot: MealSlot
+    let source: RecipeSource
+}
 
 private struct MealAssignSheet: View {
     enum Mode { case add(day: Date); case change(slot: MealSlot) }
@@ -393,33 +463,59 @@ private struct MealAssignSheet: View {
     let mode: Mode
     let recipes: [Recipe]
     @ObservedObject var cookbooks: CookbooksModel
-    @ObservedObject var plan: MealPlanModel
-    /// Chosen (slot, recipe). Parent performs the mutation and dismisses.
-    let onPick: (MealSlot, Recipe) -> Void
+    /// Chosen (optional add date, slot, recipe). Parent performs the mutation and dismisses.
+    let onPick: (Date?, MealSlot, Recipe) -> Void
     let onCancel: () -> Void
 
+    @State private var path = NavigationPath()
+    @State private var addDate: Date
+
+    init(
+        mode: Mode,
+        recipes: [Recipe],
+        cookbooks: CookbooksModel,
+        onPick: @escaping (Date?, MealSlot, Recipe) -> Void,
+        onCancel: @escaping () -> Void
+    ) {
+        self.mode = mode
+        self.recipes = recipes
+        self.cookbooks = cookbooks
+        self.onPick = onPick
+        self.onCancel = onCancel
+        switch mode {
+        case .add(let day): _addDate = State(initialValue: day)
+        case .change: _addDate = State(initialValue: Date())
+        }
+    }
+
     var body: some View {
-        NavigationStack {
+        NavigationStack(path: $path) {
             root
                 .navigationDestination(for: SourceRoute.self) { route in
-                    SourceList(slot: route.slot, cookbooks: cookbooks, onCancel: nil)
+                    SourceList(date: route.date, slot: route.slot, cookbooks: cookbooks, onCancel: nil)
                 }
                 .navigationDestination(for: RecipeRoute.self) { route in
                     RecipeList(slot: route.slot, source: route.source,
-                               recipes: recipes, cookbooks: cookbooks, onPick: onPick)
+                               recipes: recipes, cookbooks: cookbooks) { slot, recipe in
+                        onPick(route.date, slot, recipe)
+                    }
                 }
         }
         // Sage tint for Cancel + the back chevron, matching the app's buttons.
         .tint(Color.accentColor)
+        .presentationDetents([.large])
+        .presentationDragIndicator(.visible)
     }
 
     @ViewBuilder
     private var root: some View {
         switch mode {
-        case .add(let day):
-            SlotList(day: day, plan: plan, onCancel: onCancel)
+        case .add:
+            AddMealPlanSetup(date: $addDate, onCancel: onCancel) { date, slot in
+                path.append(SourceRoute(date: date, slot: slot))
+            }
         case .change(let slot):
-            SourceList(slot: slot, cookbooks: cookbooks, onCancel: onCancel)
+            SourceList(date: nil, slot: slot, cookbooks: cookbooks, onCancel: onCancel)
         }
     }
 }
@@ -481,45 +577,141 @@ private struct AssignRow: View {
     }
 }
 
-/// Step 1 (add only): pick which meal. Each row shows the slot's current state.
-private struct SlotList: View {
-    let day: Date
-    @ObservedObject var plan: MealPlanModel
+/// Step 1 (add only): confirm the date and choose a meal type before entering
+/// the existing source and recipe pickers.
+private struct AddMealPlanSetup: View {
+    @Binding var date: Date
     let onCancel: () -> Void
+    let onContinue: (Date, MealSlot) -> Void
+
+    @State private var selectedSlot: MealSlot?
+
+    private let columns = [
+        GridItem(.flexible(), spacing: Theme.Spacing.md),
+        GridItem(.flexible(), spacing: Theme.Spacing.md)
+    ]
+
+    /// The requested visual order is Breakfast/Lunch, then Dinner/Snack.
+    private let slots: [MealSlot] = [.breakfast, .lunch, .dinner, .snacks]
 
     var body: some View {
-        List(MealSlot.allCases) { slot in
-            NavigationLink(value: SourceRoute(slot: slot)) {
-                AssignRow(title: slot.displayName,
-                          subtitle: subtitle(for: slot),
-                          systemImage: slot.iconName,
-                          tint: Color.accentColor)
+        VStack(alignment: .leading, spacing: Theme.Spacing.xl) {
+            VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
+                setupLabel("Date")
+
+                HStack(spacing: Theme.Spacing.md) {
+                    Image(systemName: "calendar")
+                        .font(.system(size: 18, weight: .medium))
+                        .foregroundStyle(Color.accentColor)
+
+                    Text("Date")
+                        .font(.body)
+                        .foregroundStyle(Color.textPrimary)
+
+                    Spacer(minLength: Theme.Spacing.sm)
+
+                    DatePicker("Date", selection: $date, displayedComponents: .date)
+                        .labelsHidden()
+                        .datePickerStyle(.compact)
+                        .tint(Color.accentColor)
+                }
+                .padding(.horizontal, Theme.Spacing.lg)
+                .frame(minHeight: 56)
+                .background(Color.surface, in: RoundedRectangle(cornerRadius: Theme.cornerRadius, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: Theme.cornerRadius, style: .continuous)
+                        .strokeBorder(Color.hairline, lineWidth: 1)
+                }
             }
-            .cardRow()
+
+            VStack(alignment: .leading, spacing: Theme.Spacing.md) {
+                setupLabel("Meal Type")
+
+                LazyVGrid(columns: columns, spacing: Theme.Spacing.md) {
+                    ForEach(slots) { slot in
+                        mealTypeButton(slot)
+                    }
+                }
+            }
+
+            Spacer(minLength: Theme.Spacing.lg)
+
+            Button {
+                guard let selectedSlot else { return }
+                onContinue(date, selectedSlot)
+            } label: {
+                Text("Continue")
+                    .font(.headline)
+                    .foregroundStyle(Color.white)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 52)
+                    .background(Color.accentColor, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            }
+            .buttonStyle(.plain)
+            .disabled(selectedSlot == nil)
+            .opacity(selectedSlot == nil ? 0.5 : 1)
         }
-        .listStyle(.plain)
-        .scrollContentBackground(.hidden)
+        .padding(.horizontal, Theme.Spacing.lg)
+        .padding(.top, Theme.Spacing.md)
+        .padding(.bottom, Theme.Spacing.lg)
         .appBackground()
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            SheetTitle(title: "Choose a meal")
-            ToolbarItem(placement: .cancellationAction) { Button("Cancel", action: onCancel) }
+            SheetTitle(title: "Add to Meal Plan")
+            ToolbarItem(placement: .confirmationAction) {
+                Button(action: onCancel) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 14, weight: .semibold))
+                        .frame(width: 32, height: 32)
+                }
+                .accessibilityLabel("Close")
+            }
         }
     }
 
-    /// Live per-slot state: recipe name if one, "N recipes" if more, else "Empty".
-    private func subtitle(for slot: MealSlot) -> String {
-        let entries = plan.entries(for: day, slot: slot)
-        switch entries.count {
-        case 0: return "Empty"
-        case 1: return entries[0].recipeTitle
-        default: return "\(entries.count) recipes"
+    private func setupLabel(_ title: String) -> some View {
+        Text(title.uppercased())
+            .font(.caption.weight(.semibold))
+            .tracking(0.5)
+            .foregroundStyle(Color.textSecondary)
+    }
+
+    private func mealTypeButton(_ slot: MealSlot) -> some View {
+        let isSelected = selectedSlot == slot
+        return Button {
+            selectedSlot = slot
+        } label: {
+            HStack(spacing: Theme.Spacing.sm) {
+                Image(systemName: slot.iconName)
+                    .font(.system(size: 18, weight: .medium))
+                    .foregroundStyle(isSelected ? Color.accentColor : Color.textSecondary)
+
+                Text(slot == .snacks ? "Snack" : slot.displayName)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(Color.textPrimary)
+
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, Theme.Spacing.lg)
+            .frame(maxWidth: .infinity, minHeight: 64)
+            .background(
+                isSelected ? Color.creamTint : Color.surface,
+                in: RoundedRectangle(cornerRadius: Theme.cornerRadius, style: .continuous)
+            )
+            .overlay {
+                RoundedRectangle(cornerRadius: Theme.cornerRadius, style: .continuous)
+                    .strokeBorder(isSelected ? Color.accentColor : Color.hairline,
+                                  lineWidth: isSelected ? 2 : 1)
+            }
         }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 }
 
 /// Step 2: pick the source — All Recipes first, then the user's cookbooks.
 private struct SourceList: View {
+    let date: Date?
     let slot: MealSlot
     @ObservedObject var cookbooks: CookbooksModel
     /// Non-nil only when this is the sheet's root (i.e. Change mode).
@@ -527,7 +719,7 @@ private struct SourceList: View {
 
     var body: some View {
         List {
-            NavigationLink(value: RecipeRoute(slot: slot, source: .all)) {
+            NavigationLink(value: RecipeRoute(date: date, slot: slot, source: .all)) {
                 AssignRow(title: "All Recipes", subtitle: nil,
                           systemImage: "square.stack", tint: Color.secondaryAccent)
             }
@@ -536,7 +728,7 @@ private struct SourceList: View {
             if !cookbooks.cookbooks.isEmpty {
                 SectionLabel(text: "Cookbooks")
                 ForEach(cookbooks.cookbooks) { cookbook in
-                    NavigationLink(value: RecipeRoute(slot: slot, source: .cookbook(cookbook))) {
+                    NavigationLink(value: RecipeRoute(date: date, slot: slot, source: .cookbook(cookbook))) {
                         AssignRow(title: cookbook.name, subtitle: nil,
                                   systemImage: "book.closed", tint: Color.accentColor)
                     }
@@ -626,4 +818,6 @@ private struct RecipeList: View {
             cookbooks: CookbooksModel()
         )
     }
+    .environmentObject(SubscriptionService())
+    .environmentObject(CookingPreferencesModel(userScope: "preview"))
 }

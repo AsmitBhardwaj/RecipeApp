@@ -81,6 +81,22 @@ rate_limits = Table(
     Column("count", Integer, nullable=False, default=0),
 )
 
+# Successful-import ledger for the free-tier monthly limit (app/importlimit.py).
+# One row per successfully-completed import, keyed by `job_id` as the PRIMARY KEY
+# so recording is idempotent: a paste-text retry finalizes the SAME job_id, and
+# `on_conflict_do_nothing` means it is never counted twice. Failed / site_blocked
+# jobs never reach `_finalize`, so they are never recorded. `year_month` is the
+# UTC calendar-month bucket ("YYYY-MM") the count query filters on.
+import_events = Table(
+    "import_events",
+    metadata,
+    Column("job_id", String, primary_key=True),
+    Column("account_id", String, nullable=False),
+    Column("year_month", String, nullable=False),
+    Column("created_at", Text, nullable=False),
+    Index("ix_import_events_account_month", "account_id", "year_month"),
+)
+
 feedback = Table(
     "feedback",
     metadata,
@@ -257,6 +273,37 @@ def get_job(job_id: str) -> Optional[Job]:
     with _get_engine().begin() as conn:
         row = conn.execute(select(jobs.c.data).where(jobs.c.job_id == job_id)).fetchone()
     return Job.model_validate_json(row[0]) if row else None
+
+
+# --------------------------------------------------------------------------- #
+# Import ledger (free-tier monthly limit — app/importlimit.py)
+# --------------------------------------------------------------------------- #
+
+
+def record_import_event(account_id: str, job_id: str, year_month: str, created_at: str) -> None:
+    """Record ONE successful import against an account's monthly count. Idempotent
+    per `job_id` (PRIMARY KEY + do-nothing on conflict) so a paste-text retry of
+    the same job — or any re-finalize — is never counted twice."""
+    stmt = _insert(import_events).values(
+        job_id=job_id, account_id=account_id, year_month=year_month, created_at=created_at
+    ).on_conflict_do_nothing(index_elements=["job_id"])
+    with _get_engine().begin() as conn:
+        conn.execute(stmt)
+
+
+def count_imports_in_month(account_id: str, year_month: str) -> int:
+    """How many successful imports this account has recorded in the given UTC
+    calendar month ("YYYY-MM")."""
+    from sqlalchemy import func
+
+    stmt = (
+        select(func.count())
+        .select_from(import_events)
+        .where(import_events.c.account_id == account_id)
+        .where(import_events.c.year_month == year_month)
+    )
+    with _get_engine().begin() as conn:
+        return int(conn.execute(stmt).scalar_one())
 
 
 # --------------------------------------------------------------------------- #

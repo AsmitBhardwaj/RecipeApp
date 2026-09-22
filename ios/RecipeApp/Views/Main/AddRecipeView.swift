@@ -19,6 +19,10 @@ import RecipeKit
 
 struct AddRecipeView: View {
     @ObservedObject var jobs: PendingJobsModel
+    /// Called when the submit is rejected because the free monthly import limit
+    /// was reached. The presenter dismisses this sheet and shows the Platter Pro
+    /// paywall. Invoked BEFORE this sheet dismisses so the handoff survives.
+    var onLimitReached: () -> Void = {}
 
     @Environment(\.dismiss) private var dismiss
 
@@ -92,6 +96,12 @@ struct AddRecipeView: View {
             do {
                 try await jobs.submit(url: urlText)
                 // Job enqueued and now tracked as a processing card — close.
+                dismiss()
+            } catch RecipeProviderError.freeLimitReached {
+                // Hit the free-tier cap: hand off to the paywall instead of
+                // showing an inline error. Flag first, then dismiss so the
+                // presenter's onDismiss picks it up.
+                onLimitReached()
                 dismiss()
             } catch let error as RecipeProviderError {
                 phase = .failed(error.userMessage)

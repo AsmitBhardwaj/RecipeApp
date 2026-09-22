@@ -103,4 +103,5 @@ extension View {
             sync: SyncCoordinator(userId: "preview", tokenProvider: { "" })
         )
     }
+    .environmentObject(SubscriptionService())
 }

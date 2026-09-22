@@ -34,7 +34,8 @@ loop.
   fall back to a stock photo (Unsplash or Pexels API) matched by recipe title;
   otherwise no image
 - Simple two-tab app: **Recipes** (list + detail) and **Account**
-- Free and unlimited: extraction has no usage cap and no paywall
+- Platter Pro uses StoreKit 2 subscriptions. Existing recipe extraction and
+  user data remain available unless a feature is explicitly designated Pro.
 
 ### Explicitly OUT of scope for MVP — do not build unless asked
 - Audio transcription (Whisper) — deferred to a future paid tier

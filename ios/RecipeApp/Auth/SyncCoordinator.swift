@@ -33,6 +33,7 @@ final class SyncCoordinator: ObservableObject {
     /// (an account-scoped endpoint) authenticate identically. Built lazily —
     /// suggestions are only fetched from the Kitchen tab's Pantry segment.
     private let pantryClient: PantrySuggestionsClient
+    private let budgetClient: BudgetPlanClient
 
     private var pushTask: Task<Void, Never>?
     private var isSyncing = false
@@ -48,6 +49,7 @@ final class SyncCoordinator: ObservableObject {
         self.applier = applier
         self.client = SyncClient(accessTokenProvider: tokenProvider)
         self.pantryClient = PantrySuggestionsClient(accessTokenProvider: tokenProvider)
+        self.budgetClient = BudgetPlanClient(accessTokenProvider: tokenProvider)
         self.engine = SyncEngine(
             transport: client,
             outbox: SyncOutbox(userId: userId, suiteName: suiteName),
@@ -111,6 +113,26 @@ final class SyncCoordinator: ObservableObject {
     ) async throws -> PantrySuggestionsResponse {
         try await pantryClient.suggestions(
             limit: limit, pantryOverride: pantryOverride, allowGeneration: allowGeneration
+        )
+    }
+
+    // MARK: - Plan on a Budget
+
+    /// Generate a budget plan for the signed-in account (POST /v1/meal-plan/budget).
+    /// Pro-gated server-side; the client also sends its cached Pro claim.
+    func budgetPlan(
+        budget: Int,
+        householdSize: Int,
+        dietaryPreferences: [String],
+        pantryItems: [String],
+        region: String? = nil
+    ) async throws -> BudgetPlanResponse {
+        try await budgetClient.generate(
+            budget: budget,
+            householdSize: householdSize,
+            dietaryPreferences: dietaryPreferences,
+            pantryItems: pantryItems,
+            region: region
         )
     }
 

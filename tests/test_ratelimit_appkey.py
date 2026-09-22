@@ -126,7 +126,7 @@ class AppKeyGateTests(unittest.TestCase):
         import app.main as main
 
         self.main = main
-        main.orchestrator.create_job = lambda url, uid: Job(
+        main.orchestrator.create_job = lambda url, uid, account_id=None: Job(
             job_id="j1",
             user_id=uid,
             url=url,

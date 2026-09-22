@@ -20,6 +20,10 @@ import RecipeKit
 struct PasteRecipeTextView: View {
     @ObservedObject var jobs: PendingJobsModel
     let failedJob: PendingJobsModel.FailedJob
+    /// Called when the paste is rejected because the free monthly import limit was
+    /// reached, so the presenter can show the Platter Pro paywall. Invoked before
+    /// this sheet dismisses.
+    var onLimitReached: () -> Void = {}
 
     @Environment(\.dismiss) private var dismiss
 
@@ -109,6 +113,9 @@ struct PasteRecipeTextView: View {
             do {
                 try await jobs.submitPastedText(jobId: failedJob.jobId, text: text)
                 // Recipe is now in the list and the failed card is cleared — done.
+                dismiss()
+            } catch RecipeProviderError.freeLimitReached {
+                onLimitReached()
                 dismiss()
             } catch let error as RecipeProviderError {
                 phase = .failed(error.userMessage)

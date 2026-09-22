@@ -18,6 +18,10 @@ struct RecipeDetailView: View {
     @StateObject private var scaler: ServingScaler
     @State private var showingCookbookPicker = false
     @State private var showingCookMode = false
+    /// Nutrition (calories/macros) is a Platter Pro feature — free users see a
+    /// single locked row that opens the paywall.
+    @EnvironmentObject private var subscriptions: SubscriptionService
+    @State private var showPaywall = false
     /// App-wide step-timer notification scheduler, injected at the app root.
     @Environment(\.cookTimerScheduler) private var cookTimerScheduler
 
@@ -56,6 +60,10 @@ struct RecipeDetailView: View {
         // Full-screen cover (not a sheet) so a stray swipe can't drop the cook.
         .fullScreenCover(isPresented: $showingCookMode) {
             CookModeView(recipe: recipe, userScope: userScope, scheduler: cookTimerScheduler)
+        }
+        .sheet(isPresented: $showPaywall) {
+            PlatterProPaywallView()
+                .environmentObject(subscriptions)
         }
     }
 
@@ -197,7 +205,19 @@ struct RecipeDetailView: View {
         if let nutrition = recipe.nutrition {
             let cells = nutritionCells(nutrition)
             if !cells.isEmpty {
-                VStack(alignment: .leading, spacing: 8) {
+                if !subscriptions.isProUnlocked {
+                    // Free users: one locked row instead of the numbers. Cached
+                    // entitlement drives this so a Pro user never flashes it.
+                    ProNutritionLockedRow(onUpgrade: { showPaywall = true })
+                } else {
+                    nutritionNumbers(nutrition, cells: cells)
+                }
+            }
+        }
+    }
+
+    private func nutritionNumbers(_ nutrition: Nutrition, cells: [(label: String, value: String)]) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
                     Text(nutrition.basis == .perServing ? "Nutrition per serving" : "Nutrition per recipe")
                         .font(.caption2)
                         .foregroundStyle(Color.textSecondary)
@@ -224,8 +244,6 @@ struct RecipeDetailView: View {
                     }
                     .frame(maxWidth: .infinity)
                 }
-            }
-        }
     }
 
     /// Builds the stat cells, skipping any macro the estimate left nil. Calories
@@ -299,22 +317,16 @@ struct RecipeDetailView: View {
                         // Same photo/emoji icon the item shows on the Grocery List.
                         IngredientIconGlyph(name: ingredient.name, size: 28)
                             .accessibilityHidden(true)
-                        Text(ingredientLine(for: ingredient))
+                        IngredientText(
+                            ingredient: ingredient,
+                            scaledBy: recipe.canScaleServings ? scaler.ratio : nil
+                        )
                             .font(.body)
                         Spacer(minLength: 0)
                     }
                 }
             }
         }
-    }
-
-    /// Scales the ingredient line when the adjuster is active; otherwise the
-    /// plain line. Ingredients without a numeric quantity are unchanged either
-    /// way (handled inside `displayString(scaledBy:)`).
-    private func ingredientLine(for ingredient: Ingredient) -> String {
-        recipe.canScaleServings
-            ? ingredient.displayString(scaledBy: scaler.ratio)
-            : ingredient.displayString
     }
 
     // MARK: Instructions
@@ -353,10 +365,12 @@ struct RecipeDetailView: View {
     NavigationStack {
         RecipeDetailView(recipe: .spicyNoodles, cookbooks: CookbooksModel())
     }
+    .environmentObject(SubscriptionService())
 }
 
 #Preview("Generated, no image") {
     NavigationStack {
         RecipeDetailView(recipe: .margheritaPizza, cookbooks: CookbooksModel())
     }
+    .environmentObject(SubscriptionService())
 }
