@@ -250,8 +250,10 @@ struct GroceryListView: View {
 
     @ViewBuilder
     private var content: some View {
-        if isEmpty {
+        if hasNoPlan {
             emptyState
+        } else if allUnresolved {
+            unresolvedState
         } else {
             List {
                 if resolution.unresolved > 0 {
@@ -353,6 +355,37 @@ struct GroceryListView: View {
         .padding(.bottom, Theme.Spacing.tabBarClearance)
     }
 
+    /// Shown when the period has planned meals but none of their recipes are
+    /// loaded on this device yet (or were deleted). Surfaces `unresolvedNote` —
+    /// which previously only rendered inside the populated list and was therefore
+    /// masked whenever *every* entry was unresolved — so the user learns a meal
+    /// is planned rather than seeing the plain "Nothing to shop for" cart.
+    private var unresolvedState: some View {
+        VStack(spacing: 16) {
+            ZStack {
+                Circle()
+                    .fill(Color.creamTint)
+                    .frame(width: 72, height: 72)
+                Image(systemName: "questionmark.circle")
+                    .font(.system(size: 30, weight: .regular))
+                    .foregroundStyle(Color.accentColor)
+            }
+
+            Text("Ingredients not ready yet")
+                .font(.editorialTitle(size: 24, relativeTo: .title2))
+                .foregroundStyle(Color.textPrimary)
+
+            Text(unresolvedNote)
+                .font(.subheadline)
+                .foregroundStyle(Color.textSecondary)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.horizontal, 40)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding(.bottom, Theme.Spacing.tabBarClearance)
+    }
+
     private func sectionHeader(_ title: String) -> some View {
         Text(title.uppercased())
             .font(.caption.weight(.semibold))
@@ -437,8 +470,18 @@ struct GroceryListView: View {
         model.manualItems(inPeriod: periodKey)
     }
 
-    private var isEmpty: Bool {
-        sections.isEmpty && manualForPeriod.isEmpty
+    /// Nothing derivable AND nothing planned: a genuinely empty day → the
+    /// "plan a meal" empty-cart state.
+    private var hasNoPlan: Bool {
+        sections.isEmpty && manualForPeriod.isEmpty && resolution.unresolved == 0
+    }
+
+    /// A meal IS planned for this period but every entry failed to resolve to a
+    /// loaded recipe (e.g. bodies not synced yet, or a deleted recipe). Distinct
+    /// from `hasNoPlan` so we surface the unresolved note instead of pretending
+    /// the day is empty.
+    private var allUnresolved: Bool {
+        sections.isEmpty && manualForPeriod.isEmpty && resolution.unresolved > 0
     }
 
     // MARK: - Progress & completion

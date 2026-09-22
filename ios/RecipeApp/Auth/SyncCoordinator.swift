@@ -20,6 +20,16 @@
 import Foundation
 import RecipeKit
 
+/// A live view model that seeds itself from a disk store and therefore needs a
+/// nudge after a sync pull writes new data straight to disk (the applier never
+/// touches @Published state). Implementations re-read their store, adding only
+/// newly-arrived items and never dropping or reordering anything resolved this
+/// session (merge-never-overwrite).
+@MainActor
+protocol SyncRefreshable: AnyObject {
+    func refreshFromStore()
+}
+
 @MainActor
 final class SyncCoordinator: ObservableObject {
     /// The account scope the view models use to open their local stores.
@@ -37,6 +47,15 @@ final class SyncCoordinator: ObservableObject {
 
     private var pushTask: Task<Void, Never>?
     private var isSyncing = false
+
+    /// Live models that seed from disk stores and need refreshing after a pull
+    /// writes new data (PendingJobsModel, MealPlanModel, PantryModel,
+    /// CookbooksModel). Held weakly so a torn-down view's model doesn't leak or
+    /// keep firing; nil slots are pruned on notify. Several instances of the same
+    /// model type can register (e.g. the Grocery tab and Meal Plan tab each own a
+    /// MealPlanModel) — every one gets refreshed.
+    private struct WeakRefreshable { weak var value: (any SyncRefreshable)? }
+    private var refreshables: [WeakRefreshable] = []
 
     init(
         userId: String,
@@ -56,6 +75,22 @@ final class SyncCoordinator: ObservableObject {
             cursorStore: SyncCursorStore(userId: userId, suiteName: suiteName),
             apply: { change in applier.apply(change) }
         )
+    }
+
+    // MARK: - Live-model refresh registration
+
+    /// Register a disk-backed model to be refreshed after a pull applies remote
+    /// changes. Idempotent-ish: callers register once in their `init`.
+    func registerRefreshable(_ refreshable: any SyncRefreshable) {
+        refreshables.removeAll { $0.value == nil }
+        guard !refreshables.contains(where: { $0.value === refreshable }) else { return }
+        refreshables.append(WeakRefreshable(value: refreshable))
+    }
+
+    /// Ask every live model to merge in whatever the pull just wrote to disk.
+    private func notifyRefreshables() {
+        refreshables.removeAll { $0.value == nil }
+        for slot in refreshables { slot.value?.refreshFromStore() }
     }
 
     // MARK: - Recording local mutations
@@ -87,12 +122,20 @@ final class SyncCoordinator: ObservableObject {
         guard !isSyncing else { return }
         isSyncing = true
         defer { isSyncing = false }
+        let revisionBefore = applier.appliedRevision
         do {
             try await engine.sync()
             try await hydrateIfNeeded()
         } catch {
             // Offline / unauthorized / server error: keep the outbox and cursor;
             // the next trigger (foreground, next mutation) retries.
+        }
+        // Only refresh the live models when the pull/hydrate actually wrote new
+        // data to disk. A plain local-edit push pulls nothing new (our own change
+        // is behind the cursor), so this stays a no-op then — no spurious
+        // app-wide re-renders on every edit.
+        if applier.appliedRevision != revisionBefore {
+            notifyRefreshables()
         }
     }
 
@@ -141,5 +184,9 @@ final class SyncCoordinator: ObservableObject {
         guard !ids.isEmpty else { return }
         let recipes = try await client.recipes(ids: ids)
         applier.hydrate(recipes)
+        // Bodies are now on disk (RecipeStore). The revision bump inside
+        // hydrate() makes sync() nudge the live models (see notifyRefreshables),
+        // so a recipe pulled from another device resolves this session rather
+        // than only after the next cold launch.
     }
 }

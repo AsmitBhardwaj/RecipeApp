@@ -22,7 +22,7 @@ import Foundation
 import RecipeKit
 
 @MainActor
-final class PendingJobsModel: ObservableObject {
+final class PendingJobsModel: ObservableObject, SyncRefreshable {
 
     /// Finished recipes for the list (newest first). Accumulates this session;
     /// `fetchRecipes()` seeds it (empty against the real backend today).
@@ -107,6 +107,26 @@ final class PendingJobsModel: ObservableObject {
         // Seed the list from the on-device cache so recipes extracted in earlier
         // sessions are present the instant the app launches, before any network.
         self.recipes = recipeStore.all()
+        // A sync pull hydrates recipe bodies straight to disk (RecipeStore) and
+        // does NOT touch this in-memory list. Without this hook a recipe planned
+        // on another device stays invisible until a cold relaunch re-seeds from
+        // disk — which is exactly what left the Grocery List showing an empty
+        // "Nothing to shop for" for a day that had a meal planned. Registering
+        // here means the coordinator calls refreshFromStore() after any pull that
+        // wrote new data.
+        sync?.registerRefreshable(self)
+    }
+
+    /// Merge any recipes now on disk (e.g. bodies just hydrated by a sync pull)
+    /// into the in-memory list, without dropping recipes resolved this session.
+    /// Same merge-never-overwrite rule as `load()`: only genuinely new ids are
+    /// appended, so no other consumer of `recipes` loses a session recipe and the
+    /// existing ordering of already-present recipes is preserved.
+    func refreshFromStore() {
+        let known = Set(recipes.map(\.recipeId))
+        let added = recipeStore.all().filter { !known.contains($0.recipeId) }
+        guard !added.isEmpty else { return }
+        recipes.append(contentsOf: added)
     }
 
     // MARK: - Initial load
