@@ -19,9 +19,31 @@ struct RootView: View {
     /// writing it in Settings via the same key/store makes toggles apply live.
     @AppStorage(AppAppearance.storageKey, store: .appGroup) private var appearance: AppAppearance = .system
 
+    /// Cold-launch splash. `@State` on the root means it's `true` once per process
+    /// launch and survives background/foreground (the view tree stays alive), so
+    /// the splash never replays on resume.
+    @State private var showSplash = true
+
     var body: some View {
-        content
-            .preferredColorScheme(appearance.colorScheme)
+        ZStack {
+            content
+            if showSplash {
+                SplashView()
+                    .transition(.opacity)
+                    .zIndex(1)
+                    .onAppear(perform: scheduleSplashDismiss)
+            }
+        }
+        .preferredColorScheme(appearance.colorScheme)
+    }
+
+    /// Hold the static splash for a fixed 2 seconds on cold launch, then crossfade
+    /// to the main content. Scheduled from the splash's `onAppear`, which fires
+    /// once (the splash is removed permanently afterwards, not re-shown on resume).
+    private func scheduleSplashDismiss() {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+            withAnimation(.easeInOut(duration: 0.4)) { showSplash = false }
+        }
     }
 
     @ViewBuilder
