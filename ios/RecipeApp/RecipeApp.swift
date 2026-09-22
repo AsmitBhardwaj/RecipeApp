@@ -108,6 +108,19 @@ struct RecipeApp: App {
             inner = AnyView(NavigationStack {
                 KitchenView(cookbooks: CookbooksModel())
             })
+        case "mealPlan":
+            // Screenshot harness for the Meal Plan tab header (title row + segmented
+            // control). Mock-backed models so it renders without sign-in or data.
+            inner = AnyView(
+                NavigationStack {
+                    MealPlanView(
+                        jobs: PendingJobsModel(provider: MockRecipeProvider(), userScope: "preview"),
+                        cookbooks: CookbooksModel(userScope: "preview"),
+                        userScope: "preview"
+                    )
+                }
+                .environmentObject(CookingPreferencesModel(userScope: "preview"))
+            )
         case "onboardingPrefs", "onboardingRegion":
             // Screenshot harness for the onboarding preferences (Screen 4) and the
             // new grocery-region (Screen 5) steps, jumped to directly.

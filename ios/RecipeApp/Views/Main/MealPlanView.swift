@@ -47,6 +47,8 @@ struct MealPlanView: View {
     /// The entry being moved (long-press → "Move to another day"), drives the
     /// day-picker dialog.
     @State private var moveEntry: MealPlanEntry?
+    /// Drives the Account sheet from the header's account button (same as Recipes).
+    @State private var showingAccount = false
 
     /// Resolves an entry's ingredient count from the in-session recipe list. The
     /// meal-plan entry itself only snapshots title + image (see MealPlanEntry), so
@@ -58,7 +60,7 @@ struct MealPlanView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            ScreenHeader("Meal Plan")
+            header
             modePicker
             if mode == .thisWeek {
                 WeekSwitcherBar(plan: plan)
@@ -71,6 +73,11 @@ struct MealPlanView: View {
         .foregroundStyle(Color.textPrimary)
         .appBackground()
         .toolbar(.hidden, for: .navigationBar)
+        .sheet(isPresented: $showingAccount) {
+            NavigationStack {
+                AccountView()
+            }
+        }
         .sheet(item: $assignFlow) { flow in
             MealAssignSheet(
                 mode: flow.mode,
@@ -112,13 +119,29 @@ struct MealPlanView: View {
         }
     }
 
-    private var modePicker: some View {
-        Picker("Mode", selection: $mode) {
-            ForEach(PlanMode.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+    /// Title row: same treatment as the Recipes tab — large serif "Meal Plan."
+    /// title with the shared circular account button wired to the same
+    /// `AccountView` destination.
+    private var header: some View {
+        ScreenHeader("Meal Plan.") {
+            CircleHeaderButton(
+                systemImage: "person.crop.circle",
+                accessibilityLabel: "Account"
+            ) {
+                showingAccount = true
+            }
         }
-        .pickerStyle(.segmented)
-        .padding(.horizontal, 16)
-        .padding(.vertical, 8)
+    }
+
+    /// The This Week / Plan on a Budget toggle, using the same `SegmentedPill`
+    /// component as the Recipes tab's Cookbooks / All Recipes control.
+    private var modePicker: some View {
+        SegmentedPill(
+            segments: PlanMode.allCases.map { .init(title: $0.rawValue, value: $0) },
+            selection: $mode
+        )
+        .padding(.horizontal, Theme.Spacing.lg)
+        .padding(.bottom, Theme.Spacing.lg)
         .accessibilityLabel("Meal plan mode")
     }
 
