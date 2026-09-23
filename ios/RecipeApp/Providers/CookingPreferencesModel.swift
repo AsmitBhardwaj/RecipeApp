@@ -22,20 +22,23 @@ final class CookingPreferencesModel: ObservableObject {
     var primaryGoal: PrimaryCookingGoal? { preferences.primaryGoal }
     var dietaryPreferences: Set<DietaryPreference> { preferences.dietaryPreferences }
     var householdSize: Int { preferences.householdSize }
-    var region: GroceryRegion? { preferences.region }
+    var country: String? { preferences.country }
+    var areaType: AreaType? { preferences.areaType }
     var hasCompletedOnboarding: Bool { preferences.hasCompletedOnboarding }
 
     func saveAnswers(
         primaryGoal: PrimaryCookingGoal?,
         dietaryPreferences: Set<DietaryPreference>,
         householdSize: Int,
-        region: GroceryRegion?
+        country: String?,
+        areaType: AreaType?
     ) {
         preferences = CookingPreferences(
             primaryGoal: primaryGoal,
             dietaryPreferences: dietaryPreferences,
             householdSize: householdSize,
-            region: region,
+            country: country,
+            areaType: areaType,
             hasCompletedOnboarding: preferences.hasCompletedOnboarding
         )
         persist()
@@ -56,8 +59,13 @@ final class CookingPreferencesModel: ObservableObject {
         persist()
     }
 
-    func updateRegion(_ region: GroceryRegion?) {
-        preferences.region = region
+    func updateCountry(_ country: String?) {
+        preferences.country = country
+        persist()
+    }
+
+    func updateAreaType(_ areaType: AreaType?) {
+        preferences.areaType = areaType
         persist()
     }
 

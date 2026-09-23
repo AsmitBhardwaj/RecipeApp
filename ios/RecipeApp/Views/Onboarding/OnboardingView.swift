@@ -14,7 +14,8 @@ struct OnboardingView: View {
     @State private var primaryGoal: PrimaryCookingGoal?
     @State private var dietaryPreferences: Set<DietaryPreference> = []
     @State private var householdSize = 2
-    @State private var region: GroceryRegion?
+    @State private var country: String?
+    @State private var areaType: AreaType?
     @State private var pantrySelections: Set<String> = []
     @State private var hasLoadedAnswers = false
 
@@ -43,7 +44,7 @@ struct OnboardingView: View {
                     householdSize: $householdSize
                 )
             case 4:
-                OnboardingRegionScreen(region: $region)
+                OnboardingRegionScreen(country: $country, areaType: $areaType)
             default:
                 OnboardingPantryScreen(
                     selections: $pantrySelections,
@@ -128,9 +129,11 @@ struct OnboardingView: View {
         primaryGoal = preferences.primaryGoal
         dietaryPreferences = preferences.dietaryPreferences
         householdSize = preferences.householdSize
-        // Prefill a stored region; on a first run with none, guess from device
-        // locale so the picker starts on a sensible bucket the user can change.
-        region = preferences.region ?? GroceryRegion.guessFromLocale()
+        // Prefill a stored country; on a first run with none, guess from device
+        // locale so the picker starts on a sensible country the user can change.
+        // Area type has no sensible locale guess, so it stays unset until picked.
+        country = preferences.country ?? GroceryCountry.guessFromLocale()
+        areaType = preferences.areaType
         let existing = Set(pantry.items.map { $0.name.lowercased() })
         pantrySelections = Set(OnboardingPantryScreen.staples.filter { existing.contains($0.lowercased()) })
     }
@@ -152,7 +155,8 @@ struct OnboardingView: View {
             primaryGoal: primaryGoal,
             dietaryPreferences: dietaryPreferences,
             householdSize: householdSize,
-            region: region
+            country: country,
+            areaType: areaType
         )
         let existing = Set(pantry.items.map { $0.name.lowercased() })
         for item in pantrySelections where !existing.contains(item.lowercased()) {

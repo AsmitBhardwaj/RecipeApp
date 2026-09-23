@@ -53,58 +53,56 @@ class BudgetMathTests(unittest.TestCase):
 
 
 class RegionalMultiplierTests(unittest.TestCase):
-    def test_known_region(self) -> None:
-        self.assertEqual(regional_cost.multiplier_for("San Francisco"), 1.35)
+    def test_country_baseline_and_area_modifier_combine(self) -> None:
+        # US (1.00) × city (1.15) = 1.15; GB (1.10) × rural (0.85) = 0.935 → 0.94.
+        self.assertEqual(regional_cost.multiplier_for("US", "city"), 1.15)
+        self.assertEqual(regional_cost.multiplier_for("GB", "rural"), 0.94)
+        self.assertEqual(regional_cost.multiplier_for("US", "suburb"), 1.0)
 
-    def test_unknown_region_falls_back_to_default(self) -> None:
-        self.assertEqual(regional_cost.multiplier_for("Atlantis"), regional_cost.DEFAULT_MULTIPLIER)
+    def test_unknown_country_falls_back_to_default_baseline(self) -> None:
+        # Unmapped country → 1.0 baseline; suburb is the 1.0 area anchor.
+        self.assertEqual(regional_cost.multiplier_for("ZZ", "suburb"), regional_cost.DEFAULT_BASELINE)
 
-    def test_missing_region_falls_back_to_default(self) -> None:
-        self.assertEqual(regional_cost.multiplier_for(None), regional_cost.DEFAULT_MULTIPLIER)
-        self.assertEqual(regional_cost.multiplier_for(""), regional_cost.DEFAULT_MULTIPLIER)
+    def test_missing_parts_fall_back_to_defaults(self) -> None:
+        self.assertEqual(regional_cost.multiplier_for(None, None), 1.0)
+        self.assertEqual(regional_cost.multiplier_for("", ""), 1.0)
+        # One part set, the other missing → the set part still applies.
+        self.assertEqual(regional_cost.multiplier_for("IN", None), regional_cost.COUNTRY_BASELINES["IN"])
+        self.assertEqual(regional_cost.multiplier_for(None, "city"), regional_cost.AREA_MODIFIERS["city"])
 
-    def test_case_insensitive(self) -> None:
-        self.assertEqual(regional_cost.multiplier_for("NEW YORK"), regional_cost.multiplier_for("new york"))
+    def test_country_is_case_insensitive(self) -> None:
+        self.assertEqual(regional_cost.multiplier_for("gb", "city"), regional_cost.multiplier_for("GB", "city"))
+
+    def test_area_type_is_case_insensitive(self) -> None:
+        self.assertEqual(regional_cost.multiplier_for("US", "CITY"), regional_cost.multiplier_for("US", "city"))
 
     def test_ordering_is_sane(self) -> None:
-        # High-cost metro > national average > low-cost rural.
-        self.assertGreater(regional_cost.multiplier_for("san francisco"), regional_cost.multiplier_for("national"))
-        self.assertGreater(regional_cost.multiplier_for("national"), regional_cost.multiplier_for("rural midwest"))
+        # High-cost country/city > US suburb baseline > low-cost country/rural.
+        self.assertGreater(
+            regional_cost.multiplier_for("CH", "city"), regional_cost.multiplier_for("US", "suburb")
+        )
+        self.assertGreater(
+            regional_cost.multiplier_for("US", "suburb"), regional_cost.multiplier_for("IN", "rural")
+        )
+        # Within one country, city > suburb > rural.
+        self.assertGreater(regional_cost.multiplier_for("US", "city"), regional_cost.multiplier_for("US", "suburb"))
+        self.assertGreater(regional_cost.multiplier_for("US", "suburb"), regional_cost.multiplier_for("US", "rural"))
 
 
-class SelectableRegionTests(unittest.TestCase):
-    """The regions offered in onboarding / Account must each resolve to a real
-    multiplier bucket end to end — never to the DEFAULT_MULTIPLIER fallback."""
+class MultiplierTableTests(unittest.TestCase):
+    """The flat (country, area_type) table must stay internally consistent."""
 
-    def test_every_selectable_region_maps_to_its_bucket(self) -> None:
-        self.assertTrue(regional_cost.SELECTABLE_REGIONS, "expected a non-empty picker list")
-        for key, label in regional_cost.SELECTABLE_REGIONS:
-            with self.subTest(region=key):
-                # Present verbatim in the lookup table → resolves without fallback.
-                self.assertIn(
-                    key, regional_cost.REGIONAL_MULTIPLIERS,
-                    f"{key!r} ({label}) is not a defined multiplier bucket",
-                )
-                # And multiplier_for() returns exactly that bucket's value.
-                self.assertEqual(
-                    regional_cost.multiplier_for(key),
-                    regional_cost.REGIONAL_MULTIPLIERS[key],
-                )
+    def test_suburb_is_the_area_anchor(self) -> None:
+        self.assertEqual(regional_cost.AREA_MODIFIERS["suburb"], 1.0)
+        self.assertGreater(regional_cost.AREA_MODIFIERS["city"], 1.0)
+        self.assertLess(regional_cost.AREA_MODIFIERS["rural"], 1.0)
 
-    def test_no_selectable_region_falls_back_to_default(self) -> None:
-        # A region reaches DEFAULT_MULTIPLIER *only* when its key is absent from the
-        # table. Prove none of the offered keys is absent, so none falls back.
-        unmapped = [
-            key for key in regional_cost.selectable_region_keys()
-            if key not in regional_cost.REGIONAL_MULTIPLIERS
-        ]
-        self.assertEqual(unmapped, [], f"these picker regions would fall back to 1.0: {unmapped}")
+    def test_us_baseline_is_the_national_anchor(self) -> None:
+        self.assertEqual(regional_cost.COUNTRY_BASELINES["US"], 1.0)
 
-    def test_selectable_keys_are_normalized(self) -> None:
-        # Keys are matched case-insensitively after strip().lower(); the stored keys
-        # the client sends must already be in that normal form so they match.
-        for key in regional_cost.selectable_region_keys():
-            self.assertEqual(key, key.strip().lower())
+    def test_area_keys_match_the_ios_enum_values(self) -> None:
+        # RecipeKit.AreaType raw values must stay in sync with these keys.
+        self.assertEqual(set(regional_cost.AREA_MODIFIERS), {"city", "suburb", "rural"})
 
 
 class BudgetPlanEndpointTests(unittest.TestCase):
@@ -148,7 +146,8 @@ class BudgetPlanEndpointTests(unittest.TestCase):
             "household_size": 2,
             "dietary_preferences": [],
             "pantry_items": ["rice", "eggs"],
-            "region": "san francisco",
+            "country": "US",
+            "area_type": "city",
         }
         body.update(over)
         return body
@@ -186,18 +185,23 @@ class BudgetPlanEndpointTests(unittest.TestCase):
             r = self.client.post("/v1/meal-plan/budget", json=self._body(), headers=self._headers())
         self.assertEqual(r.status_code, 200, r.text)
         data = r.json()
-        self.assertEqual(data["regional_multiplier"], 1.35)
+        # US (1.00) × city (1.15) = 1.15
+        self.assertEqual(data["regional_multiplier"], 1.15)
         self.assertEqual(len(data["recipes"]), 1)
         planned = data["recipes"][0]
-        # baseline 10.0 × SF 1.35 = 13.5
-        self.assertAlmostEqual(planned["estimated_cost"]["amount"], 13.5, places=2)
+        # baseline 10.0 × 1.15 = 11.5
+        self.assertAlmostEqual(planned["estimated_cost"]["amount"], 11.5, places=2)
         self.assertEqual(planned["health_signal"], "Veg-forward")
         # Recipe was written to the shared cache under its synthetic key.
         self.assertIsNotNone(db.get_recipe(planned["recipe"]["recipe_id"]))
 
-    def test_unknown_region_uses_default_multiplier(self) -> None:
+    def test_unknown_location_uses_default_multiplier(self) -> None:
         with mock.patch("app.mealplan.llm.generate_budget_plan", return_value=self._fake_recipes()):
-            r = self.client.post("/v1/meal-plan/budget", json=self._body(region="Atlantis"), headers=self._headers())
+            r = self.client.post(
+                "/v1/meal-plan/budget",
+                json=self._body(country="ZZ", area_type="spacestation"),
+                headers=self._headers(),
+            )
         self.assertEqual(r.status_code, 200, r.text)
         self.assertEqual(r.json()["regional_multiplier"], 1.0)
 

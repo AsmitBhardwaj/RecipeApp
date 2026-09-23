@@ -38,23 +38,27 @@ public struct CookingPreferences: Codable, Equatable, Sendable {
     public var primaryGoal: PrimaryCookingGoal?
     public var dietaryPreferences: Set<DietaryPreference>
     public var householdSize: Int
-    /// The user's grocery-cost region (drives the Plan on a Budget multiplier).
-    /// Optional and decoded leniently so preferences saved before this field
-    /// existed still load.
-    public var region: GroceryRegion?
+    /// The user's grocery-cost country as an ISO 3166-1 alpha-2 code (e.g. "US").
+    /// Optional and decoded leniently so older preferences still load.
+    public var country: String?
+    /// The user's area type (City/Suburb/Rural). Combined with `country` to drive
+    /// the Plan on a Budget cost multiplier.
+    public var areaType: AreaType?
     public var hasCompletedOnboarding: Bool
 
     public init(
         primaryGoal: PrimaryCookingGoal? = nil,
         dietaryPreferences: Set<DietaryPreference> = [],
         householdSize: Int = 2,
-        region: GroceryRegion? = nil,
+        country: String? = nil,
+        areaType: AreaType? = nil,
         hasCompletedOnboarding: Bool = false
     ) {
         self.primaryGoal = primaryGoal
         self.dietaryPreferences = Self.normalized(dietaryPreferences)
         self.householdSize = min(max(householdSize, 1), 12)
-        self.region = region
+        self.country = country
+        self.areaType = areaType
         self.hasCompletedOnboarding = hasCompletedOnboarding
     }
 
@@ -64,7 +68,10 @@ public struct CookingPreferences: Codable, Equatable, Sendable {
         let diet = try c.decodeIfPresent(Set<DietaryPreference>.self, forKey: .dietaryPreferences) ?? []
         dietaryPreferences = Self.normalized(diet)
         householdSize = min(max(try c.decodeIfPresent(Int.self, forKey: .householdSize) ?? 2, 1), 12)
-        region = try c.decodeIfPresent(GroceryRegion.self, forKey: .region)
+        country = try c.decodeIfPresent(String.self, forKey: .country)
+        areaType = try c.decodeIfPresent(AreaType.self, forKey: .areaType)
+        // The old single `region` field (removed) is intentionally not decoded:
+        // existing users silently default to unset and re-pick country + area type.
         hasCompletedOnboarding = try c.decodeIfPresent(Bool.self, forKey: .hasCompletedOnboarding) ?? false
     }
 

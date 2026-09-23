@@ -168,14 +168,16 @@ final class SyncCoordinator: ObservableObject {
         householdSize: Int,
         dietaryPreferences: [String],
         pantryItems: [String],
-        region: String? = nil
+        country: String? = nil,
+        areaType: String? = nil
     ) async throws -> BudgetPlanResponse {
         try await budgetClient.generate(
             budget: budget,
             householdSize: householdSize,
             dietaryPreferences: dietaryPreferences,
             pantryItems: pantryItems,
-            region: region
+            country: country,
+            areaType: areaType
         )
     }
 

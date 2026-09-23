@@ -37,7 +37,8 @@ public struct BudgetPlanClient {
         householdSize: Int,
         dietaryPreferences: [String],
         pantryItems: [String],
-        region: String?
+        country: String?,
+        areaType: String?
     ) async throws -> BudgetPlanResponse {
         var request = try await makeRequest("v1/meal-plan/budget", method: "POST")
         request.httpBody = try JSONEncoder().encode(RequestBody(
@@ -46,7 +47,8 @@ public struct BudgetPlanClient {
             householdSize: householdSize,
             dietaryPreferences: dietaryPreferences,
             pantryItems: pantryItems,
-            region: region
+            country: country,
+            areaType: areaType
         ))
         return try await send(request)
     }
@@ -117,13 +119,15 @@ private struct RequestBody: Encodable {
     let householdSize: Int
     let dietaryPreferences: [String]
     let pantryItems: [String]
-    let region: String?
+    let country: String?
+    let areaType: String?
 
     enum CodingKeys: String, CodingKey {
-        case budget, currency, region
+        case budget, currency, country
         case householdSize = "household_size"
         case dietaryPreferences = "dietary_preferences"
         case pantryItems = "pantry_items"
+        case areaType = "area_type"
     }
 }
 

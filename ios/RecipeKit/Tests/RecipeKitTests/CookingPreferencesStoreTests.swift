@@ -24,47 +24,61 @@ final class CookingPreferencesStoreTests: XCTestCase {
         XCTAssertNil(second.load())
     }
 
-    func testRegionRoundTripsThroughStore() {
+    func testCountryAndAreaTypeRoundTripThroughStore() {
         let suite = "CookingPreferencesStoreTests.\(#function)"
         let defaults = UserDefaults(suiteName: suite)!
         defaults.removePersistentDomain(forName: suite)
         defer { defaults.removePersistentDomain(forName: suite) }
 
         let store = CookingPreferencesStore(defaults: defaults, userScope: "u")
-        store.save(CookingPreferences(householdSize: 3, region: .sanFrancisco))
-        XCTAssertEqual(store.load()?.region, .sanFrancisco)
+        store.save(CookingPreferences(householdSize: 3, country: "US", areaType: .city))
+        XCTAssertEqual(store.load()?.country, "US")
+        XCTAssertEqual(store.load()?.areaType, .city)
         XCTAssertEqual(store.load()?.householdSize, 3)
     }
 
-    func testPreferencesSavedBeforeRegionExistedStillDecode() {
-        // A blob written by an older build has no "region" key; decoding must not
-        // fail and region should come back nil.
+    func testPreferencesSavedBeforeLocationExistedStillDecode() {
+        // A blob written by an older build has no country/area_type keys; decoding
+        // must not fail and both should come back nil.
         let legacy = #"{"dietaryPreferences":["vegan"],"householdSize":4,"hasCompletedOnboarding":true}"#
         let data = Data(legacy.utf8)
         let decoded = try? JSONDecoder().decode(CookingPreferences.self, from: data)
         XCTAssertNotNil(decoded)
-        XCTAssertNil(decoded?.region)
+        XCTAssertNil(decoded?.country)
+        XCTAssertNil(decoded?.areaType)
         XCTAssertEqual(decoded?.householdSize, 4)
         XCTAssertEqual(decoded?.dietaryPreferences, [.vegan])
     }
 
-    func testRegionApiValuesAreUniqueAndNormalized() {
-        // Raw values are the exact server keys; they must be unique and already in
-        // the strip().lower() normal form the backend matches on.
-        let values = GroceryRegion.allCases.map(\.apiValue)
-        XCTAssertEqual(Set(values).count, values.count, "duplicate region api values")
-        for value in values {
-            XCTAssertEqual(value, value.trimmingCharacters(in: .whitespaces).lowercased())
-        }
+    func testLegacyRegionFieldIsIgnoredOnDecode() {
+        // A blob from before this change carried a single "region" key. Decoding
+        // must succeed and simply drop it — the user re-picks country + area type.
+        let legacy = #"{"householdSize":2,"region":"san francisco","hasCompletedOnboarding":true}"#
+        let decoded = try? JSONDecoder().decode(CookingPreferences.self, from: Data(legacy.utf8))
+        XCTAssertNotNil(decoded)
+        XCTAssertNil(decoded?.country)
+        XCTAssertNil(decoded?.areaType)
     }
 
-    func testLocaleGuessMapsCountriesAndDefaultsUSToNational() {
-        XCTAssertEqual(GroceryRegion.guessFromLocale(Locale(identifier: "en_US")), .national)
-        XCTAssertEqual(GroceryRegion.guessFromLocale(Locale(identifier: "en_CA")), .canada)
-        XCTAssertEqual(GroceryRegion.guessFromLocale(Locale(identifier: "en_GB")), .unitedKingdom)
-        XCTAssertEqual(GroceryRegion.guessFromLocale(Locale(identifier: "en_AU")), .australia)
-        // A country with no offered bucket stays unselected.
-        XCTAssertNil(GroceryRegion.guessFromLocale(Locale(identifier: "ja_JP")))
+    func testAreaTypeApiValuesAreNormalized() {
+        // Raw values are the exact server keys the backend matches on (strip().lower()).
+        for area in AreaType.allCases {
+            XCTAssertEqual(area.apiValue, area.apiValue.trimmingCharacters(in: .whitespaces).lowercased())
+        }
+        XCTAssertEqual(Set(AreaType.allCases.map(\.apiValue)), ["city", "suburb", "rural"])
+    }
+
+    func testCountryLocaleGuessReturnsISOCode() {
+        XCTAssertEqual(GroceryCountry.guessFromLocale(Locale(identifier: "en_US")), "US")
+        XCTAssertEqual(GroceryCountry.guessFromLocale(Locale(identifier: "en_GB")), "GB")
+        XCTAssertEqual(GroceryCountry.guessFromLocale(Locale(identifier: "ja_JP")), "JP")
+    }
+
+    func testCountryListIsNonEmptyAndNamed() {
+        let all = GroceryCountry.all(locale: Locale(identifier: "en_US"))
+        XCTAssertFalse(all.isEmpty)
+        XCTAssertTrue(all.contains { $0.code == "US" && $0.name == "United States" })
+        XCTAssertTrue(all.contains { $0.code == "IN" })
     }
 
     func testNoRestrictionsClearsOtherChoicesAndHouseholdIsClamped() {

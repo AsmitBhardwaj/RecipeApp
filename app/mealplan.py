@@ -51,7 +51,11 @@ class BudgetPlanRequest(BaseModel):
     # The user's on-hand (Kitchen) items — the client is On Hand's source of
     # truth (payloads are opaque to the server), so it sends the snapshot.
     pantry_items: List[str] = Field(default_factory=list)
-    region: Optional[str] = None
+    # Location signal for the regional cost multiplier (docs §3.4): an ISO 3166-1
+    # alpha-2 country code + an area type (city/suburb/rural). Either may be unset,
+    # in which case that part falls back to its 1.0 default.
+    country: Optional[str] = None
+    area_type: Optional[str] = None
 
 
 class PlannedRecipe(BaseModel):
@@ -136,7 +140,7 @@ def plan_on_a_budget(
         raise HTTPException(status_code=502, detail={"error_code": exc.code, "message": exc.message})
 
     # 5. Annotate, cache, and apply the regional multiplier per recipe.
-    multiplier = regional_cost.multiplier_for(req.region)
+    multiplier = regional_cost.multiplier_for(req.country, req.area_type)
     planned: List[PlannedRecipe] = []
     for item in generated:
         recipe_id = str(uuid.uuid4())
