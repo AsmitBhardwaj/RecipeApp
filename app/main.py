@@ -15,7 +15,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from pydantic import BaseModel, field_validator, model_validator
 
-from . import config, db, importlimit, ratelimit
+from . import burstlimit, config, db, importlimit, ratelimit
 from .auth.router import optional_current_user, router as auth_router
 from .auth.service import User
 from .models import Job, Recipe
@@ -111,6 +111,30 @@ def _enforce_import_limit(account: Optional[User], request: Request) -> None:
         )
 
 
+def _enforce_import_burst_limit(account: Optional[User]) -> None:
+    """Reject with 429 + the distinct `rate_limit_exceeded` code when an account is
+    over its per-hour/per-day import burst cap (app/burstlimit.py).
+
+    Applies to PRO accounts too — Pro removes the monthly cap, not this ceiling —
+    so the client must NOT show the paywall for this (the code differs from the
+    import cap's `free_limit_reached`). Anonymous imports have no account to key
+    on; they remain bounded by the per-user/IP limiter above."""
+    if account is None:
+        return
+    try:
+        burstlimit.check_import(account.id)
+    except burstlimit.BurstLimitExceeded as exc:
+        raise HTTPException(
+            status_code=429,
+            detail={
+                "error_code": exc.code,
+                "message": "You're importing too quickly. Please try again a bit later.",
+                "limit": exc.limit,
+                "window": exc.window_label,
+            },
+        )
+
+
 def _client_ip(request: Request) -> str:
     """Real client IP. Behind the Railway proxy the true address is the first
     hop of X-Forwarded-For; `request.client` would just be the proxy."""
@@ -194,6 +218,11 @@ def submit_job(
     # error_code the client maps to the paywall.
     _enforce_import_limit(account, request)
 
+    # Per-account burst/daily import ceiling — bounds cost even for Pro accounts
+    # (429 + rate_limit_exceeded, NOT the paywall). Kept after the monthly cap so
+    # a free user at their monthly limit still gets the paywall, not this.
+    _enforce_import_burst_limit(account)
+
     # Persist a queued job and return its id immediately — the extension can't
     # hold the request open while we scrape + call the LLM. The actual work runs
     # after the response is sent (CLAUDE.md §3: submit-and-close). The verified
@@ -240,8 +269,10 @@ def paste_job_text(
         raise HTTPException(status_code=429, detail=str(exc))
 
     # A paste is itself an import attempt (it can turn a failed job into a saved
-    # recipe), so it is subject to the same free-tier cap, checked before work.
+    # recipe), so it is subject to the same free-tier cap AND the same per-account
+    # burst/daily import ceiling, both checked before any work.
     _enforce_import_limit(account, request)
+    _enforce_import_burst_limit(account)
 
     text = req.text.strip()
     if len(text) < 10:
@@ -335,6 +366,15 @@ def _require_admin(credentials: HTTPBasicCredentials = Depends(_basic)) -> None:
             detail="unauthorized",
             headers={"WWW-Authenticate": "Basic"},
         )
+
+
+@app.get("/admin/flagged-accounts")
+def admin_flagged_accounts(_: None = Depends(_require_admin)) -> dict:
+    """Manual-review queue: accounts flagged by the device-level signal
+    (app/devicesignal.py). Advisory only — nothing here is auto-restricted; this
+    is the surface for deciding by hand what to do with a flagged account."""
+    rows = db.list_flagged_accounts()
+    return {"count": len(rows), "flagged": rows}
 
 
 @app.get("/admin/feedback", response_class=HTMLResponse)

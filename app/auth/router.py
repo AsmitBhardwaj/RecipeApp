@@ -74,6 +74,16 @@ def _client_ip(request: Request) -> str:
     return request.client.host if request.client else "unknown"
 
 
+def _device_id(request: Request) -> Optional[str]:
+    """The client's persistent anonymous device id (`X-User-Id`), used ONLY as the
+    device-level account-creation signal (app/devicesignal.py). Returns None when
+    absent/implausible — unlike the rate-limiter's `_resolve_user_id`, we do NOT
+    fall back to the shared stub id here: that would make every header-less signup
+    look like the same device and flag them all."""
+    raw = (request.headers.get("X-User-Id") or "").strip()
+    return raw if (raw and len(raw) <= 200) else None
+
+
 def _login_guard(email: str, request: Request) -> None:
     window = config.LOGIN_WINDOW_SECONDS
     now = int(time.time())
@@ -146,9 +156,11 @@ def optional_current_user(
 
 
 @router.post("/register", response_model=TokenResponse)
-def register(req: RegisterRequest) -> TokenResponse:
+def register(req: RegisterRequest, request: Request) -> TokenResponse:
     try:
-        user = service.create_email_user(req.email, req.password, req.full_name)
+        user = service.create_email_user(
+            req.email, req.password, req.full_name, device_id=_device_id(request)
+        )
     except service.EmailInUse:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="email already registered")
     return _issue(user)
@@ -166,22 +178,22 @@ def login(req: LoginRequest, request: Request) -> TokenResponse:
 
 
 @router.post("/apple", response_model=TokenResponse)
-def apple(req: AppleRequest) -> TokenResponse:
+def apple(req: AppleRequest, request: Request) -> TokenResponse:
     try:
         identity = providers.verify_apple(req.identity_token)
     except providers.ProviderError as exc:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc))
-    user = service.upsert_provider_user(identity, req.full_name)
+    user = service.upsert_provider_user(identity, req.full_name, device_id=_device_id(request))
     return _issue(user)
 
 
 @router.post("/google", response_model=TokenResponse)
-def google(req: GoogleRequest) -> TokenResponse:
+def google(req: GoogleRequest, request: Request) -> TokenResponse:
     try:
         identity = providers.verify_google(req.id_token)
     except providers.ProviderError as exc:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc))
-    user = service.upsert_provider_user(identity, req.full_name)
+    user = service.upsert_provider_user(identity, req.full_name, device_id=_device_id(request))
     return _issue(user)
 
 

@@ -124,6 +124,34 @@ FREE_LIMIT_EFFECTIVE_DATE: str = os.getenv(
 )  # PLACEHOLDER — far-future = limit disabled / everyone grandfathered
 
 # --------------------------------------------------------------------------- #
+# Burst / daily caps on the LLM-backed endpoints (app/burstlimit.py).
+#
+# These sit ON TOP of the generic per-user/IP limiter (ratelimit.py) and the
+# free-tier monthly import cap (importlimit.py). They are enforced PER ACCOUNT
+# and bound cost even for accounts the monthly cap never touches: unlike the
+# monthly cap, PRO accounts ARE subject to these — Pro removes the monthly cap,
+# not the burst ceiling. Over-limit returns HTTP 429 with error_code
+# "rate_limit_exceeded" (distinct from the paywall's 402 "free_limit_reached",
+# so the client shows "slow down" rather than an upgrade prompt).
+#
+# Imports (/v1/jobs + the paste-fallback path) get both a per-hour burst cap and
+# a per-day cap; budget-plan and pantry generation each get their own per-day cap
+# in an independent bucket namespace (one endpoint's usage never consumes
+# another's allowance). Windows are fixed and UTC-aligned, so the daily counter
+# resets at UTC midnight.
+BURST_IMPORT_PER_HOUR: int = int(os.getenv("BURST_IMPORT_PER_HOUR", "30"))
+BURST_IMPORT_PER_DAY: int = int(os.getenv("BURST_IMPORT_PER_DAY", "100"))
+BURST_BUDGET_PLAN_PER_DAY: int = int(os.getenv("BURST_BUDGET_PLAN_PER_DAY", "10"))
+BURST_PANTRY_PER_DAY: int = int(os.getenv("BURST_PANTRY_PER_DAY", "20"))
+
+# Device-level account-creation signal (app/devicesignal.py). A new account
+# created from a device (the client's persistent `X-User-Id`) that ALREADY
+# created another account within this trailing window is FLAGGED for manual
+# review — advisory only, never an automatic block (shared devices / reinstalls
+# make false positives expected).
+DEVICE_MULTI_ACCOUNT_WINDOW_DAYS: int = int(os.getenv("DEVICE_MULTI_ACCOUNT_WINDOW_DAYS", "30"))
+
+# --------------------------------------------------------------------------- #
 # Plan on a Budget (docs/budget-meal-planning.md).
 #
 # The minimum weekly budget scales with household size: a household of N cannot

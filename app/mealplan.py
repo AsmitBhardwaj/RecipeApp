@@ -30,7 +30,7 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from . import budget, config, db, ratelimit
+from . import budget, burstlimit, config, db, ratelimit
 from .auth.router import current_user
 from .auth.service import User
 from .models import CostEstimate, Recipe
@@ -143,11 +143,25 @@ def plan_on_a_budget(
             },
         )
 
-    # 2. Rate limit (this fans out to LLM generation — guard cost).
+    # 2. Rate limit (this fans out to LLM generation — guard cost). The generic
+    #    per-user/IP limiter, plus a per-account daily cap on this specific LLM
+    #    endpoint (independent of the import caps).
     try:
         ratelimit.check(user.id, _client_ip(request))
     except ratelimit.RateLimitExceeded as exc:
         raise HTTPException(status_code=429, detail=str(exc))
+    try:
+        burstlimit.check_budget_plan(user.id)
+    except burstlimit.BurstLimitExceeded as exc:
+        raise HTTPException(
+            status_code=429,
+            detail={
+                "error_code": exc.code,
+                "message": "You've reached today's budget-plan limit. Please try again tomorrow.",
+                "limit": exc.limit,
+                "window": exc.window_label,
+            },
+        )
 
     # 3. Resolve the regional multiplier FIRST, so we can hand the LLM a budget in
     #    its own location-independent (baseline) space: user budget ÷ multiplier.
