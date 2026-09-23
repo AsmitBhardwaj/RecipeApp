@@ -4,6 +4,7 @@ import SwiftUI
 struct OnboardingView: View {
     @ObservedObject var auth: AuthModel
     @EnvironmentObject private var preferences: CookingPreferencesModel
+    @EnvironmentObject private var subscriptions: SubscriptionService
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     @StateObject private var sync: SyncCoordinator
@@ -18,6 +19,7 @@ struct OnboardingView: View {
     @State private var areaType: AreaType?
     @State private var pantrySelections: Set<String> = []
     @State private var hasLoadedAnswers = false
+    @State private var showingPaywall = false
 
     private let pageCount = 6
     /// The pantry step is the last screen; its suggestion fetch keys off this index.
@@ -71,6 +73,10 @@ struct OnboardingView: View {
             if newPage == pantryPage {
                 suggestions.refresh(pantryNames: pantrySelections.sorted(), via: sync)
             }
+        }
+        .sheet(isPresented: $showingPaywall, onDismiss: completeOnboarding) {
+            PlatterProPaywallView()
+                .environmentObject(subscriptions)
         }
     }
 
@@ -163,6 +169,18 @@ struct OnboardingView: View {
             pantry.add(name: item)
         }
         sync.triggerSync()
+
+        // Keep onboarding mounted while the paywall is presented. Marking it
+        // complete first would make SignedInRoot replace this view immediately,
+        // preventing the sheet from appearing.
+        if subscriptions.isProUnlocked {
+            completeOnboarding()
+        } else {
+            showingPaywall = true
+        }
+    }
+
+    private func completeOnboarding() {
         preferences.completeOnboarding()
     }
 }
@@ -170,4 +188,5 @@ struct OnboardingView: View {
 #Preview {
     OnboardingView(auth: AuthModel())
         .environmentObject(CookingPreferencesModel(userScope: "preview"))
+        .environmentObject(SubscriptionService())
 }
