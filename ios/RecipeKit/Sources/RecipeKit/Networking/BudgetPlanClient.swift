@@ -14,14 +14,14 @@ public struct BudgetPlanClient {
     private let baseURL: URL
     private let session: URLSession
     private let appKey: () -> String
-    private let proEntitled: () -> Bool
+    private let proEntitled: @MainActor () -> Bool
     private let accessTokenProvider: () async throws -> String
 
     public init(
         baseURL: URL = APIRecipeProvider.defaultBaseURL,
         session: URLSession = .shared,
         appKey: @escaping () -> String = { AppConfig.appKey },
-        proEntitled: @escaping () -> Bool = { ProEntitlementCache.isEntitled },
+        proEntitled: @escaping @MainActor () -> Bool = { ProEntitlementCache.isEntitled },
         accessTokenProvider: @escaping () async throws -> String
     ) {
         self.baseURL = baseURL
@@ -62,7 +62,7 @@ public struct BudgetPlanClient {
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         let key = appKey()
         if !key.isEmpty { request.setValue(key, forHTTPHeaderField: "X-App-Key") }
-        if proEntitled() { request.setValue("1", forHTTPHeaderField: "X-Pro-Entitled") }
+        if await proEntitled() { request.setValue("1", forHTTPHeaderField: "X-Pro-Entitled") }
         let token = try await accessTokenProvider()
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         return request

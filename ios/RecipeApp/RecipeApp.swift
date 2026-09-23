@@ -18,13 +18,13 @@ struct RecipeApp: App {
 
     /// The app-wide data source. Injected down into the views that need it.
     /// Live networking against the Railway backend.
-    private let recipeProvider: RecipeProvider = APIRecipeProvider()
+    private let recipeProvider: RecipeProvider
 
     /// The app-wide auth session. Owns the signed-in state, persists tokens in
     /// the shared Keychain, and (Stage 2b) vends access tokens to the sync engine.
     @StateObject private var auth = AuthModel()
     /// The single StoreKit 2 source of truth for products and Pro entitlement.
-    @StateObject private var subscriptions = SubscriptionService()
+    @StateObject private var subscriptions: SubscriptionService
 
     /// Cook Mode step-timer notification scheduler, backed by the real
     /// `UNUserNotificationCenter`. One instance for the app; Cook Mode sessions
@@ -34,6 +34,11 @@ struct RecipeApp: App {
     )
 
     init() {
+        let subscriptions = SubscriptionService()
+        _subscriptions = StateObject(wrappedValue: subscriptions)
+        recipeProvider = APIRecipeProvider(
+            proEntitled: { subscriptions.isProUnlocked }
+        )
         // Register the bundled editorial display font before any UI renders.
         AppFonts.register()
     }
@@ -60,7 +65,7 @@ struct RecipeApp: App {
     }
 
     private var root: some View {
-        RootView(recipeProvider: recipeProvider, auth: auth)
+        RootView(recipeProvider: recipeProvider, auth: auth, subscriptions: subscriptions)
             .environmentObject(auth)
             .environmentObject(subscriptions)
             .environment(\.cookTimerScheduler, cookTimerScheduler)
