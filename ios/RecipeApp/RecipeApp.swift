@@ -82,10 +82,7 @@ struct RecipeApp: App {
         guard let i = args.firstIndex(of: "-paywallState"), i + 1 < args.count else { return nil }
         switch args[i + 1] {
         case "ready":
-            return .ready([
-                PlanCardData(id: "preview.yearly", name: "Yearly", price: "$39.99", periodLabel: "per year"),
-                PlanCardData(id: "preview.monthly", name: "Monthly", price: "$4.99", periodLabel: "per month"),
-            ])
+            return .ready([.sampleYearly, .sampleMonthly])
         case "loading": return .loading
         case "unavailable": return .unavailable
         default: return nil
