@@ -23,6 +23,7 @@ the existing `meal_plan` collection client-side.
 """
 from __future__ import annotations
 
+import logging
 import uuid
 from typing import List, Optional
 
@@ -36,6 +37,8 @@ from .models import CostEstimate, Recipe
 from .pipeline import llm, regional_cost
 
 router = APIRouter(prefix="/v1/meal-plan", tags=["meal-plan"])
+
+_log = logging.getLogger("uvicorn.error")
 
 
 # --------------------------------------------------------------------------- #
@@ -89,6 +92,38 @@ def _client_ip(request: Request) -> str:
     return request.client.host if request.client else "unknown"
 
 
+def _baseline_total(plan: List["llm.BudgetPlanRecipeLLM"]) -> float:
+    """The plan's cost in location-independent (baseline) space — the sum of the
+    LLM's per-recipe baseline estimates. This is the space the prompt targets."""
+    return sum(item.baseline_cost.amount for item in plan)
+
+
+def _adjusted_total(plan: List["llm.BudgetPlanRecipeLLM"], multiplier: float) -> float:
+    """The plan's regionally-adjusted total — what the user actually sees, and what
+    the budget fit-check compares against `req.budget`."""
+    return round(_baseline_total(plan) * multiplier, 2)
+
+
+def _pick_plan(
+    first: List["llm.BudgetPlanRecipeLLM"],
+    second: List["llm.BudgetPlanRecipeLLM"],
+    multiplier: float,
+    budget_cap: float,
+) -> List["llm.BudgetPlanRecipeLLM"]:
+    """Best-effort selection between a plan and its corrective retry: prefer the
+    larger adjusted total that does NOT exceed the budget (use as much of the
+    budget as possible without overshooting). If both exceed, take the smaller."""
+    a, b = _adjusted_total(first, multiplier), _adjusted_total(second, multiplier)
+    a_ok, b_ok = a <= budget_cap, b <= budget_cap
+    if a_ok and b_ok:
+        return first if a >= b else second
+    if a_ok:
+        return first
+    if b_ok:
+        return second
+    return first if a <= b else second
+
+
 # --------------------------------------------------------------------------- #
 # Endpoint
 # --------------------------------------------------------------------------- #
@@ -126,21 +161,55 @@ def plan_on_a_budget(
             },
         )
 
-    # 4. Generate the week's recipes in one LLM call.
-    try:
-        generated = llm.generate_budget_plan(
-            budget=req.budget,
+    # 4. Resolve the regional multiplier FIRST, so we can hand the LLM a budget in
+    #    its own location-independent (baseline) space: user budget ÷ multiplier.
+    #    Without this, a user in a 1.3× region was silently given a target 1.3× too
+    #    high (the recipe costs get multiplied afterward). Guard divide-by-zero
+    #    (multipliers are always > 0 today, but never trust that at a divide).
+    multiplier = regional_cost.multiplier_for(req.country, req.area_type)
+    baseline_budget = req.budget / multiplier if multiplier > 0 else req.budget
+    floor_amount = req.budget * llm.BUDGET_TARGET_FLOOR_FRAC
+
+    def _generate(prior_total: Optional[float] = None):
+        return llm.generate_budget_plan(
+            budget=baseline_budget,
             currency=req.currency,
             household_size=req.household_size,
             dietary_preferences=req.dietary_preferences,
             on_hand=req.pantry_items,
             count=config.BUDGET_PLAN_RECIPE_COUNT,
+            prior_total=prior_total,
         )
+
+    # 5. Generate the week's recipes. If the plan lands under the target band
+    #    (< floor), run ONE bounded corrective pass asking for a fuller plan, then
+    #    keep whichever fits the budget best. Ship best-effort either way.
+    try:
+        generated = _generate()
+        if _adjusted_total(generated, multiplier) < floor_amount:
+            try:
+                retried = _generate(prior_total=round(_baseline_total(generated), 2))
+                generated = _pick_plan(generated, retried, multiplier, req.budget)
+            except llm.LLMError:
+                # Corrective pass failed — keep the first plan (best-effort).
+                pass
     except llm.LLMError as exc:
         raise HTTPException(status_code=502, detail={"error_code": exc.code, "message": exc.message})
 
-    # 5. Annotate, cache, and apply the regional multiplier per recipe.
-    multiplier = regional_cost.multiplier_for(req.country, req.area_type)
+    # Best-effort: if we still couldn't reach the band, ship it but log the miss
+    # (budget, actual, region) so we can see how often the retry doesn't fix it.
+    final_total = _adjusted_total(generated, multiplier)
+    if final_total < floor_amount:
+        _log.warning(
+            "budget-plan under target after retry: budget=%.2f actual=%.2f frac=%.2f "
+            "country=%s area=%s multiplier=%.2f",
+            req.budget, final_total,
+            (final_total / req.budget if req.budget else 0.0),
+            req.country, req.area_type, multiplier,
+        )
+
+    # 6. Annotate, cache, and apply the regional multiplier — only for the SELECTED
+    #    plan, so a discarded corrective attempt never pollutes the shared cache.
     planned: List[PlannedRecipe] = []
     for item in generated:
         recipe_id = str(uuid.uuid4())

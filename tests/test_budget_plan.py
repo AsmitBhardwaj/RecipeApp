@@ -161,6 +161,17 @@ class BudgetPlanEndpointTests(unittest.TestCase):
             )
         ]
 
+    def _plan(self, *amounts, title="Recipe", health="Veg-forward"):
+        """A fake generated plan: one recipe per baseline amount (US-baseline USD)."""
+        return [
+            BudgetPlanRecipeLLM(
+                recipe=LLMRecipe(title=f"{title}-{i}", ingredients=[], instructions=[]),
+                baseline_cost=CostEstimate(amount=float(a), currency="USD", basis="llm-v1"),
+                health_signal=health,
+            )
+            for i, a in enumerate(amounts)
+        ]
+
     def test_free_user_cannot_call_endpoint(self) -> None:
         # No X-Pro-Entitled → 403 pro_required, before any generation.
         r = self.client.post("/v1/meal-plan/budget", json=self._body(), headers=self._headers(pro=False))
@@ -180,23 +191,30 @@ class BudgetPlanEndpointTests(unittest.TestCase):
         self.assertEqual(r.json()["detail"]["min_budget"], 100)
         gen.assert_not_called()  # rejected before spending on generation
 
-    def test_happy_path_applies_regional_multiplier_and_saves_recipe(self) -> None:
-        with mock.patch("app.mealplan.llm.generate_budget_plan", return_value=self._fake_recipes()):
-            r = self.client.post("/v1/meal-plan/budget", json=self._body(), headers=self._headers())
+    def test_happy_path_within_band_no_retry_saves_recipe(self) -> None:
+        # US/suburb → 1.0 multiplier; budget 100 → band [85, 100]. A $90 plan is
+        # inside the band, so it ships as-is with NO corrective retry.
+        with mock.patch(
+            "app.mealplan.llm.generate_budget_plan", return_value=self._plan(90.0)
+        ) as gen:
+            r = self.client.post(
+                "/v1/meal-plan/budget",
+                json=self._body(area_type="suburb"),
+                headers=self._headers(),
+            )
         self.assertEqual(r.status_code, 200, r.text)
         data = r.json()
-        # US (1.00) × city (1.15) = 1.15
-        self.assertEqual(data["regional_multiplier"], 1.15)
+        self.assertEqual(data["regional_multiplier"], 1.0)
+        self.assertEqual(gen.call_count, 1)  # within band → no retry
         self.assertEqual(len(data["recipes"]), 1)
         planned = data["recipes"][0]
-        # baseline 10.0 × 1.15 = 11.5
-        self.assertAlmostEqual(planned["estimated_cost"]["amount"], 11.5, places=2)
+        self.assertAlmostEqual(planned["estimated_cost"]["amount"], 90.0, places=2)
         self.assertEqual(planned["health_signal"], "Veg-forward")
         # Recipe was written to the shared cache under its synthetic key.
         self.assertIsNotNone(db.get_recipe(planned["recipe"]["recipe_id"]))
 
     def test_unknown_location_uses_default_multiplier(self) -> None:
-        with mock.patch("app.mealplan.llm.generate_budget_plan", return_value=self._fake_recipes()):
+        with mock.patch("app.mealplan.llm.generate_budget_plan", return_value=self._plan(90.0)):
             r = self.client.post(
                 "/v1/meal-plan/budget",
                 json=self._body(country="ZZ", area_type="spacestation"),
@@ -204,6 +222,116 @@ class BudgetPlanEndpointTests(unittest.TestCase):
             )
         self.assertEqual(r.status_code, 200, r.text)
         self.assertEqual(r.json()["regional_multiplier"], 1.0)
+
+    def test_budget_is_converted_to_baseline_space_before_generation(self) -> None:
+        # The pre-existing bug: a high-cost region was handed the raw budget as if
+        # it were baseline dollars. The LLM must instead receive budget ÷ multiplier
+        # so the post-multiplier total lands near the user's real budget.
+        # CH (1.45) × city (1.15) = 1.6675 → 1.67. A $85 baseline plan → 141.95,
+        # inside the $150 band [127.5, 150], so no retry.
+        with mock.patch(
+            "app.mealplan.llm.generate_budget_plan", return_value=self._plan(85.0)
+        ) as gen:
+            r = self.client.post(
+                "/v1/meal-plan/budget",
+                json=self._body(budget=150, country="CH", area_type="city"),
+                headers=self._headers(),
+            )
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual(gen.call_count, 1)
+        self.assertAlmostEqual(gen.call_args.kwargs["budget"], 150 / 1.67, places=2)
+        self.assertIsNone(gen.call_args.kwargs["prior_total"])  # first pass
+
+    def test_under_band_triggers_one_retry_and_ships_fuller_plan(self) -> None:
+        # US/suburb, budget 100, band [85, 100]. First plan $40 (under) → one retry;
+        # retry returns a $92 plan (in band) → that fuller plan ships.
+        with mock.patch(
+            "app.mealplan.llm.generate_budget_plan",
+            side_effect=[self._plan(40.0, title="Cheap"), self._plan(92.0, title="Full")],
+        ) as gen:
+            r = self.client.post(
+                "/v1/meal-plan/budget",
+                json=self._body(area_type="suburb"),
+                headers=self._headers(),
+            )
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual(gen.call_count, 2)
+        # Retry was fed the first plan's baseline total as prior_total.
+        self.assertAlmostEqual(gen.call_args_list[1].kwargs["prior_total"], 40.0, places=2)
+        data = r.json()
+        self.assertEqual(len(data["recipes"]), 1)
+        self.assertAlmostEqual(data["recipes"][0]["estimated_cost"]["amount"], 92.0, places=2)
+        self.assertEqual(data["recipes"][0]["recipe"]["title"], "Full-0")
+
+    def test_still_under_after_retry_ships_best_effort_and_logs(self) -> None:
+        # Both passes come in under the band → ship the better one, log the miss.
+        with mock.patch(
+            "app.mealplan.llm.generate_budget_plan",
+            side_effect=[self._plan(40.0), self._plan(50.0)],
+        ) as gen:
+            with self.assertLogs("uvicorn.error", level="WARNING") as logs:
+                r = self.client.post(
+                    "/v1/meal-plan/budget",
+                    json=self._body(area_type="suburb"),
+                    headers=self._headers(),
+                )
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual(gen.call_count, 2)
+        # Best-effort: the larger sub-band plan ($50) ships.
+        self.assertAlmostEqual(r.json()["recipes"][0]["estimated_cost"]["amount"], 50.0, places=2)
+        self.assertTrue(any("under target" in m for m in logs.output))
+
+    def test_selection_never_ships_a_plan_over_budget(self) -> None:
+        # First plan under band → retry; retry overshoots budget ($130 > $100), so
+        # the under-budget first plan is kept despite being below the band.
+        with mock.patch(
+            "app.mealplan.llm.generate_budget_plan",
+            side_effect=[self._plan(40.0, title="Under"), self._plan(130.0, title="Over")],
+        ) as gen:
+            with self.assertLogs("uvicorn.error", level="WARNING"):
+                r = self.client.post(
+                    "/v1/meal-plan/budget",
+                    json=self._body(area_type="suburb"),
+                    headers=self._headers(),
+                )
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual(gen.call_count, 2)
+        self.assertAlmostEqual(r.json()["recipes"][0]["estimated_cost"]["amount"], 40.0, places=2)
+        self.assertEqual(r.json()["recipes"][0]["recipe"]["title"], "Under-0")
+
+    def test_retry_llm_error_keeps_first_plan(self) -> None:
+        from app.pipeline import llm
+
+        with mock.patch(
+            "app.mealplan.llm.generate_budget_plan",
+            side_effect=[self._plan(40.0), llm.LLMError("llm_error", "boom")],
+        ) as gen:
+            with self.assertLogs("uvicorn.error", level="WARNING"):
+                r = self.client.post(
+                    "/v1/meal-plan/budget",
+                    json=self._body(area_type="suburb"),
+                    headers=self._headers(),
+                )
+        self.assertEqual(r.status_code, 200, r.text)  # corrective failure ≠ request failure
+        self.assertEqual(gen.call_count, 2)
+        self.assertAlmostEqual(r.json()["recipes"][0]["estimated_cost"]["amount"], 40.0, places=2)
+
+    def test_only_the_selected_plan_is_saved_to_cache(self) -> None:
+        # Save-once: a discarded corrective attempt must not pollute the shared cache.
+        with mock.patch(
+            "app.mealplan.llm.generate_budget_plan",
+            side_effect=[self._plan(40.0, title="Cheap"), self._plan(90.0, title="Full")],
+        ):
+            with mock.patch("app.mealplan.db.save_recipe") as save:
+                r = self.client.post(
+                    "/v1/meal-plan/budget",
+                    json=self._body(area_type="suburb"),
+                    headers=self._headers(),
+                )
+        self.assertEqual(r.status_code, 200, r.text)
+        # Only the selected ($90) plan's single recipe is persisted, not both attempts.
+        self.assertEqual(save.call_count, 1)
+        self.assertEqual(save.call_args.args[0].title, "Full-0")
 
 
 if __name__ == "__main__":
