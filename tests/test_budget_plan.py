@@ -26,30 +26,67 @@ def _fresh_db() -> str:
 
 
 class BudgetMathTests(unittest.TestCase):
+    """The derived budget model: min/max bounds and count/richness decisions all
+    come from the per-person per-dinner anchors. Anchors are pinned here so an env
+    override can't shift the expected numbers."""
+
     def setUp(self) -> None:
-        self._orig = config.MIN_BUDGET_PER_PERSON
-        config.MIN_BUDGET_PER_PERSON = 25
+        self._orig = (
+            budget.PER_DINNER_FLOOR, budget.PER_DINNER_COMFORTABLE,
+            budget.PER_DINNER_RICHNESS_CEILING, budget.MIN_RECIPE_COUNT,
+            config.BUDGET_PLAN_RECIPE_COUNT,
+        )
+        budget.PER_DINNER_FLOOR = 3.0
+        budget.PER_DINNER_COMFORTABLE = 8.0
+        budget.PER_DINNER_RICHNESS_CEILING = 12.0
+        budget.MIN_RECIPE_COUNT = 4
+        config.BUDGET_PLAN_RECIPE_COUNT = 7
 
     def tearDown(self) -> None:
-        config.MIN_BUDGET_PER_PERSON = self._orig
+        (budget.PER_DINNER_FLOOR, budget.PER_DINNER_COMFORTABLE,
+         budget.PER_DINNER_RICHNESS_CEILING, budget.MIN_RECIPE_COUNT,
+         config.BUDGET_PLAN_RECIPE_COUNT) = self._orig
 
-    def test_scales_per_person(self) -> None:
-        self.assertEqual(budget.min_budget(1), 25)
-        self.assertEqual(budget.min_budget(2), 50)
-        self.assertEqual(budget.min_budget(4), 100)
+    def test_min_budget_is_floor_times_min_count_per_person(self) -> None:
+        # 3 × 4 × P, rounded to $5.
+        self.assertEqual(budget.min_budget(1), 10)   # 12 -> 10
+        self.assertEqual(budget.min_budget(2), 25)   # 24 -> 25
+        self.assertEqual(budget.min_budget(4), 50)   # 48 -> 50
 
-    def test_increasing_household_raises_minimum(self) -> None:
+    def test_max_budget_is_ceiling_times_max_count_per_person(self) -> None:
+        # 12 × 7 × P, rounded to $5.
+        self.assertEqual(budget.max_budget(1), 85)   # 84 -> 85
+        self.assertEqual(budget.max_budget(2), 170)  # 168 -> 170
+        self.assertEqual(budget.max_budget(4), 335)  # 336 -> 335
+
+    def test_min_below_max_and_household_scales(self) -> None:
+        self.assertLess(budget.min_budget(2), budget.max_budget(2))
         self.assertGreater(budget.min_budget(4), budget.min_budget(2))
-
-    def test_rounds_to_nearest_five(self) -> None:
-        config.MIN_BUDGET_PER_PERSON = 23  # 3 people = 69 -> nearest 5 = 70
-        self.assertEqual(budget.min_budget(3), 70)
-        config.MIN_BUDGET_PER_PERSON = 22  # 3 people = 66 -> nearest 5 = 65
-        self.assertEqual(budget.min_budget(3), 65)
+        self.assertGreater(budget.max_budget(4), budget.max_budget(2))
 
     def test_household_clamped_to_at_least_one(self) -> None:
-        self.assertEqual(budget.min_budget(0), 25)
-        self.assertEqual(budget.min_budget(-3), 25)
+        self.assertEqual(budget.min_budget(0), budget.min_budget(1))
+        self.assertEqual(budget.max_budget(-3), budget.max_budget(1))
+
+    def test_target_recipe_count_full_week_when_budget_ample(self) -> None:
+        # $200 for 2 → $14/dinner/person ≥ floor → full 7.
+        self.assertEqual(budget.target_recipe_count(200, 2), 7)
+        # At exactly floor ($3/dinner/person = $42 for 2 over 7) → still 7.
+        self.assertEqual(budget.target_recipe_count(42, 2), 7)
+
+    def test_target_recipe_count_reduced_when_budget_thin(self) -> None:
+        # $30 for 2 → $2.14/dinner at 7 (< floor) → cut to floor(30/6)=5.
+        self.assertEqual(budget.target_recipe_count(30, 2), 5)
+        # At the min ($24 for 2) → 4 (the ⌊⌋ floor count).
+        self.assertEqual(budget.target_recipe_count(24, 2), 4)
+        # Never below min_recipe_count even for a tiny 1-person budget.
+        self.assertEqual(budget.target_recipe_count(12, 1), 4)
+
+    def test_wants_rich_only_above_comfortable(self) -> None:
+        self.assertTrue(budget.wants_rich(200, 2))    # $14/dinner > $8
+        self.assertFalse(budget.wants_rich(42, 2))    # $3/dinner
+        self.assertFalse(budget.wants_rich(112, 2))   # exactly $8/dinner, not >
+        self.assertTrue(budget.wants_rich(120, 2))    # $8.57/dinner > $8
 
 
 class RegionalMultiplierTests(unittest.TestCase):
@@ -110,12 +147,21 @@ class BudgetPlanEndpointTests(unittest.TestCase):
         self._orig_db = config.DB_PATH
         self._orig_url = config.DATABASE_URL
         self._orig_key = config.APP_KEY
-        self._orig_min = config.MIN_BUDGET_PER_PERSON
+        # Pin the budget anchors so an env override can't move the bounds/counts.
+        self._orig_anchors = (
+            budget.PER_DINNER_FLOOR, budget.PER_DINNER_COMFORTABLE,
+            budget.PER_DINNER_RICHNESS_CEILING, budget.MIN_RECIPE_COUNT,
+            config.BUDGET_PLAN_RECIPE_COUNT,
+        )
+        budget.PER_DINNER_FLOOR = 3.0
+        budget.PER_DINNER_COMFORTABLE = 8.0
+        budget.PER_DINNER_RICHNESS_CEILING = 12.0
+        budget.MIN_RECIPE_COUNT = 4
+        config.BUDGET_PLAN_RECIPE_COUNT = 7
         self._path = _fresh_db()
         config.DB_PATH = self._path
         config.DATABASE_URL = None
         config.APP_KEY = None  # fail-open: no X-App-Key needed
-        config.MIN_BUDGET_PER_PERSON = 25
         db.init_db()
 
         from app.auth import security, service
@@ -130,7 +176,9 @@ class BudgetPlanEndpointTests(unittest.TestCase):
         config.DB_PATH = self._orig_db
         config.DATABASE_URL = self._orig_url
         config.APP_KEY = self._orig_key
-        config.MIN_BUDGET_PER_PERSON = self._orig_min
+        (budget.PER_DINNER_FLOOR, budget.PER_DINNER_COMFORTABLE,
+         budget.PER_DINNER_RICHNESS_CEILING, budget.MIN_RECIPE_COUNT,
+         config.BUDGET_PLAN_RECIPE_COUNT) = self._orig_anchors
         os.unlink(self._path)
 
     def _headers(self, pro: bool = True) -> dict:
@@ -179,17 +227,59 @@ class BudgetPlanEndpointTests(unittest.TestCase):
         self.assertEqual(r.json()["detail"]["error_code"], "pro_required")
 
     def test_below_minimum_is_rejected_even_if_client_missed_it(self) -> None:
-        # household 4 → min 100; a client that sent 60 anyway is rejected server-side.
+        # household 4 → min $50 (3×4×4=48 → $50); a client that sent $40 anyway is
+        # rejected server-side, before any LLM spend.
         with mock.patch("app.mealplan.llm.generate_budget_plan", return_value=self._fake_recipes()) as gen:
             r = self.client.post(
                 "/v1/meal-plan/budget",
-                json=self._body(budget=60, household_size=4),
+                json=self._body(budget=40, household_size=4, area_type="suburb"),
                 headers=self._headers(),
             )
         self.assertEqual(r.status_code, 400)
         self.assertEqual(r.json()["detail"]["error_code"], "budget_below_minimum")
-        self.assertEqual(r.json()["detail"]["min_budget"], 100)
+        self.assertEqual(r.json()["detail"]["min_budget"], 50)
         gen.assert_not_called()  # rejected before spending on generation
+
+    def test_above_maximum_is_rejected(self) -> None:
+        # household 2 → max $170 (12×7×2=168 → $170); $200 is rejected, no LLM spend.
+        with mock.patch("app.mealplan.llm.generate_budget_plan", return_value=self._plan(90.0)) as gen:
+            r = self.client.post(
+                "/v1/meal-plan/budget",
+                json=self._body(budget=200, area_type="suburb"),
+                headers=self._headers(),
+            )
+        self.assertEqual(r.status_code, 400)
+        self.assertEqual(r.json()["detail"]["error_code"], "budget_above_maximum")
+        self.assertEqual(r.json()["detail"]["max_budget"], 170)
+        gen.assert_not_called()
+
+    def test_low_budget_reduces_recipe_count(self) -> None:
+        # $30 for 2 (suburb) → $2.14/dinner at 7 (< $3 floor) → request only 5.
+        with mock.patch(
+            "app.mealplan.llm.generate_budget_plan", return_value=self._plan(9.0, 9.0, 9.0)
+        ) as gen:
+            r = self.client.post(
+                "/v1/meal-plan/budget",
+                json=self._body(budget=30, area_type="suburb"),
+                headers=self._headers(),
+            )
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual(gen.call_args.kwargs["count"], 5)   # cut from 7
+        self.assertFalse(gen.call_args.kwargs["rich"])       # thin budget: not rich
+
+    def test_high_budget_steers_rich_without_increasing_count(self) -> None:
+        # $150 for 2 (suburb) → $10.7/dinner (> $8 comfortable) → 7 dinners, richer.
+        with mock.patch(
+            "app.mealplan.llm.generate_budget_plan", return_value=self._plan(130.0)
+        ) as gen:
+            r = self.client.post(
+                "/v1/meal-plan/budget",
+                json=self._body(budget=150, area_type="suburb"),
+                headers=self._headers(),
+            )
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual(gen.call_args.kwargs["count"], 7)   # NOT increased beyond a week
+        self.assertTrue(gen.call_args.kwargs["rich"])        # extra budget → richness
 
     def test_happy_path_within_band_no_retry_saves_recipe(self) -> None:
         # US/suburb → 1.0 multiplier; budget 100 → band [85, 100]. A $90 plan is

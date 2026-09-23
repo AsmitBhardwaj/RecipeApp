@@ -546,6 +546,7 @@ def generate_budget_plan(
     on_hand: List[str],
     count: int,
     prior_total: Optional[float] = None,
+    rich: bool = False,
 ) -> List[BudgetPlanRecipeLLM]:
     """Generate up to `count` budget/On-Hand-aware recipes in ONE LLM call.
 
@@ -560,6 +561,10 @@ def generate_budget_plan(
     total of a first plan that came in under target), the prompt asks the model to
     revise upward toward the range. Same validate + retry-once path as every other
     call here.
+
+    `rich` steers a generous budget into recipe RICHNESS rather than more dinners
+    (the count is already capped at a week): better protein cuts, an included side,
+    a starter or dessert component.
     """
     prefs = ", ".join(dietary_preferences) if dietary_preferences else "none"
     on_hand_lines = "\n".join(f"- {i}" for i in on_hand) or "(nothing on hand)"
@@ -573,6 +578,13 @@ def generate_budget_plan(
         f"Dietary preferences: {prefs}",
         f"Propose at most {count} dinner recipes for the week.",
     ]
+    if rich:
+        lines.append(
+            "\nThis budget is generous for the number of dinners, so put the extra into RICHER "
+            "recipes rather than more dishes: better protein cuts (e.g. steak, salmon, lamb), an "
+            "included side, and where it fits a starter or dessert component — not padding with "
+            "cheap filler. Keep the count as requested."
+        )
     if prior_total is not None:
         lines.append(
             f"\nA previous plan totaled only about {prior_total:.0f} {currency} — well under the "

@@ -74,6 +74,9 @@ public enum BudgetPlanError: Error, Equatable {
     /// 400 — budget below the per-person minimum; carries the server's minimum so
     /// the client can correct the stepper.
     case belowMinimum(minBudget: Int)
+    /// 400 — budget above the per-person maximum; carries the server's maximum.
+    /// Surfaced as a clear error (no silent clamp) so the user lowers it.
+    case aboveMaximum(maxBudget: Int)
     case offline
     case timedOut
     case network(String)
@@ -86,6 +89,8 @@ public enum BudgetPlanError: Error, Equatable {
             return "Plan on a Budget is a Platter Pro feature."
         case .belowMinimum(let minBudget):
             return "That budget is below the minimum of $\(minBudget) for your household size."
+        case .aboveMaximum(let maxBudget):
+            return "That budget is above the maximum of $\(maxBudget) for your household size."
         case .offline:
             return "You appear to be offline. Check your connection and try again."
         case .timedOut:

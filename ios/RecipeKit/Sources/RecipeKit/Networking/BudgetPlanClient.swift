@@ -90,6 +90,9 @@ public struct BudgetPlanClient {
         if http.statusCode == 400, decodeErrorCode(data) == "budget_below_minimum" {
             throw BudgetPlanError.belowMinimum(minBudget: decodeMinBudget(data) ?? 0)
         }
+        if http.statusCode == 400, decodeErrorCode(data) == "budget_above_maximum" {
+            throw BudgetPlanError.aboveMaximum(maxBudget: decodeMaxBudget(data) ?? 0)
+        }
         guard (200..<300).contains(http.statusCode) else {
             throw BudgetPlanError.http(http.statusCode)
         }
@@ -108,6 +111,10 @@ public struct BudgetPlanClient {
 
     private func decodeMinBudget(_ data: Data) -> Int? {
         (try? JSONDecoder().decode(ErrorEnvelope.self, from: data))?.detail.minBudget
+    }
+
+    private func decodeMaxBudget(_ data: Data) -> Int? {
+        (try? JSONDecoder().decode(ErrorEnvelope.self, from: data))?.detail.maxBudget
     }
 }
 
@@ -136,9 +143,11 @@ private struct ErrorEnvelope: Decodable {
     struct Detail: Decodable {
         let errorCode: String?
         let minBudget: Int?
+        let maxBudget: Int?
         enum CodingKeys: String, CodingKey {
             case errorCode = "error_code"
             case minBudget = "min_budget"
+            case maxBudget = "max_budget"
         }
     }
 }

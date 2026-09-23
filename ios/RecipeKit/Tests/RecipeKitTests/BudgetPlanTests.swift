@@ -14,44 +14,50 @@ final class BudgetPlanTests: XCTestCase {
     // MARK: - BudgetMath
 
     func testMinimumScalesPerPerson() {
-        // Mirrors backend default MIN_BUDGET_PER_PERSON = 25.
-        XCTAssertEqual(BudgetMath.minBudget(householdSize: 1), 25)
-        XCTAssertEqual(BudgetMath.minBudget(householdSize: 2), 50)
-        XCTAssertEqual(BudgetMath.minBudget(householdSize: 4), 100)
+        // Nominal mirror of the derived server model: floor $3 × min_count 4 = $12/person.
+        XCTAssertEqual(BudgetMath.minBudget(householdSize: 1), 10)   // 12 -> 10
+        XCTAssertEqual(BudgetMath.minBudget(householdSize: 2), 25)   // 24 -> 25
+        XCTAssertEqual(BudgetMath.minBudget(householdSize: 4), 50)   // 48 -> 50
+    }
+
+    func testMaximumScalesPerPerson() {
+        // Nominal cap: ceiling $12 × max_count 7 = $84/person.
+        XCTAssertEqual(BudgetMath.maxBudget(householdSize: 1), 85)   // 84 -> 85
+        XCTAssertEqual(BudgetMath.maxBudget(householdSize: 2), 170)  // 168 -> 170
+        XCTAssertEqual(BudgetMath.maxBudget(householdSize: 4), 335)  // 336 -> 335
     }
 
     func testMinimumRoundsToNearestFive() {
-        // 25 * 3 = 75 already a multiple of 5; verify the rounding path holds.
-        XCTAssertEqual(BudgetMath.minBudget(householdSize: 3), 75)
+        // 12 * 3 = 36 -> nearest $5 = 35.
+        XCTAssertEqual(BudgetMath.minBudget(householdSize: 3), 35)
         XCTAssertEqual(BudgetMath.minBudget(householdSize: 3) % 5, 0)
     }
 
     func testHouseholdClampedToAtLeastOne() {
-        XCTAssertEqual(BudgetMath.minBudget(householdSize: 0), 25)
+        XCTAssertEqual(BudgetMath.minBudget(householdSize: 0), BudgetMath.minBudget(householdSize: 1))
     }
 
     func testIncreasingHouseholdBumpsUnderMinimumBudgetUp() {
-        // Budget $60 with 2 people (min 50) is fine; grow to 4 people (min 100) →
-        // reconcile raises it to 100.
-        let raised = BudgetMath.reconciled(currentBudget: 60, householdSize: 4)
-        XCTAssertEqual(raised, 100)
+        // $20 with 4 people is below the $50 min → reconcile raises it to 50.
+        let raised = BudgetMath.reconciled(currentBudget: 20, householdSize: 4)
+        XCTAssertEqual(raised, 50)
     }
 
     func testAboveMinimumBudgetIsUnchanged() {
-        // Household 2 (min 50); a $120 budget stays $120.
+        // Household 2 (min 25); a $120 budget stays $120.
         XCTAssertEqual(BudgetMath.reconciled(currentBudget: 120, householdSize: 2), 120)
     }
 
     func testDecreasingHouseholdNeverLowersBudget() {
-        // User chose to spend $120 for 4 people; dropping to 2 people (min 50)
+        // User chose to spend $120 for 4 people; dropping to 2 people (min 25)
         // must NOT reduce their budget — only-up, never-down.
         let afterDecrease = BudgetMath.reconciled(currentBudget: 120, householdSize: 2)
         XCTAssertEqual(afterDecrease, 120)
     }
 
     func testMinimumCaption() {
-        XCTAssertEqual(BudgetMath.minimumCaption(householdSize: 1), "$25 minimum for 1 person")
-        XCTAssertEqual(BudgetMath.minimumCaption(householdSize: 2), "$50 minimum for 2 people")
+        XCTAssertEqual(BudgetMath.minimumCaption(householdSize: 1), "$10 minimum for 1 person")
+        XCTAssertEqual(BudgetMath.minimumCaption(householdSize: 2), "$25 minimum for 2 people")
     }
 
     // MARK: - BudgetPlanSelection (accept / save)

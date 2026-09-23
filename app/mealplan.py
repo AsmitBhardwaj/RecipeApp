@@ -149,26 +149,49 @@ def plan_on_a_budget(
     except ratelimit.RateLimitExceeded as exc:
         raise HTTPException(status_code=429, detail=str(exc))
 
-    # 3. Budget floor — enforced server-side, independent of the client.
-    minimum = budget.min_budget(req.household_size)
-    if req.budget < minimum:
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "error_code": "budget_below_minimum",
-                "message": f"The minimum weekly budget for {req.household_size} people is ${minimum}.",
-                "min_budget": minimum,
-            },
-        )
-
-    # 4. Resolve the regional multiplier FIRST, so we can hand the LLM a budget in
+    # 3. Resolve the regional multiplier FIRST, so we can hand the LLM a budget in
     #    its own location-independent (baseline) space: user budget ÷ multiplier.
     #    Without this, a user in a 1.3× region was silently given a target 1.3× too
     #    high (the recipe costs get multiplied afterward). Guard divide-by-zero
     #    (multipliers are always > 0 today, but never trust that at a divide).
     multiplier = regional_cost.multiplier_for(req.country, req.area_type)
     baseline_budget = req.budget / multiplier if multiplier > 0 else req.budget
+
+    # 3b. Budget bounds — modeled in baseline space (app/budget.py), enforced
+    #     server-side both ways. Reject (never silently clamp) too-low and too-high
+    #     requests; report the threshold back in the user's LOCAL units (× the
+    #     multiplier) so the message matches the number they typed.
+    def _to_local(baseline_amount: float) -> int:
+        return int(round((baseline_amount * multiplier) / 5) * 5)
+
+    min_baseline = budget.min_budget(req.household_size)
+    max_baseline = budget.max_budget(req.household_size)
+    min_local, max_local = _to_local(min_baseline), _to_local(max_baseline)
+    if baseline_budget < min_baseline:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error_code": "budget_below_minimum",
+                "message": f"The minimum weekly budget for {req.household_size} people is ${min_local}.",
+                "min_budget": min_local,
+            },
+        )
+    if baseline_budget > max_baseline:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error_code": "budget_above_maximum",
+                "message": f"The maximum weekly budget for {req.household_size} people is ${max_local}.",
+                "max_budget": max_local,
+            },
+        )
+
+    # 4. Decide the recipe count (cut below 7 only when the budget is too small to
+    #    fill a week without undershooting) and whether to steer toward richer
+    #    recipes (a generous budget goes into richness, not more dishes).
     floor_amount = req.budget * llm.BUDGET_TARGET_FLOOR_FRAC
+    recipe_count = budget.target_recipe_count(baseline_budget, req.household_size)
+    steer_rich = budget.wants_rich(baseline_budget, req.household_size)
 
     def _generate(prior_total: Optional[float] = None):
         return llm.generate_budget_plan(
@@ -177,8 +200,9 @@ def plan_on_a_budget(
             household_size=req.household_size,
             dietary_preferences=req.dietary_preferences,
             on_hand=req.pantry_items,
-            count=config.BUDGET_PLAN_RECIPE_COUNT,
+            count=recipe_count,
             prior_total=prior_total,
+            rich=steer_rich,
         )
 
     # 5. Generate the week's recipes. If the plan lands under the target band
@@ -247,6 +271,6 @@ def plan_on_a_budget(
         recipes=planned,
         currency=req.currency,
         budget=req.budget,
-        min_budget=minimum,
+        min_budget=min_local,
         regional_multiplier=multiplier,
     )
