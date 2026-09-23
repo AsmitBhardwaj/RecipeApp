@@ -60,6 +60,27 @@ final class BudgetPlanTests: XCTestCase {
         XCTAssertEqual(BudgetMath.minimumCaption(householdSize: 2), "$25 minimum for 2 people")
     }
 
+    func testDirectBudgetInputAcceptsWholeDollars() {
+        XCTAssertEqual(BudgetMath.validateInput("100", householdSize: 2), .valid(100))
+    }
+
+    func testDirectBudgetInputRoundsDecimalsToNearestDollar() {
+        XCTAssertEqual(BudgetMath.validateInput("99.6", householdSize: 2), .valid(100))
+        XCTAssertEqual(BudgetMath.validateInput("99,4", householdSize: 2), .valid(99))
+    }
+
+    func testDirectBudgetInputRejectsEmptyAndNonNumericText() {
+        XCTAssertEqual(BudgetMath.validateInput("   ", householdSize: 2), .empty)
+        XCTAssertEqual(BudgetMath.validateInput("one hundred", householdSize: 2), .notNumeric)
+    }
+
+    func testDirectBudgetInputUsesExistingHouseholdBounds() {
+        XCTAssertEqual(BudgetMath.validateInput("24", householdSize: 2), .belowMinimum(25))
+        XCTAssertEqual(BudgetMath.validateInput("171", householdSize: 2), .aboveMaximum(170))
+        XCTAssertEqual(BudgetMath.validateInput("25", householdSize: 2), .valid(25))
+        XCTAssertEqual(BudgetMath.validateInput("170", householdSize: 2), .valid(170))
+    }
+
     // MARK: - BudgetPlanSelection (accept / save)
 
     private func plannedRecipe(_ id: String, cost: Double) -> PlannedRecipe {

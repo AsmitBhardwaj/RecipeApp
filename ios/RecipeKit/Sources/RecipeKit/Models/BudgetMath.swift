@@ -14,6 +14,14 @@
 
 import Foundation
 
+public enum BudgetInputValidation: Equatable {
+    case valid(Int)
+    case empty
+    case notNumeric
+    case belowMinimum(Int)
+    case aboveMaximum(Int)
+}
+
 public enum BudgetMath {
     /// Nominal per-person floor = per_dinner_floor × min_recipe_count (baseline).
     public static let minBudgetPerPerson = 12
@@ -35,6 +43,30 @@ public enum BudgetMath {
     /// person and rounded to the nearest $5. Household size clamped to ≥ 1.
     public static func maxBudget(householdSize: Int) -> Int {
         roundToIncrement(max(1, householdSize) * maxBudgetPerPerson)
+    }
+
+    /// Validates direct-entry text against the same nominal bounds as the budget
+    /// stepper. Decimal amounts are accepted and rounded to the nearest dollar.
+    public static func validateInput(
+        _ input: String,
+        householdSize: Int
+    ) -> BudgetInputValidation {
+        let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return .empty }
+
+        // Accept either common decimal separator while still rejecting partial
+        // or mixed text that `decimalPad` users may paste into the field.
+        let normalized = trimmed.replacingOccurrences(of: ",", with: ".")
+        guard let amount = Double(normalized), amount.isFinite else {
+            return .notNumeric
+        }
+
+        let rounded = amount.rounded()
+        let minimum = minBudget(householdSize: householdSize)
+        let maximum = maxBudget(householdSize: householdSize)
+        if rounded < Double(minimum) { return .belowMinimum(minimum) }
+        if rounded > Double(maximum) { return .aboveMaximum(maximum) }
+        return .valid(Int(rounded))
     }
 
     /// Reconcile a budget against a (possibly new) household size: raise it to the
