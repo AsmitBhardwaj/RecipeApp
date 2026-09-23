@@ -33,6 +33,13 @@ extension Font {
         .custom("DMSerifDisplay-Italic", size: size, relativeTo: style)
     }
 
+    /// Explicit name used by screens that need the italic editorial accent.
+    /// Kept separate from `scriptAccent` so a future calligraphic accent can be
+    /// introduced without changing the paywall's typography.
+    static func scriptAccentItalic(size: CGFloat, relativeTo style: Font.TextStyle = .title) -> Font {
+        .custom("DMSerifDisplay-Italic", size: size, relativeTo: style)
+    }
+
     // MARK: - Body typography (system / San Francisco)
     //
     // The counterpart to `editorialTitle`: all non-title text (row titles,
