@@ -37,7 +37,11 @@ struct MainTabView: View {
         case recipes, mealPlan, kitchen
     }
 
-    init(recipeProvider: RecipeProvider, auth: AuthModel) {
+    init(
+        recipeProvider: RecipeProvider,
+        auth: AuthModel,
+        subscriptions: SubscriptionService
+    ) {
         let userId = auth.currentUser?.id ?? "unknown"
         // Stage 4 "claim your data": migrate any pre-account (legacy) local data
         // into this account BEFORE the view models below read their scoped stores,
@@ -45,7 +49,11 @@ struct MainTabView: View {
         // Idempotent + device-global: a cheap no-op after the first sign-in.
         let claim = LegacyDataClaimer(userId: userId).claimIfNeeded()
         _claimSummary = State(initialValue: claim)
-        let coordinator = SyncCoordinator(userId: userId, tokenProvider: { try await auth.validAccessToken() })
+        let coordinator = SyncCoordinator(
+            userId: userId,
+            tokenProvider: { try await auth.validAccessToken() },
+            proEntitled: { subscriptions.isProUnlocked }
+        )
         self.userScope = userId
         _sync = StateObject(wrappedValue: coordinator)
         _jobs = StateObject(wrappedValue: PendingJobsModel(provider: recipeProvider, userScope: userId, sync: coordinator))
@@ -133,5 +141,9 @@ struct MainTabView: View {
 }
 
 #Preview {
-    MainTabView(recipeProvider: MockRecipeProvider(), auth: AuthModel())
+    MainTabView(
+        recipeProvider: MockRecipeProvider(),
+        auth: AuthModel(),
+        subscriptions: SubscriptionService()
+    )
 }

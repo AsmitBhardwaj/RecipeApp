@@ -14,7 +14,7 @@ import Foundation
 import RecipeKit
 
 @MainActor
-final class CookbooksModel: ObservableObject {
+final class CookbooksModel: ObservableObject, SyncRefreshable {
 
     /// User-created cookbooks, newest-created first.
     @Published private(set) var cookbooks: [Cookbook] = []
@@ -32,6 +32,18 @@ final class CookbooksModel: ObservableObject {
         self.membership = CookbookMembershipStore(userScope: userScope)
         self.sync = sync
         self.cookbooks = store.all()
+        sync?.registerRefreshable(self)
+    }
+
+    /// Re-read cookbooks from disk (and bump `revision` so membership-derived
+    /// counts, which live in `CookbookMembershipStore` rather than a @Published,
+    /// recompute) after a sync pull wrote new cookbook or membership rows. The
+    /// applier writes straight to those stores, not this model. Merge-safe: every
+    /// local mutation already re-reads `store.all()`, so the store is
+    /// authoritative and nothing created this session is dropped.
+    func refreshFromStore() {
+        cookbooks = store.all()
+        revision += 1
     }
 
     // MARK: - Cookbook CRUD
@@ -99,6 +111,20 @@ final class CookbooksModel: ObservableObject {
         }
         for removed in previous.subtracting(cookbookIds) {
             recordMembership(cookbookId: removed, recipeId: recipeId, deleted: true)
+        }
+    }
+
+    /// Strip a recipe from every cookbook it belongs to — call alongside
+    /// `PendingJobsModel.deleteRecipe` when a recipe is deleted from the library,
+    /// so cookbook counts don't count a recipe that no longer exists. Records a
+    /// membership tombstone per (cookbook, recipe) pair, mirroring `delete(_:)`.
+    func removeRecipeFromAllCookbooks(_ recipeId: String) {
+        let cookbookIds = membership.cookbookIds(forRecipe: recipeId)
+        guard !cookbookIds.isEmpty else { return }
+        membership.removeRecipe(recipeId)
+        revision += 1
+        for cookbookId in cookbookIds {
+            recordMembership(cookbookId: cookbookId, recipeId: recipeId, deleted: true)
         }
     }
 

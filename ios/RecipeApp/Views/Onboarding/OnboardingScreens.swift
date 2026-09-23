@@ -290,30 +290,88 @@ struct OnboardingPreferencesScreen: View {
 }
 
 struct OnboardingRegionScreen: View {
-    @Binding var region: GroceryRegion?
+    @Binding var country: String?
+    @Binding var areaType: AreaType?
+
+    @State private var showingCountryPicker = false
+
+    private var countryName: String? {
+        country.flatMap { GroceryCountry.localizedName(for: $0) }
+    }
 
     var body: some View {
         OnboardingScreen(
             serifLine: "Know your",
             scriptLine: "grocery costs.",
-            bodyText: "Grocery prices vary a lot by where you shop. We use this to set realistic budgets when you plan a week of meals around a set amount."
+            bodyText: "Grocery prices vary by where you shop. We use your country and the kind of area you live in to set realistic budgets when you plan a week of meals."
         ) {
-            VStack(spacing: 12) {
-                ForEach(GroceryRegion.allCases, id: \.self) { option in
-                    regionRow(option)
+            VStack(alignment: .leading, spacing: 24) {
+                VStack(alignment: .leading, spacing: 10) {
+                    fieldLabel("Country")
+                    countryButton
+                }
+
+                VStack(alignment: .leading, spacing: 10) {
+                    fieldLabel("Where you live")
+                    VStack(spacing: 12) {
+                        ForEach(AreaType.allCases, id: \.self) { option in
+                            areaRow(option)
+                        }
+                    }
                 }
             }
         }
+        .sheet(isPresented: $showingCountryPicker) {
+            CountryPickerSheet(selection: $country)
+        }
     }
 
-    private func regionRow(_ option: GroceryRegion) -> some View {
-        let isSelected = region == option
-        return Button { region = option } label: {
+    private func fieldLabel(_ text: String) -> some View {
+        Text(text.uppercased())
+            .font(.caption.weight(.semibold))
+            .tracking(0.5)
+            .foregroundStyle(Color.textSecondary)
+    }
+
+    private var countryButton: some View {
+        Button { showingCountryPicker = true } label: {
             HStack(spacing: 14) {
-                Text(option.displayName)
+                Text(countryName ?? "Select country")
                     .font(.body.weight(.medium))
-                    .foregroundStyle(Color.textPrimary)
+                    .foregroundStyle(countryName == nil ? Color.textSecondary : Color.textPrimary)
                     .multilineTextAlignment(.leading)
+                Spacer(minLength: 12)
+                Image(systemName: "chevron.right")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(Color.textSecondary.opacity(0.6))
+            }
+            .padding(.horizontal, 18)
+            .frame(maxWidth: .infinity, minHeight: 58)
+            .background(Color.surface, in: RoundedRectangle(cornerRadius: 16))
+            .overlay {
+                RoundedRectangle(cornerRadius: 16)
+                    .strokeBorder(country == nil ? Color.hairline : Color.accentColor,
+                                  lineWidth: country == nil ? 1 : 1.5)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Country, \(countryName ?? "not selected")")
+    }
+
+    private func areaRow(_ option: AreaType) -> some View {
+        let isSelected = areaType == option
+        return Button { areaType = option } label: {
+            HStack(spacing: 14) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(option.displayName)
+                        .font(.body.weight(.medium))
+                        .foregroundStyle(Color.textPrimary)
+                    Text(option.detail)
+                        .font(.caption)
+                        .foregroundStyle(Color.textSecondary)
+                }
+                .multilineTextAlignment(.leading)
                 Spacer(minLength: 12)
                 Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
                     .font(.title3)

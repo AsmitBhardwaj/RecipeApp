@@ -30,7 +30,7 @@
           "codeOffers" : [
 
           ],
-          "displayPrice" : "4.99",
+          "displayPrice" : "6.99",
           "familyShareable" : false,
           "groupNumber" : 1,
           "internalID" : "7C7BBF3F-7E1B-478B-8CA8-5C996F56A5B6",
@@ -55,11 +55,15 @@
           "codeOffers" : [
 
           ],
-          "displayPrice" : "39.99",
+          "displayPrice" : "29.99",
           "familyShareable" : false,
           "groupNumber" : 1,
           "internalID" : "A81E58A2-5E6D-4410-8A88-A421FC1ED24E",
-          "introductoryOffer" : null,
+          "introductoryOffer" : {
+            "internalID" : "B1F2A3C4-0007-4D71-9E2A-7C0FE0A11F00",
+            "paymentMode" : "free",
+            "subscriptionPeriod" : "P1W"
+          },
           "localizations" : [
             {
               "description" : "Yearly access to Platter Pro.",

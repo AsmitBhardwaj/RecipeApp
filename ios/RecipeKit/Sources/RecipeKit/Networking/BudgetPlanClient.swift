@@ -14,14 +14,14 @@ public struct BudgetPlanClient {
     private let baseURL: URL
     private let session: URLSession
     private let appKey: () -> String
-    private let proEntitled: () -> Bool
+    private let proEntitled: @MainActor () -> Bool
     private let accessTokenProvider: () async throws -> String
 
     public init(
         baseURL: URL = APIRecipeProvider.defaultBaseURL,
         session: URLSession = .shared,
         appKey: @escaping () -> String = { AppConfig.appKey },
-        proEntitled: @escaping () -> Bool = { ProEntitlementCache.isEntitled },
+        proEntitled: @escaping @MainActor () -> Bool = { ProEntitlementCache.isEntitled },
         accessTokenProvider: @escaping () async throws -> String
     ) {
         self.baseURL = baseURL
@@ -37,7 +37,8 @@ public struct BudgetPlanClient {
         householdSize: Int,
         dietaryPreferences: [String],
         pantryItems: [String],
-        region: String?
+        country: String?,
+        areaType: String?
     ) async throws -> BudgetPlanResponse {
         var request = try await makeRequest("v1/meal-plan/budget", method: "POST")
         request.httpBody = try JSONEncoder().encode(RequestBody(
@@ -46,7 +47,8 @@ public struct BudgetPlanClient {
             householdSize: householdSize,
             dietaryPreferences: dietaryPreferences,
             pantryItems: pantryItems,
-            region: region
+            country: country,
+            areaType: areaType
         ))
         return try await send(request)
     }
@@ -60,7 +62,7 @@ public struct BudgetPlanClient {
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         let key = appKey()
         if !key.isEmpty { request.setValue(key, forHTTPHeaderField: "X-App-Key") }
-        if proEntitled() { request.setValue("1", forHTTPHeaderField: "X-Pro-Entitled") }
+        if await proEntitled() { request.setValue("1", forHTTPHeaderField: "X-Pro-Entitled") }
         let token = try await accessTokenProvider()
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         return request
@@ -88,6 +90,9 @@ public struct BudgetPlanClient {
         if http.statusCode == 400, decodeErrorCode(data) == "budget_below_minimum" {
             throw BudgetPlanError.belowMinimum(minBudget: decodeMinBudget(data) ?? 0)
         }
+        if http.statusCode == 400, decodeErrorCode(data) == "budget_above_maximum" {
+            throw BudgetPlanError.aboveMaximum(maxBudget: decodeMaxBudget(data) ?? 0)
+        }
         guard (200..<300).contains(http.statusCode) else {
             throw BudgetPlanError.http(http.statusCode)
         }
@@ -107,6 +112,10 @@ public struct BudgetPlanClient {
     private func decodeMinBudget(_ data: Data) -> Int? {
         (try? JSONDecoder().decode(ErrorEnvelope.self, from: data))?.detail.minBudget
     }
+
+    private func decodeMaxBudget(_ data: Data) -> Int? {
+        (try? JSONDecoder().decode(ErrorEnvelope.self, from: data))?.detail.maxBudget
+    }
 }
 
 // MARK: - Request / error bodies
@@ -117,13 +126,15 @@ private struct RequestBody: Encodable {
     let householdSize: Int
     let dietaryPreferences: [String]
     let pantryItems: [String]
-    let region: String?
+    let country: String?
+    let areaType: String?
 
     enum CodingKeys: String, CodingKey {
-        case budget, currency, region
+        case budget, currency, country
         case householdSize = "household_size"
         case dietaryPreferences = "dietary_preferences"
         case pantryItems = "pantry_items"
+        case areaType = "area_type"
     }
 }
 
@@ -132,9 +143,11 @@ private struct ErrorEnvelope: Decodable {
     struct Detail: Decodable {
         let errorCode: String?
         let minBudget: Int?
+        let maxBudget: Int?
         enum CodingKeys: String, CodingKey {
             case errorCode = "error_code"
             case minBudget = "min_budget"
+            case maxBudget = "max_budget"
         }
     }
 }

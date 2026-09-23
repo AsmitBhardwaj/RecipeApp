@@ -21,7 +21,7 @@ from typing import Optional
 
 from sqlalchemy import select, update
 
-from .. import db
+from .. import db, devicesignal
 from ..db import auth_identities, refresh_tokens, users
 from . import security
 from .providers import VerifiedIdentity
@@ -90,7 +90,9 @@ def get_user_by_email(email: str) -> Optional[User]:
 # --------------------------------------------------------------------------- #
 
 
-def create_email_user(email: str, password: str, full_name: Optional[str]) -> User:
+def create_email_user(
+    email: str, password: str, full_name: Optional[str], device_id: Optional[str] = None
+) -> User:
     norm = _normalize_email(email)
     if get_user_by_email(norm):
         raise EmailInUse(norm)
@@ -108,6 +110,9 @@ def create_email_user(email: str, password: str, full_name: Optional[str]) -> Us
                 updated_at=now,
             )
         )
+    # Advisory device-level abuse signal (never blocks). Runs after the account
+    # row is committed so its own write can't see a half-open transaction.
+    devicesignal.record_new_account(user_id, device_id, now)
     return User(id=user_id, email=norm, email_verified=False, full_name=full_name or None, has_password=True)
 
 
@@ -133,11 +138,14 @@ def authenticate_email(email: str, password: str) -> Optional[User]:
 # --------------------------------------------------------------------------- #
 
 
-def upsert_provider_user(identity: VerifiedIdentity, full_name: Optional[str]) -> User:
+def upsert_provider_user(
+    identity: VerifiedIdentity, full_name: Optional[str], device_id: Optional[str] = None
+) -> User:
     """Resolve a verified provider identity to an account, creating or linking as
     needed, and return the user."""
     now = _now_iso()
     email = _normalize_email(identity.email)
+    created_new = False  # only a brand-new account gets the device signal below
 
     with db.get_engine().begin() as conn:
         link = conn.execute(
@@ -173,6 +181,7 @@ def upsert_provider_user(identity: VerifiedIdentity, full_name: Optional[str]) -
                     updated_at=now,
                 )
             )
+            created_new = True
         else:
             user_id = user_row["id"]
             _backfill(conn, user_row, full_name=full_name, email=email, email_verified=identity.email_verified, now=now)
@@ -187,7 +196,13 @@ def upsert_provider_user(identity: VerifiedIdentity, full_name: Optional[str]) -
             )
         )
         row = conn.execute(select(users).where(users.c.id == user_id)).mappings().fetchone()
-        return _row_to_user(row)
+        user = _row_to_user(row)
+
+    # Only a first-time account creation (not a link to an existing account or a
+    # returning identity) counts as a new device signal — and only after commit.
+    if created_new:
+        devicesignal.record_new_account(user.id, device_id, now)
+    return user
 
 
 def _backfill(conn, row, *, full_name: Optional[str], email: Optional[str], email_verified: bool, now: str) -> None:

@@ -137,14 +137,27 @@ regional_multiplier(location)`, where:
 
 - `baseline_basket_cost` is the location-independent per-recipe estimate cached on
   the `Recipe` (§3.1), derived once at generation and reused.
-- `regional_multiplier(location)` is **LLM-estimated** (settled, OQ2 — no external
-  dataset in v1). Always present cost to the user as an **estimate/range**.
+- `regional_multiplier(location)` is a small **STATIC two-part table** (no LLM call,
+  no external dataset in v1), where `location = (country, area_type)`:
 
-**Pre-ship sanity check (replaces the cancelled spike):** query the LLM for
-regional multipliers on 5–6 well-known cities/regions and manually confirm the
-**ordering is sane** (e.g. San Francisco must not rank cheaper than a low-cost
-rural area). A ~30-minute gut-check, not a research spike. Revisit a real index
-only if real users report the numbers feel wrong post-launch.
+  ```
+  regional_multiplier = country_baseline(country) × area_modifier(area_type)
+  ```
+
+  `country_baseline` is a coarse cost-of-living factor vs. the US national average
+  (1.0), keyed on ISO 3166-1 alpha-2; unlisted countries default to 1.0.
+  `area_modifier` is `city 1.15 / suburb 1.00 / rural 0.85` (suburb = the anchor).
+  Either part unset falls back to 1.0. Implemented in
+  `app/pipeline/regional_cost.py`; the final multiplier is rounded to two decimals.
+  Always present cost to the user as an **estimate/range**.
+
+**Pre-ship sanity check (replaces the cancelled spike):** confirm the static
+table's **ordering is sane** — a high-cost country/city (e.g. Switzerland/city)
+must rank above the US suburb baseline, which must rank above a low-cost
+country/rural area (e.g. India/rural), and within a country city > suburb > rural.
+Covered by `RegionalMultiplierTests`/`MultiplierTableTests` in
+`tests/test_budget_plan.py`. Revisit a real index only if users report the numbers
+feel wrong post-launch.
 
 ### 3.5 iOS changes
 
@@ -163,8 +176,11 @@ only if real users report the numbers feel wrong post-launch.
   name (same fuzziness the categorizer already lives with; no unit conversion).
 - **Commit-to-plan** — accepted recipes become `MealPlanEntry`s in `meal_plan`, so
   the existing Meal Plan + Grocery List light up from a generated plan.
-- **Location capture** — a stored region setting or picker (granularity per OQ2's
-  LLM approach; CoreLocation optional).
+- **Location capture** — two stored signals set in onboarding (Screen 5) and
+  editable in Account: **country** (a searchable ISO-country picker, stored as the
+  alpha-2 code) and **area type** (City / Suburb / Rural). They live on
+  `CookingPreferences` (device-local) and are sent as `country` + `area_type` on
+  the budget request. CoreLocation optional/not used.
 
 ---
 

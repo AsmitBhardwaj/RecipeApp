@@ -2,17 +2,31 @@
 //  BudgetMath.swift
 //  RecipeKit
 //
-//  The per-person minimum weekly budget for Plan on a Budget. Mirrors the server
-//  (app/budget.py + config.MIN_BUDGET_PER_PERSON) EXACTLY so the client stepper
-//  floor and caption match what the backend enforces. Keep the constant and the
-//  rounding rule in sync with the backend.
+//  The per-person weekly budget bounds for Plan on a Budget. These mirror the
+//  server's derived model (app/budget.py) as an APPROXIMATE, region-agnostic
+//  stepper hint — nominal = per-person baseline anchors:
+//      minBudgetPerPerson = per_dinner_floor    ($3) × min_recipe_count (4) = $12
+//      maxBudgetPerPerson = per_dinner_ceiling  ($12) × max_recipe_count (7) = $84
+//  The server is authoritative and enforces both bounds AFTER converting the
+//  budget into baseline space (÷ regional multiplier), so for a non-1.0× region
+//  the true bound differs; keep these anchors in sync with app/budget.py.
 //
 
 import Foundation
 
+public enum BudgetInputValidation: Equatable {
+    case valid(Int)
+    case empty
+    case notNumeric
+    case belowMinimum(Int)
+    case aboveMaximum(Int)
+}
+
 public enum BudgetMath {
-    /// PLACEHOLDER — mirror of backend `config.MIN_BUDGET_PER_PERSON`.
-    public static let minBudgetPerPerson = 25
+    /// Nominal per-person floor = per_dinner_floor × min_recipe_count (baseline).
+    public static let minBudgetPerPerson = 12
+    /// Nominal per-person cap = per_dinner_richness_ceiling × max_recipe_count.
+    public static let maxBudgetPerPerson = 84
     private static let increment = 5
 
     private static func roundToIncrement(_ value: Int) -> Int {
@@ -23,6 +37,36 @@ public enum BudgetMath {
     /// rounded to the nearest $5. Household size is clamped to at least 1.
     public static func minBudget(householdSize: Int) -> Int {
         roundToIncrement(max(1, householdSize) * minBudgetPerPerson)
+    }
+
+    /// Maximum allowed weekly budget for a household (nominal hint), scaled per
+    /// person and rounded to the nearest $5. Household size clamped to ≥ 1.
+    public static func maxBudget(householdSize: Int) -> Int {
+        roundToIncrement(max(1, householdSize) * maxBudgetPerPerson)
+    }
+
+    /// Validates direct-entry text against the same nominal bounds as the budget
+    /// stepper. Decimal amounts are accepted and rounded to the nearest dollar.
+    public static func validateInput(
+        _ input: String,
+        householdSize: Int
+    ) -> BudgetInputValidation {
+        let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return .empty }
+
+        // Accept either common decimal separator while still rejecting partial
+        // or mixed text that `decimalPad` users may paste into the field.
+        let normalized = trimmed.replacingOccurrences(of: ",", with: ".")
+        guard let amount = Double(normalized), amount.isFinite else {
+            return .notNumeric
+        }
+
+        let rounded = amount.rounded()
+        let minimum = minBudget(householdSize: householdSize)
+        let maximum = maxBudget(householdSize: householdSize)
+        if rounded < Double(minimum) { return .belowMinimum(minimum) }
+        if rounded > Double(maximum) { return .aboveMaximum(maximum) }
+        return .valid(Int(rounded))
     }
 
     /// Reconcile a budget against a (possibly new) household size: raise it to the

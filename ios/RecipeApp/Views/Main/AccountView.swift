@@ -21,6 +21,7 @@ struct AccountView: View {
     @State private var showDeleteConfirm = false
     @State private var deleteError: String?
     @State private var showPaywall = false
+    @State private var showingCountryPicker = false
 
     /// Drives the single "Dark Mode" switch. The stored preference keeps three
     /// states so first launch (`.system`) follows the OS; the toggle only ever
@@ -32,11 +33,22 @@ struct AccountView: View {
         )
     }
 
-    private var regionBinding: Binding<GroceryRegion?> {
+    private var areaTypeBinding: Binding<AreaType?> {
         Binding(
-            get: { cookingPreferences.region },
-            set: { cookingPreferences.updateRegion($0) }
+            get: { cookingPreferences.areaType },
+            set: { cookingPreferences.updateAreaType($0) }
         )
+    }
+
+    private var countryBinding: Binding<String?> {
+        Binding(
+            get: { cookingPreferences.country },
+            set: { cookingPreferences.updateCountry($0) }
+        )
+    }
+
+    private var countryName: String? {
+        cookingPreferences.country.flatMap { GroceryCountry.localizedName(for: $0) }
     }
 
     var body: some View {
@@ -83,17 +95,12 @@ struct AccountView: View {
                                 }
                             }
                             SettingsDivider()
-                            Menu {
-                                Picker("Region", selection: regionBinding) {
-                                    Text("Not set").tag(GroceryRegion?.none)
-                                    ForEach(GroceryRegion.allCases, id: \.self) { region in
-                                        Text(region.displayName).tag(GroceryRegion?.some(region))
-                                    }
-                                }
+                            Button {
+                                showingCountryPicker = true
                             } label: {
-                                SettingsRowContent(icon: "cart", title: "Grocery region") {
+                                SettingsRowContent(icon: "globe", title: "Country") {
                                     HStack(spacing: Theme.Spacing.sm) {
-                                        Text(cookingPreferences.region?.displayName ?? "Not set")
+                                        Text(countryName ?? "Not set")
                                             .font(.subheadline)
                                             .foregroundStyle(Color.textSecondary)
                                             .lineLimit(1)
@@ -101,8 +108,31 @@ struct AccountView: View {
                                     }
                                 }
                             }
-                            .accessibilityLabel("Grocery region, \(cookingPreferences.region?.displayName ?? "Not set")")
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("Country, \(countryName ?? "Not set")")
                             .accessibilityHint("Sets realistic budgets when planning meals")
+
+                            SettingsDivider()
+                            Menu {
+                                Picker("Area type", selection: areaTypeBinding) {
+                                    Text("Not set").tag(AreaType?.none)
+                                    ForEach(AreaType.allCases, id: \.self) { area in
+                                        Text(area.displayName).tag(AreaType?.some(area))
+                                    }
+                                }
+                            } label: {
+                                SettingsRowContent(icon: "cart", title: "Where you live") {
+                                    HStack(spacing: Theme.Spacing.sm) {
+                                        Text(cookingPreferences.areaType?.displayName ?? "Not set")
+                                            .font(.subheadline)
+                                            .foregroundStyle(Color.textSecondary)
+                                            .lineLimit(1)
+                                        SettingsChevron()
+                                    }
+                                }
+                            }
+                            .accessibilityLabel("Where you live, \(cookingPreferences.areaType?.displayName ?? "Not set")")
+                            .accessibilityHint("Adjusts budgets for a city, suburb, or rural area")
                         }
                     }
 
@@ -184,6 +214,9 @@ struct AccountView: View {
         .sheet(isPresented: $showPaywall) {
             PlatterProPaywallView()
                 .environmentObject(subscriptions)
+        }
+        .sheet(isPresented: $showingCountryPicker) {
+            CountryPickerSheet(selection: countryBinding)
         }
         .task { await subscriptions.start() }
         .onChange(of: scenePhase) { _, phase in

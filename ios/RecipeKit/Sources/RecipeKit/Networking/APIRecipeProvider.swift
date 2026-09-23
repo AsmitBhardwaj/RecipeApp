@@ -42,7 +42,7 @@ public struct APIRecipeProvider: RecipeProvider {
     /// Extension (which can't query StoreKit) can send it too. Sent as
     /// `X-Pro-Entitled` and used only to waive the free-import limit. Injectable
     /// for tests.
-    let proEntitled: () -> Bool
+    let proEntitled: @MainActor () -> Bool
     /// Poll cadence and total budget for `submitRecipe`.
     let pollInterval: Duration
     let maxWait: Duration
@@ -53,7 +53,7 @@ public struct APIRecipeProvider: RecipeProvider {
         userID: @escaping () -> String = { RecipeKit.currentUserID },
         appKey: @escaping () -> String = { AppConfig.appKey },
         authToken: @escaping () -> String? = { AuthSessionStore().load()?.accessToken },
-        proEntitled: @escaping () -> Bool = { ProEntitlementCache.isEntitled },
+        proEntitled: @escaping @MainActor () -> Bool = { ProEntitlementCache.isEntitled },
         pollInterval: Duration = .seconds(1.5),
         maxWait: Duration = .seconds(120)
     ) {
@@ -97,7 +97,7 @@ public struct APIRecipeProvider: RecipeProvider {
         var request = URLRequest(url: baseURL.appendingPathComponent("v1/jobs"))
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        applyCommonHeaders(&request)
+        await applyCommonHeaders(&request)
         request.httpBody = try JSONEncoder().encode(JobRequestBody(url: trimmed))
 
         let envelope: JobEnvelope = try await send(request)
@@ -107,7 +107,7 @@ public struct APIRecipeProvider: RecipeProvider {
     /// GET /v1/jobs/{job_id} — one poll. Returns the current envelope.
     public func fetchJob(jobId: String) async throws -> JobEnvelope {
         var request = URLRequest(url: baseURL.appendingPathComponent("v1/jobs/\(jobId)"))
-        applyCommonHeaders(&request)
+        await applyCommonHeaders(&request)
         return try await send(request)
     }
 
@@ -122,7 +122,7 @@ public struct APIRecipeProvider: RecipeProvider {
         var request = URLRequest(url: baseURL.appendingPathComponent("v1/jobs/\(jobId)/paste"))
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        applyCommonHeaders(&request)
+        await applyCommonHeaders(&request)
         request.httpBody = try JSONEncoder().encode(PasteRequestBody(text: trimmed))
         return try await send(request)
     }
@@ -142,7 +142,7 @@ public struct APIRecipeProvider: RecipeProvider {
         var request = URLRequest(url: baseURL.appendingPathComponent("feedback"))
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        applyCommonHeaders(&request)
+        await applyCommonHeaders(&request)
         request.httpBody = try JSONEncoder().encode(
             FeedbackBody(
                 rating: rating,
@@ -191,7 +191,7 @@ public struct APIRecipeProvider: RecipeProvider {
 
     // MARK: - Transport
 
-    private func applyCommonHeaders(_ request: inout URLRequest) {
+    private func applyCommonHeaders(_ request: inout URLRequest) async {
         request.setValue(userID(), forHTTPHeaderField: "X-User-Id")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         // Only attach the app key when this build actually has one — an empty
@@ -209,7 +209,7 @@ public struct APIRecipeProvider: RecipeProvider {
         }
         // Pro claim: waives the limit server-side. Sent only when entitled, so a
         // free client sends nothing (the backend defaults to non-Pro).
-        if proEntitled() {
+        if await proEntitled() {
             request.setValue("1", forHTTPHeaderField: "X-Pro-Entitled")
         }
     }

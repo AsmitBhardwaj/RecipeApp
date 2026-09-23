@@ -97,6 +97,26 @@ import_events = Table(
     Index("ix_import_events_account_month", "account_id", "year_month"),
 )
 
+# Device-level account-creation abuse signal (app/devicesignal.py). One row per
+# account, recording the device (the client's persistent `X-User-Id`) it was
+# created from and whether that device had ALREADY created another account within
+# a trailing window. `flagged` is ADVISORY — surfaced for manual review, never
+# auto-enforced (shared devices / reinstalls make false positives expected).
+# `device_id` is nullable: an account created without a usable header is recorded
+# unflagged and never correlates with others (a null device is not "the same
+# device" as another null). Kept as its own table (not a column on `users`) so it
+# is created cleanly by `create_all` without a Postgres migration.
+account_device_signals = Table(
+    "account_device_signals",
+    metadata,
+    Column("account_id", String, primary_key=True),
+    Column("device_id", String),
+    Column("created_at", Text, nullable=False),
+    Column("flagged", Boolean, nullable=False, default=False),
+    Column("related_account_id", String),  # the prior same-device account, when flagged
+    Index("ix_account_device_signals_device", "device_id", "created_at"),
+)
+
 feedback = Table(
     "feedback",
     metadata,
@@ -304,6 +324,72 @@ def count_imports_in_month(account_id: str, year_month: str) -> int:
     )
     with _get_engine().begin() as conn:
         return int(conn.execute(stmt).scalar_one())
+
+
+# --------------------------------------------------------------------------- #
+# Device-level account-creation signal (app/devicesignal.py)
+# --------------------------------------------------------------------------- #
+
+
+def record_account_device_signal(
+    account_id: str,
+    device_id: Optional[str],
+    created_at: str,
+    flagged: bool,
+    related_account_id: Optional[str],
+) -> None:
+    """Record the device an account was created from. Idempotent per account_id
+    (do-nothing on conflict) so a re-run of the creation path never double-writes
+    or flips an already-recorded flag."""
+    stmt = _insert(account_device_signals).values(
+        account_id=account_id,
+        device_id=device_id,
+        created_at=created_at,
+        flagged=flagged,
+        related_account_id=related_account_id,
+    ).on_conflict_do_nothing(index_elements=["account_id"])
+    with _get_engine().begin() as conn:
+        conn.execute(stmt)
+
+
+def recent_accounts_for_device(
+    device_id: str, since_iso: str, exclude_account_id: Optional[str] = None
+) -> list[str]:
+    """Account ids created from `device_id` at/after `since_iso` (ISO-8601 UTC),
+    newest first. Timestamps are all `+00:00` isoformat, so the string `>=`
+    compares chronologically. Used to decide whether a new account should be
+    flagged as a repeat device."""
+    stmt = select(account_device_signals.c.account_id).where(
+        account_device_signals.c.device_id == device_id,
+        account_device_signals.c.created_at >= since_iso,
+    )
+    if exclude_account_id is not None:
+        stmt = stmt.where(account_device_signals.c.account_id != exclude_account_id)
+    stmt = stmt.order_by(account_device_signals.c.created_at.desc())
+    with _get_engine().begin() as conn:
+        return [r[0] for r in conn.execute(stmt).fetchall()]
+
+
+def get_account_device_signal(account_id: str) -> Optional[dict]:
+    """The device signal recorded for one account (or None), for manual triage."""
+    with _get_engine().begin() as conn:
+        row = conn.execute(
+            select(account_device_signals).where(
+                account_device_signals.c.account_id == account_id
+            )
+        ).mappings().fetchone()
+    return dict(row) if row else None
+
+
+def list_flagged_accounts() -> list[dict]:
+    """Every flagged account-creation signal, newest first (manual-review queue)."""
+    with _get_engine().begin() as conn:
+        rows = conn.execute(
+            select(account_device_signals)
+            .where(account_device_signals.c.flagged.is_(True))
+            .order_by(account_device_signals.c.created_at.desc())
+        ).mappings().all()
+    return [dict(r) for r in rows]
 
 
 # --------------------------------------------------------------------------- #

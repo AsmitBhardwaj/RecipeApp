@@ -155,9 +155,10 @@ struct MealPlanView: View {
                 return try await sync.budgetPlan(
                     budget: budget, householdSize: household,
                     dietaryPreferences: dietary, pantryItems: pantryItems,
-                    // The user's stored region drives the cost multiplier; when
-                    // unset the server falls back to the national average.
-                    region: cookingPreferences.region?.apiValue
+                    // The user's stored country + area type drive the cost
+                    // multiplier; either unset falls back to 1.0 server-side.
+                    country: cookingPreferences.country,
+                    areaType: cookingPreferences.areaType?.apiValue
                 )
             },
             commit: { recipes in commitBudgetRecipes(recipes) },

@@ -12,6 +12,7 @@ import RecipeKit
 struct RootView: View {
     let recipeProvider: RecipeProvider
     @ObservedObject var auth: AuthModel
+    let subscriptions: SubscriptionService
 
     @AppStorage("hasCompletedOnboarding") private var legacyOnboardingCompletion = false
     /// In-app appearance override (App Group–backed). Applied here so it covers
@@ -54,6 +55,7 @@ struct RootView: View {
             SignedInRoot(
                 recipeProvider: recipeProvider,
                 auth: auth,
+                subscriptions: subscriptions,
                 userID: userID,
                 legacyCompletion: legacyOnboardingCompletion
             )
@@ -64,11 +66,19 @@ struct RootView: View {
 private struct SignedInRoot: View {
     let recipeProvider: RecipeProvider
     @ObservedObject var auth: AuthModel
+    let subscriptions: SubscriptionService
     @StateObject private var cookingPreferences: CookingPreferencesModel
 
-    init(recipeProvider: RecipeProvider, auth: AuthModel, userID: String, legacyCompletion: Bool) {
+    init(
+        recipeProvider: RecipeProvider,
+        auth: AuthModel,
+        subscriptions: SubscriptionService,
+        userID: String,
+        legacyCompletion: Bool
+    ) {
         self.recipeProvider = recipeProvider
         self.auth = auth
+        self.subscriptions = subscriptions
         _cookingPreferences = StateObject(wrappedValue: CookingPreferencesModel(
             userScope: userID,
             legacyCompletion: legacyCompletion
@@ -78,7 +88,11 @@ private struct SignedInRoot: View {
     var body: some View {
         Group {
             if cookingPreferences.hasCompletedOnboarding {
-                MainTabView(recipeProvider: recipeProvider, auth: auth)
+                MainTabView(
+                    recipeProvider: recipeProvider,
+                    auth: auth,
+                    subscriptions: subscriptions
+                )
             } else {
                 OnboardingView(auth: auth)
             }
@@ -89,5 +103,9 @@ private struct SignedInRoot: View {
 }
 
 #Preview("Onboarding") {
-    RootView(recipeProvider: MockRecipeProvider(), auth: AuthModel())
+    RootView(
+        recipeProvider: MockRecipeProvider(),
+        auth: AuthModel(),
+        subscriptions: SubscriptionService()
+    )
 }

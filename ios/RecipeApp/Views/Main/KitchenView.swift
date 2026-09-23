@@ -281,7 +281,7 @@ private struct PantryRow: View {
         .contentShape(Rectangle())
         .contextMenu {
             Button(role: .destructive, action: onRemove) {
-                Label("Remove", systemImage: "trash")
+                Label("Delete", systemImage: "trash")
             }
         }
     }

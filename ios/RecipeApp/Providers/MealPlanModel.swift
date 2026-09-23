@@ -16,7 +16,7 @@ import Foundation
 import RecipeKit
 
 @MainActor
-final class MealPlanModel: ObservableObject {
+final class MealPlanModel: ObservableObject, SyncRefreshable {
 
     /// Monday 00:00 of the visible week.
     @Published private(set) var weekStart: Date
@@ -35,6 +35,16 @@ final class MealPlanModel: ObservableObject {
         cal.firstWeekday = 2 // Monday
         self.calendar = cal
         self.weekStart = Self.weekStart(containing: reference, calendar: cal)
+        reload()
+        sync?.registerRefreshable(self)
+    }
+
+    /// Refresh the visible week from disk after a sync pull wrote new meal-plan
+    /// entries (the applier writes straight to `MealPlanStore`, not this model).
+    /// `reload()` is inherently merge-safe: every local mutation already persists
+    /// to the store before reloading, so the store is the single source of truth —
+    /// this drops nothing resolved this session and re-derives the same ordering.
+    func refreshFromStore() {
         reload()
     }
 

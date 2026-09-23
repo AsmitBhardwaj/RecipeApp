@@ -4,6 +4,7 @@ import SwiftUI
 struct OnboardingView: View {
     @ObservedObject var auth: AuthModel
     @EnvironmentObject private var preferences: CookingPreferencesModel
+    @EnvironmentObject private var subscriptions: SubscriptionService
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     @StateObject private var sync: SyncCoordinator
@@ -14,9 +15,11 @@ struct OnboardingView: View {
     @State private var primaryGoal: PrimaryCookingGoal?
     @State private var dietaryPreferences: Set<DietaryPreference> = []
     @State private var householdSize = 2
-    @State private var region: GroceryRegion?
+    @State private var country: String?
+    @State private var areaType: AreaType?
     @State private var pantrySelections: Set<String> = []
     @State private var hasLoadedAnswers = false
+    @State private var showingPaywall = false
 
     private let pageCount = 6
     /// The pantry step is the last screen; its suggestion fetch keys off this index.
@@ -43,7 +46,7 @@ struct OnboardingView: View {
                     householdSize: $householdSize
                 )
             case 4:
-                OnboardingRegionScreen(region: $region)
+                OnboardingRegionScreen(country: $country, areaType: $areaType)
             default:
                 OnboardingPantryScreen(
                     selections: $pantrySelections,
@@ -70,6 +73,10 @@ struct OnboardingView: View {
             if newPage == pantryPage {
                 suggestions.refresh(pantryNames: pantrySelections.sorted(), via: sync)
             }
+        }
+        .sheet(isPresented: $showingPaywall, onDismiss: completeOnboarding) {
+            PlatterProPaywallView()
+                .environmentObject(subscriptions)
         }
     }
 
@@ -128,9 +135,11 @@ struct OnboardingView: View {
         primaryGoal = preferences.primaryGoal
         dietaryPreferences = preferences.dietaryPreferences
         householdSize = preferences.householdSize
-        // Prefill a stored region; on a first run with none, guess from device
-        // locale so the picker starts on a sensible bucket the user can change.
-        region = preferences.region ?? GroceryRegion.guessFromLocale()
+        // Prefill a stored country; on a first run with none, guess from device
+        // locale so the picker starts on a sensible country the user can change.
+        // Area type has no sensible locale guess, so it stays unset until picked.
+        country = preferences.country ?? GroceryCountry.guessFromLocale()
+        areaType = preferences.areaType
         let existing = Set(pantry.items.map { $0.name.lowercased() })
         pantrySelections = Set(OnboardingPantryScreen.staples.filter { existing.contains($0.lowercased()) })
     }
@@ -152,13 +161,26 @@ struct OnboardingView: View {
             primaryGoal: primaryGoal,
             dietaryPreferences: dietaryPreferences,
             householdSize: householdSize,
-            region: region
+            country: country,
+            areaType: areaType
         )
         let existing = Set(pantry.items.map { $0.name.lowercased() })
         for item in pantrySelections where !existing.contains(item.lowercased()) {
             pantry.add(name: item)
         }
         sync.triggerSync()
+
+        // Keep onboarding mounted while the paywall is presented. Marking it
+        // complete first would make SignedInRoot replace this view immediately,
+        // preventing the sheet from appearing.
+        if subscriptions.isProUnlocked {
+            completeOnboarding()
+        } else {
+            showingPaywall = true
+        }
+    }
+
+    private func completeOnboarding() {
         preferences.completeOnboarding()
     }
 }
@@ -166,4 +188,5 @@ struct OnboardingView: View {
 #Preview {
     OnboardingView(auth: AuthModel())
         .environmentObject(CookingPreferencesModel(userScope: "preview"))
+        .environmentObject(SubscriptionService())
 }

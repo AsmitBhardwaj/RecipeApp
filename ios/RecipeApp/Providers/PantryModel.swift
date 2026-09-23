@@ -16,7 +16,7 @@ import Foundation
 import RecipeKit
 
 @MainActor
-final class PantryModel: ObservableObject {
+final class PantryModel: ObservableObject, SyncRefreshable {
 
     /// Every pantry item, newest first (see `sortedItems`).
     @Published private(set) var items: [PantryItem] = []
@@ -29,6 +29,15 @@ final class PantryModel: ObservableObject {
         self.store = PantryStore(userScope: userScope)
         self.sync = sync
         self.items = Self.sorted(store.all())
+        sync?.registerRefreshable(self)
+    }
+
+    /// Re-read the pantry from disk after a sync pull wrote new items (the applier
+    /// writes straight to `PantryStore`, not this model). Merge-safe: every local
+    /// mutation already re-reads `store.all()`, so the store is authoritative —
+    /// this adds pulled items and drops nothing added this session.
+    func refreshFromStore() {
+        items = Self.sorted(store.all())
     }
 
     /// Newest additions first — the freshest thing you added is at the top.

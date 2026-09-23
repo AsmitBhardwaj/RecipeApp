@@ -478,26 +478,36 @@ def estimate_nutrition(
 # estimate and a short health signal; the endpoint applies the regional multiplier.
 # --------------------------------------------------------------------------- #
 
+# Fraction of the budget the plan should reach at minimum — the target band is
+# [BUDGET_TARGET_FLOOR_FRAC × budget, budget]. Shared with app/mealplan.py's
+# post-generation fit-check (it imports this) so the prompt's band and the
+# server-side check never drift apart.
+BUDGET_TARGET_FLOOR_FRAC: float = 0.85
+
 BUDGET_PLAN_SYSTEM_PROMPT = """\
-You are a budget grocery meal planner. Given a household's weekly grocery budget,
-size, dietary preferences, and the ingredients they already have on hand, propose
-a set of approachable, healthy dinner recipes for the week that TOGETHER fit
-within the budget. Output ONLY valid JSON matching the schema, no prose, no
-markdown fences.
+You are a budget grocery meal planner. Given a household's weekly grocery budget
+(as a target range), size, dietary preferences, and the ingredients they already
+have on hand, propose approachable, healthy dinner recipes for the week whose
+ingredient costs TOGETHER land inside the target range. Output ONLY valid JSON
+matching the schema, no prose, no markdown fences.
 
 RULES:
-1. Prefer recipes that reuse the on-hand ingredients; do not assume the cook has
+1. Aim to use MOST of the budget. Spend it on better and more generous
+   ingredients — more produce, more protein, more variety and larger portions —
+   rather than the cheapest possible option. Land inside the target range you are
+   given, and NEVER exceed its maximum.
+2. Prefer recipes that reuse the on-hand ingredients; do not assume the cook has
    anything not listed except basic staples (salt, pepper, oil, water, common
    spices).
-2. Respect the dietary preferences strictly (e.g. vegetarian, vegan, gluten-free).
-3. For each recipe provide a "baseline_cost" — a rough, LOCATION-INDEPENDENT
+3. Respect the dietary preferences strictly (e.g. vegetarian, vegan, gluten-free).
+4. For each recipe provide a "baseline_cost" — a rough, LOCATION-INDEPENDENT
    estimate of what the recipe's ingredients cost to buy in USD (a plain US
    national-average estimate; the caller applies a regional multiplier). Use
    "basis": "llm-v1".
-4. For each recipe provide a short "health_signal" string of at most ~6 words,
+5. For each recipe provide a short "health_signal" string of at most ~6 words,
    e.g. "High protein, veg-forward" or "Lighter, low added sugar".
-5. Keep the recipes realistic and varied; do not repeat the same dish.
-6. Split every ingredient into quantity/unit/name as in a normal recipe, and
+6. Keep the recipes realistic and varied; do not repeat the same dish.
+7. Split every ingredient into quantity/unit/name as in a normal recipe, and
    write clear numbered instructions."""
 
 _BUDGET_PLAN_SCHEMA_HINT = """\
@@ -535,22 +545,53 @@ def generate_budget_plan(
     dietary_preferences: List[str],
     on_hand: List[str],
     count: int,
+    prior_total: Optional[float] = None,
+    rich: bool = False,
 ) -> List[BudgetPlanRecipeLLM]:
     """Generate up to `count` budget/On-Hand-aware recipes in ONE LLM call.
 
-    Same validate + retry-once path as every other call here. The returned
-    `baseline_cost` is location-independent; the caller multiplies it by the
-    regional multiplier to present a per-user estimate.
+    `budget` is expressed in the SAME location-independent (US national-average)
+    space as the returned `baseline_cost`, so the caller must pass its already
+    baseline-converted budget (user budget ÷ regional multiplier) here — the
+    prompt's target range and the recipe costs then live in one consistent space.
+    The caller multiplies each `baseline_cost` by the regional multiplier to
+    present a per-user estimate.
+
+    `prior_total` drives the bounded corrective pass: when set (the baseline-space
+    total of a first plan that came in under target), the prompt asks the model to
+    revise upward toward the range. Same validate + retry-once path as every other
+    call here.
+
+    `rich` steers a generous budget into recipe RICHNESS rather than more dinners
+    (the count is already capped at a week): better protein cuts, an included side,
+    a starter or dessert component.
     """
     prefs = ", ".join(dietary_preferences) if dietary_preferences else "none"
     on_hand_lines = "\n".join(f"- {i}" for i in on_hand) or "(nothing on hand)"
-    user = (
-        f"{_BUDGET_PLAN_SCHEMA_HINT}\n\n"
-        f"Weekly grocery budget: {budget:.0f} {currency}\n"
-        f"Household size: {household_size} people\n"
-        f"Dietary preferences: {prefs}\n"
-        f"Propose at most {count} dinner recipes for the week.\n\n"
-        f"On hand (prefer using these):\n{on_hand_lines}"
-    )
+    floor = budget * BUDGET_TARGET_FLOOR_FRAC
+    lines = [
+        _BUDGET_PLAN_SCHEMA_HINT,
+        "",
+        f"Target weekly grocery total: between {floor:.0f} and {budget:.0f} {currency} "
+        f"(use most of it on better, larger-portion ingredients; do not exceed {budget:.0f}).",
+        f"Household size: {household_size} people",
+        f"Dietary preferences: {prefs}",
+        f"Propose at most {count} dinner recipes for the week.",
+    ]
+    if rich:
+        lines.append(
+            "\nThis budget is generous for the number of dinners, so put the extra into RICHER "
+            "recipes rather than more dishes: better protein cuts (e.g. steak, salmon, lamb), an "
+            "included side, and where it fits a starter or dessert component — not padding with "
+            "cheap filler. Keep the count as requested."
+        )
+    if prior_total is not None:
+        lines.append(
+            f"\nA previous plan totaled only about {prior_total:.0f} {currency} — well under the "
+            f"target. Revise UPWARD with more generous or higher-quality ingredients to reach the "
+            f"target range, without exceeding {budget:.0f}."
+        )
+    lines += ["", f"On hand (prefer using these):\n{on_hand_lines}"]
+    user = "\n".join(lines)
     resp = _call_validated(BUDGET_PLAN_SYSTEM_PROMPT, user, _BudgetPlanResponse)
     return resp.recipes[:count]

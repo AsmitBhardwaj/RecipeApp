@@ -30,6 +30,7 @@ final class BudgetPlanModel: ObservableObject {
     @Published private(set) var response: BudgetPlanResponse?
     @Published var selection = BudgetPlanSelection(recipes: [])
     @Published var showPaywall = false
+    @Published private(set) var budgetInputMessage: String?
 
     private let dietaryPreferences: [DietaryPreference]
     private let pantryNames: () -> [String]
@@ -58,17 +59,50 @@ final class BudgetPlanModel: ObservableObject {
 
     // Budget stepper (block 1 + 2).
     var minBudget: Int { BudgetMath.minBudget(householdSize: householdSize) }
+    var maxBudget: Int { BudgetMath.maxBudget(householdSize: householdSize) }
     var minimumCaption: String { BudgetMath.minimumCaption(householdSize: householdSize) }
     var canDecrementBudget: Bool { budget > minBudget }
+    var canIncrementBudget: Bool { budget < maxBudget }
 
-    func incrementBudget() { budget += budgetStep }
-    func decrementBudget() { if canDecrementBudget { budget = max(minBudget, budget - budgetStep) } }
+    func incrementBudget() {
+        guard canIncrementBudget else { return }
+        budget = min(maxBudget, budget + budgetStep)
+        budgetInputMessage = nil
+    }
+
+    func decrementBudget() {
+        guard canDecrementBudget else { return }
+        budget = max(minBudget, budget - budgetStep)
+        budgetInputMessage = nil
+    }
+
+    /// Applies direct text entry to the same value the stepper mutates. Invalid,
+    /// empty, or out-of-range text leaves the last valid budget untouched.
+    @discardableResult
+    func setBudget(from input: String) -> Bool {
+        switch BudgetMath.validateInput(input, householdSize: householdSize) {
+        case .valid(let amount):
+            budget = amount
+            budgetInputMessage = nil
+            return true
+        case .belowMinimum(let minimum):
+            budgetInputMessage = BudgetPlanError.belowMinimum(minBudget: minimum).userMessage
+        case .aboveMaximum(let maximum):
+            budgetInputMessage = BudgetPlanError.aboveMaximum(maxBudget: maximum).userMessage
+        case .notNumeric:
+            budgetInputMessage = "Enter a numeric budget amount."
+        case .empty:
+            budgetInputMessage = nil
+        }
+        return false
+    }
 
     /// Changing household size recomputes the minimum immediately and raises the
     /// budget to it if below — but never lowers a budget the user chose.
     func setHousehold(_ n: Int) {
         householdSize = max(1, min(n, 12))
         budget = BudgetMath.reconciled(currentBudget: budget, householdSize: householdSize)
+        budgetInputMessage = nil
     }
 
     func generatePlan() async {
@@ -279,6 +313,13 @@ private struct ProSuggestionsLockedCardBudget: View {
 
 private struct BudgetSetupView: View {
     @ObservedObject var model: BudgetPlanModel
+    @State private var budgetText: String
+    @FocusState private var isBudgetFocused: Bool
+
+    init(model: BudgetPlanModel) {
+        self.model = model
+        _budgetText = State(initialValue: String(model.budget))
+    }
 
     var body: some View {
         ScrollView {
@@ -299,7 +340,9 @@ private struct BudgetSetupView: View {
                 kitchenToggle
 
                 Button {
-                    Task { await model.generatePlan() }
+                    if commitBudgetText() {
+                        Task { await model.generatePlan() }
+                    }
                 } label: {
                     Text("Generate Plan")
                         .font(.system(size: 17, weight: .semibold))
@@ -324,20 +367,49 @@ private struct BudgetSetupView: View {
             HStack(spacing: 16) {
                 stepperButton("minus", enabled: model.canDecrementBudget) { model.decrementBudget() }
                     .accessibilityLabel("Decrease budget")
-                Text("$\(model.budget)")
-                    .font(.system(size: 28, weight: .bold))
-                    .monospacedDigit()
-                    .frame(minWidth: 90)
-                    .accessibilityLabel("Budget $\(model.budget)")
-                stepperButton("plus", enabled: true) { model.incrementBudget() }
+                HStack(spacing: 1) {
+                    Text("$")
+                        .accessibilityHidden(true)
+                    TextField("Budget", text: $budgetText)
+                        .keyboardType(.decimalPad)
+                        .focused($isBudgetFocused)
+                        .multilineTextAlignment(.leading)
+                        .frame(width: 70)
+                        .onSubmit { commitBudgetText() }
+                        .accessibilityLabel("Weekly budget")
+                        .accessibilityValue("$\(model.budget)")
+                }
+                .font(.system(size: 28, weight: .bold))
+                .monospacedDigit()
+                .frame(minWidth: 90)
+                stepperButton("plus", enabled: model.canIncrementBudget) { model.incrementBudget() }
                     .accessibilityLabel("Increase budget")
                 Spacer()
             }
-            Text(model.minimumCaption)
+            Text(model.budgetInputMessage ?? model.minimumCaption)
                 .font(.system(size: 13))
-                .foregroundStyle(Color.textSecondary)
-                .accessibilityLabel(model.minimumCaption)
+                .foregroundStyle(model.budgetInputMessage == nil ? Color.textSecondary : Color.orange)
+                .accessibilityLabel(model.budgetInputMessage ?? model.minimumCaption)
         }
+        .onChange(of: model.budget) { _, newValue in
+            budgetText = String(newValue)
+        }
+        .onChange(of: isBudgetFocused) { _, focused in
+            if !focused { commitBudgetText() }
+        }
+        .toolbar {
+            ToolbarItemGroup(placement: .keyboard) {
+                Spacer()
+                Button("Done") { isBudgetFocused = false }
+            }
+        }
+    }
+
+    @discardableResult
+    private func commitBudgetText() -> Bool {
+        let accepted = model.setBudget(from: budgetText)
+        budgetText = String(model.budget)
+        return accepted
     }
 
     private var householdField: some View {

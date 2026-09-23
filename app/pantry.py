@@ -23,10 +23,10 @@ import re
 import uuid
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
-from . import db
+from . import burstlimit, db
 from .auth.router import current_user
 from .auth.service import User
 from .ingredient_matching import ingredients_match, normalize_ingredient_name
@@ -315,6 +315,21 @@ router = APIRouter(prefix="/v1", tags=["pantry"])
 def pantry_suggestions(
     req: SuggestionsRequest, user: User = Depends(current_user)
 ) -> SuggestionsResponse:
+    # Per-account daily cap on this LLM-backed endpoint (the generation fallback
+    # fans out to the model). Independent of the import/budget caps; 429 with the
+    # distinct rate_limit_exceeded code.
+    try:
+        burstlimit.check_pantry(user.id)
+    except burstlimit.BurstLimitExceeded as exc:
+        raise HTTPException(
+            status_code=429,
+            detail={
+                "error_code": exc.code,
+                "message": "You've reached today's suggestion limit. Please try again tomorrow.",
+                "limit": exc.limit,
+                "window": exc.window_label,
+            },
+        )
     return build_suggestions(
         user.id,
         limit=req.limit,

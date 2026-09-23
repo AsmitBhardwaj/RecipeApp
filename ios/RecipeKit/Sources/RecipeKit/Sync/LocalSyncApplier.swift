@@ -27,6 +27,13 @@ public final class LocalSyncApplier {
     /// yet. Drained by the caller after a pull to hydrate via /v1/recipes/batch.
     public private(set) var pendingRecipeHydration: Set<String> = []
 
+    /// Monotonic counter bumped every time a pull change is actually applied to
+    /// disk (stale-LWW no-ops don't count) or a recipe body is hydrated. The
+    /// coordinator snapshots this around `sync()` to tell whether remote data
+    /// landed, so it only nudges the in-memory models when disk truly changed —
+    /// not on a plain local-edit push (which pulls back nothing new).
+    public private(set) var appliedRevision: Int = 0
+
     public init(userId: String, suiteName: String = AppGroup.identifier) {
         self.recipeStore = RecipeStore(suiteName: suiteName, userScope: userId)
         self.mealStore = MealPlanStore(suiteName: suiteName, userScope: userId)
@@ -63,6 +70,7 @@ public final class LocalSyncApplier {
         case .pantryItems: applyPantryItems(change)
         }
         metadata.setUpdatedAt(change.collection, change.itemId, change.updatedAt)
+        appliedRevision &+= 1
     }
 
     // MARK: - Per-collection
@@ -133,5 +141,6 @@ public final class LocalSyncApplier {
             recipeStore.upsert(recipe)
             pendingRecipeHydration.remove(recipe.recipeId)
         }
+        if !recipes.isEmpty { appliedRevision &+= 1 }
     }
 }
