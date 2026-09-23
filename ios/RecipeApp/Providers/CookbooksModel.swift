@@ -114,6 +114,20 @@ final class CookbooksModel: ObservableObject, SyncRefreshable {
         }
     }
 
+    /// Strip a recipe from every cookbook it belongs to — call alongside
+    /// `PendingJobsModel.deleteRecipe` when a recipe is deleted from the library,
+    /// so cookbook counts don't count a recipe that no longer exists. Records a
+    /// membership tombstone per (cookbook, recipe) pair, mirroring `delete(_:)`.
+    func removeRecipeFromAllCookbooks(_ recipeId: String) {
+        let cookbookIds = membership.cookbookIds(forRecipe: recipeId)
+        guard !cookbookIds.isEmpty else { return }
+        membership.removeRecipe(recipeId)
+        revision += 1
+        for cookbookId in cookbookIds {
+            recordMembership(cookbookId: cookbookId, recipeId: recipeId, deleted: true)
+        }
+    }
+
     private func recordMembership(cookbookId: String, recipeId: String, deleted: Bool) {
         let link = MembershipPayload(cookbookId: cookbookId, recipeId: recipeId)
         sync?.record(.cookbookMembership,

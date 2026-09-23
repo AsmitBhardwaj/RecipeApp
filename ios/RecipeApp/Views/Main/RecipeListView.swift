@@ -84,6 +84,11 @@ struct RecipeListView: View {
                         // Recipes list uses plain solid cards (no dashed border);
                         // the torn-edge border stays the default elsewhere.
                         .cardRow(bordered: false)
+                        .swipeActions(edge: .trailing) {
+                            Button(role: .destructive) { delete(recipe) } label: {
+                                Label("Delete", systemImage: "trash")
+                            }
+                        }
                     }
                 }
                 .listStyle(.plain)
@@ -107,6 +112,14 @@ struct RecipeListView: View {
             PlatterProPaywallView()
                 .environmentObject(subscriptions)
         }
+    }
+
+    /// Delete a recipe from the library: remove the shared body + record the
+    /// `.library` tombstone (PendingJobsModel), then strip its cookbook
+    /// memberships so counts stay correct — both propagate via sync.
+    private func delete(_ recipe: Recipe) {
+        jobs.deleteRecipe(recipe)
+        cookbooks.removeRecipeFromAllCookbooks(recipe.recipeId)
     }
 
     /// Show the paywall once the paste sheet that hit the import limit dismisses.

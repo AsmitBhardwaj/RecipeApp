@@ -296,9 +296,24 @@ struct CookbooksGridView: View {
                         )
                     }
                     .buttonStyle(.plain)
+                    // LazyVGrid → context-menu delete (see the recipes grid note).
+                    // Deletes the cookbook only; its recipes stay in the library.
+                    .contextMenu {
+                        Button(role: .destructive) { cookbooks.delete(cookbook) } label: {
+                            Label("Delete", systemImage: "trash")
+                        }
+                    }
                 }
             }
         }
+    }
+
+    /// Delete a recipe from the library (shared body + `.library` tombstone) and
+    /// strip its cookbook memberships so counts stay correct — same pairing as
+    /// RecipeListView's swipe delete; both halves propagate via sync.
+    private func deleteRecipe(_ recipe: Recipe) {
+        jobs.deleteRecipe(recipe)
+        cookbooks.removeRecipeFromAllCookbooks(recipe.recipeId)
     }
 
     private func recipes(in cookbook: Cookbook) -> [Recipe] {
@@ -353,6 +368,14 @@ struct CookbooksGridView: View {
                         RecipePhotoCard(recipe: recipe)
                     }
                     .buttonStyle(.plain)
+                    // This section is a LazyVGrid, so native .swipeActions (List-only)
+                    // don't apply — a long-press context menu is the grid-native
+                    // delete affordance, matching Pantry/Meal Plan's context menus.
+                    .contextMenu {
+                        Button(role: .destructive) { deleteRecipe(recipe) } label: {
+                            Label("Delete", systemImage: "trash")
+                        }
+                    }
                 }
             }
         }

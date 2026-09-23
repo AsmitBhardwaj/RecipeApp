@@ -196,6 +196,21 @@ final class PendingJobsModel: ObservableObject, SyncRefreshable {
         failed.removeAll { $0.jobId == jobId }
     }
 
+    /// Delete a finished recipe from the user's library. Mirrors the inverse of
+    /// `handleComplete`: drop it from the in-memory list, remove the on-device
+    /// body cache, and record a `.library` tombstone so the deletion propagates
+    /// to the user's other devices (the same `deleted: true` shape
+    /// `LocalSyncApplier.applyLibrary` consumes to `recipeStore.remove` on a pull).
+    ///
+    /// Cookbook membership is per-recipe and lives in a separate store/collection,
+    /// so it's cleared by the caller via `CookbooksModel.removeRecipeFromAllCookbooks`
+    /// — kept out of here to avoid coupling this model to CookbooksModel.
+    func deleteRecipe(_ recipe: Recipe) {
+        recipes.removeAll { $0.recipeId == recipe.recipeId }
+        recipeStore.remove(recipeId: recipe.recipeId)
+        sync?.record(.library, itemId: recipe.recipeId, payload: nil, deleted: true)
+    }
+
     /// Dismiss the one-time failure alert. The failed card stays in the list for
     /// detailed review.
     func clearFailureAlert() {
