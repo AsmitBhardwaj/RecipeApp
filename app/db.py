@@ -410,6 +410,31 @@ def sum_llm_cost_by_account(
     return [dict(r) for r in rows]
 
 
+def accounts_over_spend(since_iso: str, threshold_usd: float) -> list[dict]:
+    """Accounts whose estimated LLM spend since `since_iso` exceeds
+    `threshold_usd` (the soft spend circuit breaker — app/spendsignal.py). Highest
+    spend first. Excludes the NULL (unauthenticated) bucket: only real accounts
+    can be flagged for review. Uses HAVING so the DB does the filtering."""
+    from sqlalchemy import func
+
+    cost = func.coalesce(func.sum(llm_cost_events.c.estimated_cost_usd), 0.0)
+    stmt = (
+        select(
+            llm_cost_events.c.account_id,
+            cost.label("estimated_cost_usd"),
+            func.count().label("calls"),
+        )
+        .where(llm_cost_events.c.created_at >= since_iso)
+        .where(llm_cost_events.c.account_id.isnot(None))
+        .group_by(llm_cost_events.c.account_id)
+        .having(cost > threshold_usd)
+        .order_by(cost.desc())
+    )
+    with _get_engine().begin() as conn:
+        rows = conn.execute(stmt).mappings().all()
+    return [dict(r) for r in rows]
+
+
 # --------------------------------------------------------------------------- #
 # Device-level account-creation signal (app/devicesignal.py)
 # --------------------------------------------------------------------------- #

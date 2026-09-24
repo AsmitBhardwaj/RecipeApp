@@ -15,7 +15,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from pydantic import BaseModel, field_validator, model_validator
 
-from . import burstlimit, config, db, importlimit, ratelimit
+from . import burstlimit, config, db, importlimit, ratelimit, spendsignal
 from .auth.router import current_user, optional_current_user, router as auth_router
 from .auth.service import User
 from .models import Job, Recipe
@@ -398,11 +398,24 @@ def _require_admin(credentials: HTTPBasicCredentials = Depends(_basic)) -> None:
 
 @app.get("/admin/flagged-accounts")
 def admin_flagged_accounts(_: None = Depends(_require_admin)) -> dict:
-    """Manual-review queue: accounts flagged by the device-level signal
-    (app/devicesignal.py). Advisory only — nothing here is auto-restricted; this
-    is the surface for deciding by hand what to do with a flagged account."""
-    rows = db.list_flagged_accounts()
-    return {"count": len(rows), "flagged": rows}
+    """Manual-review queue for BOTH advisory signals — nothing here is
+    auto-restricted; this is the surface for deciding by hand what to do:
+      * device — accounts created on a device that already made another account
+        (app/devicesignal.py).
+      * spend  — accounts whose trailing-window estimated LLM spend is over the
+        soft circuit-breaker threshold (app/spendsignal.py)."""
+    device_rows = db.list_flagged_accounts()
+    spend_rows = spendsignal.flagged_accounts()
+    return {
+        # Existing device-signal shape, kept unchanged for backward compatibility.
+        "count": len(device_rows),
+        "flagged": device_rows,
+        # Soft spend circuit breaker (advisory, not auto-blocked).
+        "spend_count": len(spend_rows),
+        "spend_flagged": spend_rows,
+        "spend_threshold_usd": config.SPEND_FLAG_THRESHOLD_USD,
+        "spend_window_days": config.SPEND_FLAG_WINDOW_DAYS,
+    }
 
 
 @app.get("/admin/llm-costs")
