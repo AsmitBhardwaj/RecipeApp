@@ -22,7 +22,7 @@ Top-level (`/Users/asmitbhardwaj/Documents/Recipe/RecipeApp`):
 | `ios/ShareExtension/` | Share Extension target | tracked |
 | `ios/RecipeApp.xcodeproj/` | Xcode project | tracked |
 | `docs/` | `SMOKE_TEST.md`, `budget-meal-planning.md` | **UNTRACKED** (whole dir is `??`) |
-| `platter-landing/` | `platter-landing.html` (marketing page) | **UNTRACKED** |
+| _(landing page)_ | The marketing site + privacy policy live in a **separate sibling repo** (`~/Documents/Recipe/platter-landing`, its own git repo, auto-deploys to Vercel at platterapp.tech) — **not part of this repo** | n/a |
 | `onboarding/` | Source PNGs for onboarding art | **UNTRACKED** |
 | `scripts/` | `migrate_sqlite_to_postgres.py` (tracked), `delete_smoke_accounts.sql` (untracked) | mixed |
 | `probe/` | `probe.py`, `results.json`, `urls.txt` — extraction validation harness | tracked |
@@ -32,7 +32,7 @@ Top-level (`/Users/asmitbhardwaj/Documents/Recipe/RecipeApp`):
 | `README.md`, `railway.json`, `requirements.txt`, `.env.example` | infra/docs | tracked |
 | `.env`, `recipes.db`, `ios/Secrets.xcconfig` | local secrets/state | **gitignored (safe)** |
 
-`platter-landing` is present but is a **single static HTML file**, not a separate app/project.
+The Platter landing page and privacy policy are **not in this repo** — they live in a separate sibling git repo at `~/Documents/Recipe/platter-landing` (auto-deploys to Vercel at platterapp.tech). Searching for them inside RecipeApp will not find them, and never should; they are maintained and deployed independently.
 
 **iOS layering:** app-level UI/view-models live in `ios/RecipeApp/`; all reusable, unit-tested logic (models, `APIRecipeProvider`, auth API, sync engine, stores, cook-timer scheduling) lives in `ios/RecipeKit/Sources/RecipeKit/` with tests in `ios/RecipeKit/Tests/RecipeKitTests/` (24 test files).
 
@@ -189,7 +189,7 @@ It does **not** run the Python backend suite (that's local-only right now). **Wh
 - **Branch:** `main`. **Ahead/behind origin/main: 0 / 0** (level with remote).
 - **Staged (`A`/`M` in index):** the new AppIcon (`platter_app_icon_1024.png` + `AppIcon.appiconset/Contents.json`) and six onboarding imagesets (`onboarding-cookbook/grocery/paste-link/planweek/share/welcome`, each `Contents.json` + PNG).
 - **Unstaged (`M` worktree):** `ios/RecipeApp/Views/Onboarding/OnboardingIllustrations.swift`, `OnboardingView.swift`.
-- **Untracked (`??`):** `docs/`, `onboarding/`, `platter-landing/`, `ios/RecipeApp/Assets.xcassets/MILP_Solver_Evaluation.pptx` (a stray PowerPoint mis-filed inside the asset catalog — almost certainly should not be there), `scripts/delete_smoke_accounts.sql`.
+- **Untracked (`??`):** `docs/`, `onboarding/`, `ios/RecipeApp/Assets.xcassets/MILP_Solver_Evaluation.pptx` (a stray PowerPoint mis-filed inside the asset catalog — almost certainly should not be there), `scripts/delete_smoke_accounts.sql`. (The landing page is a separate sibling repo, not part of this working tree — see above.)
 - **Working tree is mid-change** (onboarding art swap in progress; docs not yet committed). Nothing is lost, but a commit is pending.
 
 Last 15 commits:
@@ -232,7 +232,7 @@ e9de685 Grocery List: drop the dashed torn-edge border on cards
 
 1. **Confirm CI is green on `main`.** Could not be checked here (no Xcode/network). Everything downstream assumes a buildable app + passing `swift test`. Verify first. *(blocking — unknown state)*
 2. **Apple Sign-In token revocation on account deletion is missing.** Likely an App Store review blocker for 5.1.1 despite memory marking Stage 5 done. Verify/implement in `DELETE /auth/me`. *(blocking for store submission)*
-3. **Commit the working tree** — `docs/`, onboarding art (staged + unstaged Swift), `scripts/delete_smoke_accounts.sql`, `platter-landing/` are all uncommitted; SMOKE_TEST results live only in an untracked file. The repo's documented QA state isn't in git. Also remove the stray `MILP_Solver_Evaluation.pptx` from the asset catalog. *(blocking clean handoff)*
+3. **Commit the working tree** — `docs/`, onboarding art (staged + unstaged Swift), `scripts/delete_smoke_accounts.sql` are all uncommitted; SMOKE_TEST results live only in an untracked file. The repo's documented QA state isn't in git. Also remove the stray `MILP_Solver_Evaluation.pptx` from the asset catalog. *(blocking clean handoff)* (The landing page is a separate sibling repo and is out of scope for this repo's commits.)
 4. **Reconcile CLAUDE.md with reality** — §2 (two-tab MVP) and §4 (source_type/image_source/platform/extraction_method enums) are stale; the app now ships Meal Plan, Grocery, Cookbooks, Cook Mode, Sync, Auth. Anyone trusting §2/§4 as current will be misled. *(blocking correct follow-up scoping)*
 5. **Push-notification backend** (§6 layers 1–2) is entirely absent; app relies solely on foreground reconcile. Decide whether that's acceptable for launch. *(not blocking core loop; degrades freshness)*
 6. **Lower-priority cleanups:** create/ repoint `TODO.md` (dangling from `fetch.py`); fix stale "Grocery coming soon" comment in `MainTabView.swift:7`; consider adding `caption_not_found`-adjacent codes (`could_not_identify_dish`) to paste-eligible; move yt-dlp to its own service and the pipeline to a real queue when scale warrants. *(non-blocking)*

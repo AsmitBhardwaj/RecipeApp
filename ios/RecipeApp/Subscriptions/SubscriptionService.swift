@@ -208,6 +208,24 @@ final class SubscriptionService: ObservableObject {
         managementError = nil
     }
 
+    /// Clears this device's locally-cached Pro signals, then re-derives entitlement
+    /// from verified StoreKit state. Called on sign-out and account deletion so a
+    /// prior account's cached Pro status can't leak into the next account on this
+    /// device.
+    ///
+    /// This deliberately does NOT (and cannot) cancel the underlying subscription —
+    /// that belongs to the Apple Account, not the app account, and Apple exposes no
+    /// such API. `refreshEntitlement()` re-reads the verified, Apple-ID-scoped
+    /// truth: if that Apple ID still owns an active subscription, live Pro is
+    /// correctly restored; otherwise everything settles to "not Pro".
+    func resetForAccountChange() async {
+        entitlementState = .unknown
+        purchaseState = .idle
+        defaults.removeObject(forKey: Self.cachedStatusKey)
+        ProEntitlementCache.clear()
+        await refreshEntitlement()
+    }
+
     /// Reusable gate for future Pro-only features. This never consults cached UI
     /// state, a button tap, or an account field.
     var hasProAccess: Bool {

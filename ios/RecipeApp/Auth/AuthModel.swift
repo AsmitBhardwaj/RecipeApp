@@ -20,6 +20,13 @@ final class AuthModel: ObservableObject {
     /// True while a sign-in/register call is in flight (drives button spinners).
     @Published var isWorking = false
 
+    /// Invoked whenever the local session is torn down — sign-out, account
+    /// deletion, or a failed token refresh (all route through `clearLocalSession`).
+    /// The app wires this to `SubscriptionService.resetForAccountChange()` so
+    /// entitlement caches never outlive the account that produced them. Nil (no-op)
+    /// by default, e.g. in tests.
+    var onSessionCleared: (() async -> Void)?
+
     private let api: AuthAPI
     private let store: AuthSessionStore
 
@@ -70,6 +77,13 @@ final class AuthModel: ObservableObject {
     private func clearLocalSession() {
         session = nil
         store.clear()
+        // Device-global onboarding fallback (see CookingPreferencesModel): a new
+        // account on this device must see onboarding rather than inheriting the
+        // prior account's completion via `legacyCompletion`.
+        UserDefaults.standard.removeObject(forKey: "hasCompletedOnboarding")
+        if let onSessionCleared {
+            Task { await onSessionCleared() }
+        }
     }
 
     // MARK: - Account deletion (Stage 5)

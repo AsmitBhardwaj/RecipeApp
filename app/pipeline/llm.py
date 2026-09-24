@@ -15,7 +15,7 @@ from typing import List, Optional, Type, TypeVar
 from openai import OpenAI, OpenAIError
 from pydantic import BaseModel, Field, ValidationError
 
-from .. import config
+from .. import config, llm_cost
 from ..models import (
     CostEstimate,
     DishIdentification,
@@ -237,6 +237,12 @@ def _raw_call(system: str, user: str, schema_model: Type[T]) -> str:
         )
     except OpenAIError as exc:
         raise LLMError("llm_api_error", str(exc)) from exc
+
+    # Record token usage + estimated cost against the active cost-tracking context
+    # (a no-op when none is set). This is the single chokepoint every LLM call —
+    # including the corrective retry below — funnels through, so it's the one place
+    # accounting belongs. It never raises (see llm_cost.record_usage).
+    llm_cost.record_usage(config.OPENAI_MODEL, getattr(completion, "usage", None))
 
     message = completion.choices[0].message
     if message.refusal:

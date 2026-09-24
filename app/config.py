@@ -146,6 +146,28 @@ BURST_PANTRY_PER_DAY: int = int(os.getenv("BURST_PANTRY_PER_DAY", "20"))
 DEVICE_MULTI_ACCOUNT_WINDOW_DAYS: int = int(os.getenv("DEVICE_MULTI_ACCOUNT_WINDOW_DAYS", "30"))
 
 # --------------------------------------------------------------------------- #
+# Soft spend circuit breaker (app/spendsignal.py).
+#
+# An advisory backstop ON TOP of the per-call rate/burst caps: if an account's
+# trailing-SPEND_FLAG_WINDOW_DAYS estimated LLM spend (summed from
+# llm_cost_events) exceeds SPEND_FLAG_THRESHOLD_USD, the account is FLAGGED for
+# manual review in the admin panel — never auto-blocked, exactly like the
+# device-multi-account signal (app/devicesignal.py). Visibility only, so a real
+# power user is never silently cut off.
+#
+# THRESHOLD_USD is a PLACEHOLDER, tune against the real per-account cost
+# distribution post-launch. Rationale for the default: net revenue is ~$24.65/yr
+# per Pro user, so a single 30-day window costing ~4× that whole year's revenue
+# ($100) is well past any plausible real usage. Sanity note: the existing burst
+# caps (imports 100/day, budget 10/day, pantry 20/day) already bound one account
+# to roughly $40/month of estimated spend (≈$80 at the doubled "fast" price
+# tier), so this breaker sits ABOVE that ceiling — it fires only when something
+# is genuinely off (a cap removed/misconfigured, costs far higher than modeled,
+# or scripted abuse), not on a heavy-but-legitimate user.
+SPEND_FLAG_WINDOW_DAYS: int = int(os.getenv("SPEND_FLAG_WINDOW_DAYS", "30"))
+SPEND_FLAG_THRESHOLD_USD: float = float(os.getenv("SPEND_FLAG_THRESHOLD_USD", "100"))  # PLACEHOLDER
+
+# --------------------------------------------------------------------------- #
 # Plan on a Budget (docs/budget-meal-planning.md).
 #
 # The minimum weekly budget scales with household size: a household of N cannot
