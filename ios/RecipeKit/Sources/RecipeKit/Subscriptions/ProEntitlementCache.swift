@@ -42,4 +42,13 @@ public enum ProEntitlementCache {
     public static func set(_ entitled: Bool) {
         defaults?.set(entitled, forKey: key)
     }
+
+    /// Removes the cached claim entirely (`isEntitled` reverts to `false`). Called
+    /// on sign-out / account deletion so a prior account's Pro claim can't leak to
+    /// the next account on this device. The app re-derives verified StoreKit state
+    /// (Apple-ID-scoped) immediately afterwards, which restores the claim if that
+    /// Apple ID still owns an active subscription.
+    public static func clear() {
+        defaults?.removeObject(forKey: key)
+    }
 }

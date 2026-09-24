@@ -22,7 +22,7 @@ struct RecipeApp: App {
 
     /// The app-wide auth session. Owns the signed-in state, persists tokens in
     /// the shared Keychain, and (Stage 2b) vends access tokens to the sync engine.
-    @StateObject private var auth = AuthModel()
+    @StateObject private var auth: AuthModel
     /// The single StoreKit 2 source of truth for products and Pro entitlement.
     @StateObject private var subscriptions: SubscriptionService
 
@@ -36,6 +36,11 @@ struct RecipeApp: App {
     init() {
         let subscriptions = SubscriptionService()
         _subscriptions = StateObject(wrappedValue: subscriptions)
+        let auth = AuthModel()
+        // Wipe entitlement caches whenever the session is torn down, so a prior
+        // account's Pro status can't leak into the next account on this device.
+        auth.onSessionCleared = { await subscriptions.resetForAccountChange() }
+        _auth = StateObject(wrappedValue: auth)
         recipeProvider = APIRecipeProvider(
             proEntitled: { subscriptions.isProUnlocked }
         )
