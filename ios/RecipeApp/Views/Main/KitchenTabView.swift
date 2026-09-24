@@ -41,7 +41,7 @@ struct KitchenTabView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            ScreenHeader("Kitchen") {
+            ScreenHeader("Kitchen.") {
                 if segment == .grocery {
                     CircleHeaderButton(systemImage: "square.and.arrow.up",
                                        disabled: !groceryCanShare,

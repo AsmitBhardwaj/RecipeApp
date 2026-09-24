@@ -16,7 +16,7 @@ from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from pydantic import BaseModel, field_validator, model_validator
 
 from . import burstlimit, config, db, importlimit, ratelimit
-from .auth.router import optional_current_user, router as auth_router
+from .auth.router import current_user, optional_current_user, router as auth_router
 from .auth.service import User
 from .models import Job, Recipe
 from .mealplan import router as mealplan_router
@@ -158,6 +158,14 @@ class JobResponse(BaseModel):
     recipe: Optional[Recipe] = None
 
 
+class ImportUsageResponse(BaseModel):
+    limit: int
+    used: int
+    remaining: int
+    resets_at: str
+    is_limited: bool
+
+
 def _with_recipe(job: Job) -> JobResponse:
     recipe = db.get_recipe(job.recipe_id) if job.recipe_id else None
     return JobResponse(job=job, recipe=recipe)
@@ -166,6 +174,26 @@ def _with_recipe(job: Job) -> JobResponse:
 # --------------------------------------------------------------------------- #
 # Endpoints
 # --------------------------------------------------------------------------- #
+
+
+@app.get("/v1/import-usage", response_model=ImportUsageResponse)
+def get_import_usage(account: User = Depends(current_user)) -> ImportUsageResponse:
+    """Return the server-authoritative monthly allowance for the signed-in user."""
+    now = datetime.now(timezone.utc)
+    used = db.count_imports_in_month(account.id, importlimit.month_key(now))
+    limit = config.FREE_IMPORT_LIMIT
+    reset = (
+        datetime(now.year + 1, 1, 1, tzinfo=timezone.utc)
+        if now.month == 12
+        else datetime(now.year, now.month + 1, 1, tzinfo=timezone.utc)
+    )
+    return ImportUsageResponse(
+        limit=limit,
+        used=used,
+        remaining=max(0, limit - used),
+        resets_at=reset.isoformat(),
+        is_limited=not importlimit.is_grandfathered(account.created_at),
+    )
 
 
 @app.get("/")

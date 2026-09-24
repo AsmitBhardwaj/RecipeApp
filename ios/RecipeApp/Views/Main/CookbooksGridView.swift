@@ -12,6 +12,7 @@ import RecipeKit
 struct CookbooksGridView: View {
     @ObservedObject var jobs: PendingJobsModel
     @ObservedObject var cookbooks: CookbooksModel
+    @ObservedObject var auth: AuthModel
     var userScope: String? = nil
 
     @EnvironmentObject private var subscriptions: SubscriptionService
@@ -31,6 +32,8 @@ struct CookbooksGridView: View {
     /// the sheet's `onDismiss` so we never present two sheets at once.
     @State private var showPaywall = false
     @State private var pendingPaywall = false
+    @State private var importUsage: ImportUsage?
+    @State private var showingImportUsage = false
 
     private let columns = [
         GridItem(.flexible(), spacing: Theme.Spacing.md),
@@ -70,6 +73,16 @@ struct CookbooksGridView: View {
             PlatterProPaywallView()
                 .environmentObject(subscriptions)
         }
+        .sheet(isPresented: $showingImportUsage) {
+            if let importUsage {
+                ImportUsageSheet(usage: importUsage) {
+                    showingImportUsage = false
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                        showPaywall = true
+                    }
+                }
+            }
+        }
         .sheet(isPresented: $showingAccount) {
             NavigationStack {
                 AccountView()
@@ -88,7 +101,17 @@ struct CookbooksGridView: View {
         .navigationDestination(for: Recipe.self) { recipe in
             RecipeDetailView(recipe: recipe, cookbooks: cookbooks, userScope: userScope)
         }
-        .task { await jobs.load() }
+        .task {
+            await jobs.load()
+            await refreshImportUsage()
+        }
+        .onChange(of: jobs.recipes.count) { _, _ in
+            Task { await refreshImportUsage() }
+        }
+        .onChange(of: subscriptions.isProUnlocked) { _, isPro in
+            if isPro { importUsage = nil }
+            else { Task { await refreshImportUsage() } }
+        }
         .onChange(of: section) { _, _ in
             searchText = ""
         }
@@ -96,12 +119,47 @@ struct CookbooksGridView: View {
 
     private var header: some View {
         ScreenHeader("Recipes.") {
+            if let usage = visibleImportUsage {
+                Button { showingImportUsage = true } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "bolt.fill")
+                            .foregroundStyle(Color.accentColor)
+                        Text("\(usage.remaining) left")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(Color.textPrimary)
+                    }
+                    .padding(.horizontal, 13)
+                    .frame(height: 44)
+                    .background(Color.surface)
+                    .clipShape(Capsule())
+                    .overlay(Capsule().strokeBorder(Color.hairline, lineWidth: 1))
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("\(usage.remaining) recipe imports remaining this month")
+            }
             CircleHeaderButton(
                 systemImage: "person.crop.circle",
                 accessibilityLabel: "Account"
             ) {
                 showingAccount = true
             }
+        }
+    }
+
+    private var visibleImportUsage: ImportUsage? {
+        guard !subscriptions.isProUnlocked, let importUsage, importUsage.isLimited else { return nil }
+        return importUsage
+    }
+
+    @MainActor
+    private func refreshImportUsage() async {
+        guard !subscriptions.isProUnlocked else {
+            importUsage = nil
+            return
+        }
+        let client = ImportUsageClient(accessTokenProvider: { try await auth.validAccessToken() })
+        if let usage = try? await client.fetch() {
+            importUsage = usage
         }
     }
 
@@ -418,6 +476,65 @@ private enum RecipesSection: Hashable {
     case allRecipes
 }
 
+private struct ImportUsageSheet: View {
+    let usage: ImportUsage
+    let onUpgrade: () -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            VStack(alignment: .leading, spacing: Theme.Spacing.xl) {
+                VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
+                    Text("\(usage.remaining) of \(usage.limit)")
+                        .font(.editorialTitle(size: 38, relativeTo: .largeTitle))
+                    Text("Imports remaining")
+                        .font(.headline)
+                        .foregroundStyle(Color.textSecondary)
+                }
+                HStack(spacing: 6) {
+                    ForEach(0..<usage.limit, id: \.self) { index in
+                        Capsule()
+                            .fill(index < usage.remaining ? Color.accentColor : Color.hairline)
+                            .frame(height: 6)
+                    }
+                }
+                Text("Resets on **\(usage.resetsAt.formatted(.dateTime.month(.wide).day()))**")
+                    .foregroundStyle(Color.textSecondary)
+                VStack(spacing: Theme.Spacing.lg) {
+                    Image(systemName: "bolt.fill")
+                        .font(.system(size: 30))
+                        .foregroundStyle(Color.accentColor)
+                    Text("Unlock unlimited imports")
+                        .font(.editorialTitle(size: 26, relativeTo: .title2))
+                    Text("Upgrade to Platter Pro and import as many recipes as you like.")
+                        .multilineTextAlignment(.center)
+                        .foregroundStyle(Color.textSecondary)
+                    Button("Unlock Platter Pro", action: onUpgrade)
+                        .font(.headline)
+                        .foregroundStyle(Color.white)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, Theme.Spacing.lg)
+                        .background(Color.accentColor)
+                        .clipShape(RoundedRectangle(cornerRadius: Theme.cornerRadius, style: .continuous))
+                }
+                .frame(maxWidth: .infinity)
+                .padding(Theme.Spacing.xl)
+                .background(Color.creamTint)
+                .clipShape(RoundedRectangle(cornerRadius: Theme.cornerRadius, style: .continuous))
+                Spacer()
+            }
+            .padding(Theme.Spacing.xl)
+            .appBackground()
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Done") { dismiss() }
+                }
+            }
+        }
+        .presentationDetents([.medium, .large])
+    }
+}
+
 private enum RecipeSortOrder: Hashable {
     case newest
     case title
@@ -551,7 +668,8 @@ private struct RecipePhotoCard: View {
     NavigationStack {
         CookbooksGridView(
             jobs: PendingJobsModel(provider: MockRecipeProvider()),
-            cookbooks: CookbooksModel()
+            cookbooks: CookbooksModel(),
+            auth: AuthModel()
         )
     }
 }
