@@ -24,6 +24,7 @@ struct MainTabView: View {
     @StateObject private var cookbooks: CookbooksModel
     @StateObject private var sync: SyncCoordinator
     private let userScope: String
+    private let auth: AuthModel
     /// Stage 4: non-nil once, right after the "claim your data" migration runs on
     /// first sign-in. Drives the confirmation toast, then is cleared on dismiss.
     @State private var claimSummary: ClaimSummary?
@@ -43,6 +44,7 @@ struct MainTabView: View {
         subscriptions: SubscriptionService
     ) {
         let userId = auth.currentUser?.id ?? "unknown"
+        self.auth = auth
         // Stage 4 "claim your data": migrate any pre-account (legacy) local data
         // into this account BEFORE the view models below read their scoped stores,
         // so claimed recipes/lists show immediately (not only after the next sync).
@@ -63,7 +65,7 @@ struct MainTabView: View {
     var body: some View {
         TabView(selection: $selectedTab) {  // sage active tint applied below
             NavigationStack {
-                CookbooksGridView(jobs: jobs, cookbooks: cookbooks, userScope: userScope)
+                CookbooksGridView(jobs: jobs, cookbooks: cookbooks, auth: auth, userScope: userScope)
             }
             .tabItem {
                 Label("Recipes", systemImage: "book.closed.fill")

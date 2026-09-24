@@ -223,6 +223,21 @@ class EndpointEnforcementTests(_DBTestBase):
             h["X-Pro-Entitled"] = "1"
         return h
 
+    def test_usage_endpoint_returns_exact_remaining_count(self) -> None:
+        self._seed(1)
+        r = self.client.get("/v1/import-usage", headers=self._headers())
+        self.assertEqual(r.status_code, 200)
+        body = r.json()
+        self.assertEqual(body["limit"], 2)
+        self.assertEqual(body["used"], 1)
+        self.assertEqual(body["remaining"], 1)
+        self.assertTrue(body["is_limited"])
+        self.assertIn("resets_at", body)
+
+    def test_usage_endpoint_requires_authentication(self) -> None:
+        r = self.client.get("/v1/import-usage")
+        self.assertEqual(r.status_code, 401)
+
     def test_under_limit_returns_200(self) -> None:
         self._seed(1)
         r = self.client.post("/v1/jobs", json={"url": "http://x"}, headers=self._headers())

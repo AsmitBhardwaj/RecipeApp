@@ -109,19 +109,13 @@ RATE_LIMIT_IP_PER_HOUR: int = int(os.getenv("RATE_LIMIT_IP_PER_HOUR", "100"))
 # JWT are limited; unauthenticated/anonymous imports fall back to the existing
 # per-user/IP rate limiter only (documented gap — see importlimit.py).
 #
-# GRANDFATHERING: accounts whose `created_at` is strictly BEFORE
-# FREE_LIMIT_EFFECTIVE_DATE are exempt forever, so shipping this never
-# retroactively limits an existing user. Both values below are PLACEHOLDERS —
-# set them (here or via env) once the per-user monthly-import distribution has
-# been reviewed. With the effective date left in the far future, EVERY current
-# account is grandfathered, i.e. the limit is effectively OFF until you set a
-# real date. Recommended: pick FREE_IMPORT_LIMIT at/above the ~95th percentile
-# of real monthly imports, and set FREE_LIMIT_EFFECTIVE_DATE to the ship date so
-# only accounts created after launch are ever limited.
-FREE_IMPORT_LIMIT: int = int(os.getenv("FREE_IMPORT_LIMIT", "30"))  # PLACEHOLDER
+# FREE_LIMIT_EFFECTIVE_DATE remains configurable for deployments that need to
+# grandfather accounts created before a particular launch date. The default is
+# deliberately in the past so the five-import free plan applies to every account.
+FREE_IMPORT_LIMIT: int = int(os.getenv("FREE_IMPORT_LIMIT", "5"))
 FREE_LIMIT_EFFECTIVE_DATE: str = os.getenv(
-    "FREE_LIMIT_EFFECTIVE_DATE", "2099-01-01T00:00:00+00:00"
-)  # PLACEHOLDER — far-future = limit disabled / everyone grandfathered
+    "FREE_LIMIT_EFFECTIVE_DATE", "1970-01-01T00:00:00+00:00"
+)
 
 # --------------------------------------------------------------------------- #
 # Burst / daily caps on the LLM-backed endpoints (app/burstlimit.py).
