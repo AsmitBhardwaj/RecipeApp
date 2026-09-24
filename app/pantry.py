@@ -26,7 +26,7 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
-from . import burstlimit, db
+from . import burstlimit, db, llm_cost
 from .auth.router import current_user
 from .auth.service import User
 from .ingredient_matching import ingredients_match, normalize_ingredient_name
@@ -298,7 +298,10 @@ def build_suggestions(
 
     generated: List[Suggestion] = []
     if allow_generation and len(matches) < SPARSE_THRESHOLD:
-        generated = generate_pantry_suggestions(pantry_norm, limit)
+        # Only this fallback fans out to the LLM (cache-search above makes no model
+        # call) — attribute its cost to this account under "pantry_suggestion".
+        with llm_cost.track(user_id, "pantry_suggestion"):
+            generated = generate_pantry_suggestions(pantry_norm, limit)
 
     return SuggestionsResponse(
         matches=matches,

@@ -405,6 +405,31 @@ def admin_flagged_accounts(_: None = Depends(_require_admin)) -> dict:
     return {"count": len(rows), "flagged": rows}
 
 
+@app.get("/admin/llm-costs")
+def admin_llm_costs(
+    since: Optional[str] = None,
+    until: Optional[str] = None,
+    _: None = Depends(_require_admin),
+) -> dict:
+    """Internal unit-economics view: estimated LLM spend per account (app/llm_cost.py).
+
+    Not user-facing — Basic-Auth admin only, same gate as the other /admin pages.
+    `since`/`until` are optional ISO-8601 UTC bounds ([since, until)); omit both
+    for all-time. A NULL account row is unauthenticated imports. Costs are
+    ESTIMATES from token usage × configured per-token rates (see llm_cost pricing
+    notes), for sanity-checking cost assumptions, not billing."""
+    rows = db.sum_llm_cost_by_account(since_iso=since, until_iso=until)
+    total = round(sum(float(r["estimated_cost_usd"] or 0.0) for r in rows), 6)
+    return {
+        "since": since,
+        "until": until,
+        "model": config.OPENAI_MODEL,
+        "total_estimated_cost_usd": total,
+        "account_count": len(rows),
+        "accounts": rows,
+    }
+
+
 @app.get("/admin/feedback", response_class=HTMLResponse)
 def admin_feedback(_: None = Depends(_require_admin)) -> str:
     rows = db.get_all_feedback()

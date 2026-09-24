@@ -25,6 +25,7 @@ from sqlalchemy import (
     BigInteger,
     Boolean,
     Column,
+    Float,
     Index,
     Integer,
     MetaData,
@@ -115,6 +116,28 @@ account_device_signals = Table(
     Column("flagged", Boolean, nullable=False, default=False),
     Column("related_account_id", String),  # the prior same-device account, when flagged
     Index("ix_account_device_signals_device", "device_id", "created_at"),
+)
+
+# Internal-only LLM cost ledger (app/llm_cost.py). One row per LLM API call tied
+# to a recipe import, budget-plan generation, or pantry suggestion. Purely for
+# post-launch unit-economics review — never read on any user-facing path. Raw
+# token counts are stored alongside the estimated cost so spend can be recomputed
+# if published rates change. `account_id` is nullable (an unauthenticated import
+# has no account); such rows group under a NULL bucket in the admin sum.
+llm_cost_events = Table(
+    "llm_cost_events",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("account_id", String),  # nullable — anonymous import has no account
+    Column("call_type", String, nullable=False),  # import | budget_plan | pantry_suggestion
+    Column("model", String, nullable=False),
+    Column("prompt_tokens", Integer, nullable=False, default=0),
+    Column("cached_tokens", Integer, nullable=False, default=0),
+    Column("completion_tokens", Integer, nullable=False, default=0),
+    # Nullable: NULL means "no known rate for this model", distinct from $0.
+    Column("estimated_cost_usd", Float),
+    Column("created_at", Text, nullable=False),
+    Index("ix_llm_cost_events_account_created", "account_id", "created_at"),
 )
 
 feedback = Table(
@@ -324,6 +347,67 @@ def count_imports_in_month(account_id: str, year_month: str) -> int:
     )
     with _get_engine().begin() as conn:
         return int(conn.execute(stmt).scalar_one())
+
+
+# --------------------------------------------------------------------------- #
+# LLM cost ledger (internal unit economics — app/llm_cost.py)
+# --------------------------------------------------------------------------- #
+
+
+def record_llm_cost_event(
+    *,
+    account_id: Optional[str],
+    call_type: str,
+    model: str,
+    prompt_tokens: int,
+    cached_tokens: int,
+    completion_tokens: int,
+    estimated_cost_usd: Optional[float],
+    created_at: str,
+) -> None:
+    """Append one LLM cost event. Fire-and-forget append (no upsert): each LLM
+    API call is its own row, so a multi-call import produces several rows."""
+    stmt = llm_cost_events.insert().values(
+        account_id=account_id,
+        call_type=call_type,
+        model=model,
+        prompt_tokens=prompt_tokens,
+        cached_tokens=cached_tokens,
+        completion_tokens=completion_tokens,
+        estimated_cost_usd=estimated_cost_usd,
+        created_at=created_at,
+    )
+    with _get_engine().begin() as conn:
+        conn.execute(stmt)
+
+
+def sum_llm_cost_by_account(
+    since_iso: Optional[str] = None, until_iso: Optional[str] = None
+) -> list[dict]:
+    """Internal admin query: total estimated LLM spend per account over an
+    optional [since, until) window (ISO-8601 UTC strings; timestamps are stored as
+    `+00:00` isoformat so string comparison is chronological). Returns one dict
+    per account, highest spend first, each with the summed cost, call count, and
+    token totals. A NULL `account_id` (unauthenticated imports) is its own row."""
+    from sqlalchemy import func
+
+    cost = func.coalesce(func.sum(llm_cost_events.c.estimated_cost_usd), 0.0)
+    stmt = select(
+        llm_cost_events.c.account_id,
+        cost.label("estimated_cost_usd"),
+        func.count().label("calls"),
+        func.coalesce(func.sum(llm_cost_events.c.prompt_tokens), 0).label("prompt_tokens"),
+        func.coalesce(func.sum(llm_cost_events.c.cached_tokens), 0).label("cached_tokens"),
+        func.coalesce(func.sum(llm_cost_events.c.completion_tokens), 0).label("completion_tokens"),
+    )
+    if since_iso is not None:
+        stmt = stmt.where(llm_cost_events.c.created_at >= since_iso)
+    if until_iso is not None:
+        stmt = stmt.where(llm_cost_events.c.created_at < until_iso)
+    stmt = stmt.group_by(llm_cost_events.c.account_id).order_by(cost.desc())
+    with _get_engine().begin() as conn:
+        rows = conn.execute(stmt).mappings().all()
+    return [dict(r) for r in rows]
 
 
 # --------------------------------------------------------------------------- #

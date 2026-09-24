@@ -11,7 +11,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 
-from .. import config, db, importlimit
+from .. import config, db, importlimit, llm_cost
 from ..models import Confidence, DishIdentification, Job, LLMRecipe, Recipe, UserRecipe
 from . import fetch, images, jsonld, llm, netguard, signal, urls, web
 
@@ -108,7 +108,17 @@ def create_job(url: str, user_id: str, account_id: str | None = None) -> Job:
 def process_job(job: Job) -> Job:
     """Run the full extraction for an already-created (queued) Job.
 
-    Single source of truth for the extraction pipeline — called synchronously
+    Public entry point. Wraps the pipeline in the LLM cost-tracking context so
+    every model call it makes (extraction, dish-ID, generic generation, web
+    article) is attributed to this job's account under call_type "import"; a cache
+    hit makes no LLM call and records nothing.
+    """
+    with llm_cost.track(job.account_id, "import"):
+        return _process_job(job)
+
+
+def _process_job(job: Job) -> Job:
+    """Single source of truth for the extraction pipeline — called synchronously
     in tests and via BackgroundTasks in production. Expects `job` to already be
     persisted (see `create_job`).
     """
@@ -205,6 +215,13 @@ def process_job(job: Job) -> Job:
 
 
 def process_pasted_text(job: Job, text: str) -> Job:
+    """Public entry point for the paste-retry path. Wraps extraction in the LLM
+    cost-tracking context (call_type "import", attributed to the job's account)."""
+    with llm_cost.track(job.account_id, "import"):
+        return _process_pasted_text(job, text)
+
+
+def _process_pasted_text(job: Job, text: str) -> Job:
     """Retry a failed job with user-pasted recipe text instead of a fetch.
 
     The remedy for the `site_blocked` state (a publisher's bot protection stopped

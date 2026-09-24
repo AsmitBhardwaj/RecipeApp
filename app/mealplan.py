@@ -30,7 +30,7 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from . import budget, burstlimit, config, db, ratelimit
+from . import budget, burstlimit, config, db, llm_cost, ratelimit
 from .auth.router import current_user
 from .auth.service import User
 from .models import CostEstimate, Recipe
@@ -222,15 +222,18 @@ def plan_on_a_budget(
     # 5. Generate the week's recipes. If the plan lands under the target band
     #    (< floor), run ONE bounded corrective pass asking for a fuller plan, then
     #    keep whichever fits the budget best. Ship best-effort either way.
+    # Attribute both the initial generation and any corrective pass to this
+    # account under call_type "budget_plan" (internal cost tracking).
     try:
-        generated = _generate()
-        if _adjusted_total(generated, multiplier) < floor_amount:
-            try:
-                retried = _generate(prior_total=round(_baseline_total(generated), 2))
-                generated = _pick_plan(generated, retried, multiplier, req.budget)
-            except llm.LLMError:
-                # Corrective pass failed — keep the first plan (best-effort).
-                pass
+        with llm_cost.track(user.id, "budget_plan"):
+            generated = _generate()
+            if _adjusted_total(generated, multiplier) < floor_amount:
+                try:
+                    retried = _generate(prior_total=round(_baseline_total(generated), 2))
+                    generated = _pick_plan(generated, retried, multiplier, req.budget)
+                except llm.LLMError:
+                    # Corrective pass failed — keep the first plan (best-effort).
+                    pass
     except llm.LLMError as exc:
         raise HTTPException(status_code=502, detail={"error_code": exc.code, "message": exc.message})
 
