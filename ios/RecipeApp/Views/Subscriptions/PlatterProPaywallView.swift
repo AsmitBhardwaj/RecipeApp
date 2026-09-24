@@ -170,7 +170,7 @@ struct PlatterProPaywallView: View {
     private var wordmark: some View {
         (
             Text("Platter ").font(.editorialTitle(size: 27, relativeTo: .title))
-            + Text("Pro").font(.scriptAccentItalic(size: 27, relativeTo: .title))
+            + Text("Pro").font(.scriptAccent(size: 27, relativeTo: .title))
         )
         .foregroundStyle(Color.ppGreen)
         .accessibilityElement()
@@ -348,7 +348,7 @@ struct PlatterProPaywallView: View {
         VStack(alignment: .leading, spacing: 14) {
             (
                 Text("What's included with ").font(.system(size: 15, weight: .semibold))
-                + Text("Pro").font(.scriptAccentItalic(size: 15, relativeTo: .subheadline))
+                + Text("Pro").font(.scriptAccent(size: 15, relativeTo: .subheadline))
                     .foregroundColor(.ppGreen)
             )
             .foregroundStyle(Color.ppCream)
