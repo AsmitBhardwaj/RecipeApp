@@ -44,7 +44,6 @@ final class APIRecipeProviderTests: XCTestCase {
             session: URLSession(configuration: config),
             userID: { "test-user" },
             authToken: { nil },
-            proEntitled: { false },
             pollInterval: .milliseconds(5),
             maxWait: .seconds(2)
         )
@@ -262,11 +261,10 @@ final class APIRecipeProviderTests: XCTestCase {
         }
     }
 
-    /// Builds a provider capturing the outbound request, with injectable auth /
-    /// pro closures.
+    /// Builds a provider capturing the outbound request, with an injectable auth
+    /// closure.
     private func headerProvider(
-        authToken: @escaping () async -> String?,
-        proEntitled: @escaping () -> Bool
+        authToken: @escaping () async -> String?
     ) -> (APIRecipeProvider, () -> URLRequest?) {
         let config = URLSessionConfiguration.ephemeral
         config.protocolClasses = [StubURLProtocol.self]
@@ -282,27 +280,22 @@ final class APIRecipeProviderTests: XCTestCase {
             userID: { "test-user" },
             appKey: { "" },
             authToken: authToken,
-            proEntitled: proEntitled,
             pollInterval: .milliseconds(5),
             maxWait: .seconds(2)
         )
         return (p, { captured })
     }
 
-    func testSendsProHeaderWhenEntitled() async throws {
-        let (p, captured) = headerProvider(authToken: { nil }, proEntitled: { true })
-        _ = try await p.submitJob(url: "https://www.instagram.com/reel/x/")
-        XCTAssertEqual(captured()?.value(forHTTPHeaderField: "X-Pro-Entitled"), "1")
-    }
-
-    func testOmitsProHeaderWhenNotEntitled() async throws {
-        let (p, captured) = headerProvider(authToken: { nil }, proEntitled: { false })
+    /// Pro is server-verified now — the provider must never send an X-Pro-Entitled
+    /// header (entitled or not).
+    func testNeverSendsProHeader() async throws {
+        let (p, captured) = headerProvider(authToken: { "tok" })
         _ = try await p.submitJob(url: "https://www.instagram.com/reel/x/")
         XCTAssertNil(captured()?.value(forHTTPHeaderField: "X-Pro-Entitled"))
     }
 
     func testOmitsAuthHeaderWhenSignedOut() async throws {
-        let (p, captured) = headerProvider(authToken: { nil }, proEntitled: { false })
+        let (p, captured) = headerProvider(authToken: { nil })
         _ = try await p.submitJob(url: "https://www.instagram.com/reel/x/")
         XCTAssertNil(captured()?.value(forHTTPHeaderField: "Authorization"))
     }

@@ -62,6 +62,48 @@ APPLE_TEAM_ID: str | None = os.getenv("APPLE_TEAM_ID")
 APPLE_KEY_ID: str | None = os.getenv("APPLE_KEY_ID")
 APPLE_PRIVATE_KEY: str | None = os.getenv("APPLE_PRIVATE_KEY")
 
+# --------------------------------------------------------------------------- #
+# App Store server-verified Pro entitlement (app/appstore.py, app/entitlements.py)
+# --------------------------------------------------------------------------- #
+# The ONLY source of truth for Pro is a StoreKit 2 signed transaction the client
+# posts to /v1/entitlements/verify, verified here against Apple. There is no
+# client-trusted header any more.
+#
+# Signature verification (chain to the Apple root) is OFFLINE and needs only the
+# public Apple root certs bundled in app/appstore_certs/. The three secrets below
+# are the App Store Server API key, used to look up subscription STATUS (renewal
+# info) so we learn the billing-grace expiry a bare transaction doesn't carry.
+# All three come from App Store Connect → Users & Access → Integrations →
+# In-App Purchase keys. Set them in Railway (and locally in .env); NEVER commit
+# real values (this repo is public). The code fails CLOSED: if these are unset,
+# /v1/entitlements/verify returns 503 and no account is ever upgraded.
+APPSTORE_ISSUER_ID: str | None = os.getenv("APPSTORE_ISSUER_ID")
+APPSTORE_KEY_ID: str | None = os.getenv("APPSTORE_KEY_ID")
+# Full .p8 PEM contents (multi-line, "-----BEGIN PRIVATE KEY----- ..."), stored
+# in an env var exactly like APPLE_PRIVATE_KEY above.
+APPSTORE_PRIVATE_KEY: str | None = os.getenv("APPSTORE_PRIVATE_KEY")
+# The app's bundle id and numeric App Store id. The bundle id is checked against
+# every verified transaction; the Apple id is required by Apple's library to
+# verify PRODUCTION transactions.
+APPSTORE_BUNDLE_ID: str = os.getenv("APPSTORE_BUNDLE_ID", "com.recipeapp.RecipeApp2")
+_appstore_app_apple_id_raw = os.getenv("APPSTORE_APP_APPLE_ID")
+APPSTORE_APP_APPLE_ID: int | None = (
+    int(_appstore_app_apple_id_raw) if (_appstore_app_apple_id_raw or "").strip().isdigit() else None
+)
+# Default environment ONLY as a hint/fallback. Verification does not rely on it:
+# we verify against Production first and fall back to Sandbox, then store the
+# environment Apple actually reports per entitlement (App Review / TestFlight
+# send Sandbox transactions to this production server).
+APPSTORE_ENVIRONMENT: str = os.getenv("APPSTORE_ENVIRONMENT", "Production")
+# The only product ids that grant Pro. A transaction for anything else is rejected.
+APPSTORE_PRODUCT_IDS: frozenset[str] = frozenset(
+    {
+        "com.recipeapp.RecipeApp2.pro.monthly",
+        "com.recipeapp.RecipeApp2.pro.yearly",
+    }
+)
+
+
 # Brute-force bounds on the email/password login endpoint (per-IP and per-email,
 # per 15-minute window). Separate from the extraction rate limits.
 LOGIN_ATTEMPTS_PER_WINDOW: int = int(os.getenv("LOGIN_ATTEMPTS_PER_WINDOW", "10"))

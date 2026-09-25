@@ -16,9 +16,10 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from pydantic import BaseModel, field_validator, model_validator
 
-from . import burstlimit, config, db, importlimit, ratelimit, spendcap, spendsignal
-from .auth.router import current_user, router as auth_router
+from . import burstlimit, config, db, entitlements, importlimit, ratelimit, spendcap, spendsignal
+from .auth.router import current_user, optional_current_user, router as auth_router
 from .auth.service import User
+from .entitlements_router import router as entitlements_router
 from .models import Job, Recipe
 from .mealplan import router as mealplan_router
 from .pantry import router as pantry_router
@@ -35,6 +36,8 @@ app.include_router(sync_router)
 app.include_router(pantry_router)
 # Plan on a Budget (/v1/meal-plan/budget) — Pro-gated LLM generation.
 app.include_router(mealplan_router)
+# Server-verified Pro entitlement (/v1/entitlements/*, /v1/appstore/notifications).
+app.include_router(entitlements_router)
 
 
 @app.on_event("startup")
@@ -86,21 +89,15 @@ def _resolve_user_id(request: Request) -> str:
     return config.DEFAULT_USER_ID
 
 
-def _client_pro_claim(request: Request) -> bool:
-    """The client's self-reported Pro entitlement, from the `X-Pro-Entitled`
-    header ("1"/"true"). The backend cannot verify StoreKit purchases, so this is
-    a TRUSTED-BUT-SPOOFABLE claim used only to waive the free-import limit (see
-    app/importlimit.py). A forged claim costs only cheap LLM calls, still bounded
-    by the per-user/IP rate limiter — deliberately not worth server-side receipt
-    validation for MVP."""
-    return (request.headers.get("X-Pro-Entitled") or "").strip().lower() in ("1", "true", "yes")
-
-
-def _enforce_import_limit(account: Optional[User], request: Request) -> None:
+def _enforce_import_limit(account: Optional[User]) -> None:
     """Reject with 402 + a distinct machine error_code when a free account is at
-    its monthly import cap. Pro, grandfathered, and anonymous callers pass."""
+    its monthly import cap. Pro, grandfathered, and anonymous callers pass.
+
+    Pro is the server-verified entitlement (app/entitlements.py) — no client
+    header is trusted."""
+    is_pro = entitlements.is_pro_user(account.id) if account else False
     try:
-        importlimit.check_allowed(account, _client_pro_claim(request))
+        importlimit.check_allowed(account, is_pro)
     except importlimit.ImportLimitExceeded as exc:
         raise HTTPException(
             status_code=402,
@@ -187,9 +184,18 @@ class ImportUsageResponse(BaseModel):
     is_limited: bool
 
 
-def _with_recipe(job: Job) -> JobResponse:
+def _strip_pro_fields(recipe: Optional[Recipe], is_pro: bool) -> Optional[Recipe]:
+    """Nutrition (calories/macros) is a Pro feature. It rides on the shared recipe
+    payload, so strip it server-side for non-Pro accounts — a modified client can't
+    reveal it. Pro accounts get the full recipe."""
+    if recipe is None or is_pro or recipe.nutrition is None:
+        return recipe
+    return recipe.model_copy(update={"nutrition": None})
+
+
+def _with_recipe(job: Job, is_pro: bool) -> JobResponse:
     recipe = db.get_recipe(job.recipe_id) if job.recipe_id else None
-    return JobResponse(job=job, recipe=recipe)
+    return JobResponse(job=job, recipe=_strip_pro_fields(recipe, is_pro))
 
 
 # --------------------------------------------------------------------------- #
@@ -273,7 +279,7 @@ def submit_job(
     # Free-tier monthly import cap (Pro is unlimited). Checked BEFORE any job is
     # created so a capped user does no extraction work; returns 402 + a distinct
     # error_code the client maps to the paywall.
-    _enforce_import_limit(account, request)
+    _enforce_import_limit(account)
 
     # Per-account burst/daily import ceiling — bounds cost even for Pro accounts
     # (429 + rate_limit_exceeded, NOT the paywall). Kept after the monthly cap so
@@ -292,15 +298,19 @@ def submit_job(
     # the right account, across devices.
     job = orchestrator.create_job(req.url, account.id, account_id=account.id)
     background_tasks.add_task(orchestrator.process_job, job)
-    return _with_recipe(job)  # recipe is None while status == "queued"
+    # recipe is None while status == "queued"; is_pro only affects a finished recipe.
+    return _with_recipe(job, entitlements.is_pro_user(account.id))
 
 
 @app.get("/v1/jobs/{job_id}", response_model=JobResponse)
-def get_job(job_id: str) -> JobResponse:
+def get_job(job_id: str, account: Optional[User] = Depends(optional_current_user)) -> JobResponse:
+    # Optional auth: this is the poll route (also hit anonymously), so a missing
+    # token degrades to "not Pro" (nutrition stripped) rather than 401. A valid
+    # token lets a Pro account receive the full recipe (with nutrition).
     job = db.get_job(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="job not found")
-    return _with_recipe(job)
+    return _with_recipe(job, entitlements.is_pro_user(account.id) if account else False)
 
 
 class PasteRequest(BaseModel):
@@ -332,7 +342,7 @@ def paste_job_text(
     # A paste is itself an import attempt (it can turn a failed job into a saved
     # recipe), so it is subject to the same free-tier cap AND the same per-account
     # burst/daily import ceiling, both checked before any work.
-    _enforce_import_limit(account, request)
+    _enforce_import_limit(account)
     _enforce_import_burst_limit(account)
     _enforce_spend_cap(account)
 
@@ -350,7 +360,7 @@ def paste_job_text(
     job.account_id = account.id
 
     job = orchestrator.process_pasted_text(job, text)
-    return _with_recipe(job)
+    return _with_recipe(job, entitlements.is_pro_user(account.id))
 
 
 # --------------------------------------------------------------------------- #

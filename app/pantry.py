@@ -26,7 +26,7 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
-from . import burstlimit, db, llm_cost, spendcap
+from . import burstlimit, db, entitlements, llm_cost, spendcap
 from .auth.router import current_user
 from .auth.service import User
 from .ingredient_matching import ingredients_match, normalize_ingredient_name
@@ -323,6 +323,17 @@ router = APIRouter(prefix="/v1", tags=["pantry"])
 def pantry_suggestions(
     req: SuggestionsRequest, user: User = Depends(current_user)
 ) -> SuggestionsResponse:
+    # Pro gate — pantry suggestions are a Platter Pro feature. Server-verified
+    # entitlement (app/entitlements.py), mirroring the client ProGate lock; free
+    # users get 403 pro_required before any work.
+    if not entitlements.is_pro_user(user.id):
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error_code": "pro_required",
+                "message": "Recipes from your pantry is a Platter Pro feature.",
+            },
+        )
     # Per-account daily cap on this LLM-backed endpoint (the generation fallback
     # fans out to the model). Independent of the import/budget caps; 429 with the
     # distinct rate_limit_exceeded code.

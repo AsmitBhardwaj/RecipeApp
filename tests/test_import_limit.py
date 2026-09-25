@@ -26,6 +26,7 @@ from typing import Optional
 from app import config, db, importlimit
 from app.models import Job, Recipe, Servings
 from app.pipeline import orchestrator
+from tests.entitlement_utils import grant_pro, revoke_pro
 
 
 def _fresh_db() -> str:
@@ -218,10 +219,12 @@ class EndpointEnforcementTests(_DBTestBase):
             db.record_import_event(self.user.id, f"seed-{i}", _this_month(), _now_iso())
 
     def _headers(self, pro: bool = False) -> dict:
-        h = {"Authorization": f"Bearer {self.token}", "X-User-Id": "device-1"}
+        # Pro is a server-verified stored entitlement now — seed/clear it to match.
         if pro:
-            h["X-Pro-Entitled"] = "1"
-        return h
+            grant_pro(self.user.id)
+        else:
+            revoke_pro(self.user.id)
+        return {"Authorization": f"Bearer {self.token}", "X-User-Id": "device-1"}
 
     def test_usage_endpoint_returns_exact_remaining_count(self) -> None:
         self._seed(1)
@@ -249,7 +252,7 @@ class EndpointEnforcementTests(_DBTestBase):
         self.assertEqual(r.status_code, 402)
         self.assertEqual(r.json()["detail"]["error_code"], "free_limit_reached")
 
-    def test_pro_claim_bypasses_limit(self) -> None:
+    def test_pro_entitlement_bypasses_limit(self) -> None:
         self._seed(5)
         r = self.client.post("/v1/jobs", json={"url": "http://x"}, headers=self._headers(pro=True))
         self.assertEqual(r.status_code, 200)

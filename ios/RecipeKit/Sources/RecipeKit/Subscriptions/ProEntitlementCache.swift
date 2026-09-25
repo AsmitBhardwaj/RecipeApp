@@ -3,22 +3,20 @@
 //  RecipeKit
 //
 //  A tiny App-Group-shared cache of the user's Pro entitlement, written by the
-//  main app (from verified StoreKit state) and read by any target that needs to
-//  tell the backend "this user is Pro" — notably the Share Extension, which
-//  cannot query StoreKit itself.
+//  main app from verified StoreKit state.
 //
-//  This is a CONVENIENCE CLAIM, not a source of truth:
-//    * Gating actual Pro FEATURES must use verified StoreKit state
-//      (`ProEntitlementState.grantsAccess`), never this flag.
-//    * Its ONLY consumer is the `X-Pro-Entitled` request header, which merely
-//      waives the free-import limit server-side. The backend cannot verify Pro
-//      anyway, so a stale/forged value costs only cheap LLM calls (still bounded
-//      by the per-user/IP rate limiter) — the deliberate "smallest safe version"
-//      trade-off.
+//  This is a UI CONVENIENCE, not a source of truth and NOT an API credential:
+//    * Gating actual Pro FEATURES on the client uses verified StoreKit state
+//      (`ProEntitlementState.grantsAccess`); this flag only lets the UI avoid a
+//      flash of a locked state on cold launch (see `ProGate`).
+//    * Server-side Pro access is gated by the Apple-verified entitlement stored
+//      per account (posted via `/v1/entitlements/verify`) — this flag is NEVER
+//      sent to the backend. (Historically it fed an `X-Pro-Entitled` header;
+//      that spoofable header has been removed entirely.)
 //
 //  Stored in the App Group `UserDefaults` (not the keychain): it is not a
-//  credential, and it must be reachable from the extension. All access is
-//  best-effort and safe when the suite is unavailable.
+//  credential, and it is shared with the extension for the same no-flash UI
+//  reason. All access is best-effort and safe when the suite is unavailable.
 //
 
 import Foundation

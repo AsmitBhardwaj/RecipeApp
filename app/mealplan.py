@@ -8,10 +8,9 @@ regional multiplier) and a short health signal.
 
 Gating & guards (this fans out LLM work, so cost is guarded hard):
   * Auth: `Depends(current_user)` — signed-in accounts only.
-  * PRO: server-side check of the `X-Pro-Entitled` client claim — free users
-    cannot call it at all (mirrors the client ProGate lock). Spoofable like the
-    import-limit claim, but the client can't reach here without a token and the
-    rate limiter still bounds abuse.
+  * PRO: server-verified entitlement (app/entitlements.py) — free users cannot
+    call it at all (403 pro_required). Backed by an Apple-verified StoreKit
+    transaction, not a client-trusted header.
   * Budget floor: rejects a request below `household_size × MIN_BUDGET_PER_PERSON`
     (app/budget.py), independent of the client, with a clear error the client shows.
   * Rate-limited per account + IP, like /v1/jobs.
@@ -30,7 +29,7 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from . import budget, burstlimit, config, db, llm_cost, ratelimit, spendcap
+from . import budget, burstlimit, config, db, entitlements, llm_cost, ratelimit, spendcap
 from .auth.router import current_user
 from .auth.service import User
 from .models import CostEstimate, Recipe
@@ -78,11 +77,6 @@ class BudgetPlanResponse(BaseModel):
 # --------------------------------------------------------------------------- #
 # Helpers
 # --------------------------------------------------------------------------- #
-
-
-def _is_pro(request: Request) -> bool:
-    """The client's Pro claim (see app/main.py `_client_pro_claim`)."""
-    return (request.headers.get("X-Pro-Entitled") or "").strip().lower() in ("1", "true", "yes")
 
 
 def _client_ip(request: Request) -> str:
@@ -133,8 +127,9 @@ def _pick_plan(
 def plan_on_a_budget(
     req: BudgetPlanRequest, request: Request, user: User = Depends(current_user)
 ) -> BudgetPlanResponse:
-    # 1. Pro gate — free users can't call this at all.
-    if not _is_pro(request):
+    # 1. Pro gate — free users can't call this at all. Server-verified entitlement
+    #    (app/entitlements.py), not a client claim.
+    if not entitlements.is_pro_user(user.id):
         raise HTTPException(
             status_code=403,
             detail={

@@ -34,16 +34,22 @@ struct RecipeApp: App {
     )
 
     init() {
-        let subscriptions = SubscriptionService()
-        _subscriptions = StateObject(wrappedValue: subscriptions)
         let auth = AuthModel()
+        // Stamp purchases with the signed-in account's UUID (appAccountToken) so the
+        // backend binds the subscription to this account.
+        let subscriptions = SubscriptionService(
+            accountUUID: { [weak auth] in
+                guard let id = auth?.session?.user.id else { return nil }
+                return AccountUUID.from(id)
+            }
+        )
+        _subscriptions = StateObject(wrappedValue: subscriptions)
         // Wipe entitlement caches whenever the session is torn down, so a prior
         // account's Pro status can't leak into the next account on this device.
         auth.onSessionCleared = { await subscriptions.resetForAccountChange() }
         _auth = StateObject(wrappedValue: auth)
-        recipeProvider = APIRecipeProvider(
-            proEntitled: { subscriptions.isProUnlocked }
-        )
+        // Pro is server-verified per account now — the provider sends no Pro header.
+        recipeProvider = APIRecipeProvider()
         // Register the bundled editorial display font before any UI renders.
         AppFonts.register()
     }

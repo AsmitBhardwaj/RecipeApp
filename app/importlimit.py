@@ -15,10 +15,10 @@ Design (see config.FREE_IMPORT_LIMIT / FREE_LIMIT_EFFECTIVE_DATE):
     (app/ratelimit.py). This is the deliberate "smallest safe version" trade-off:
     the app itself always runs signed-in, and we do not paywall a request we
     cannot attribute to an account.
-  * Pro accounts are never limited. The server cannot verify Pro (there is no
-    StoreKit/receipt validation on the backend), so `is_pro` is a CLIENT claim
-    (the `X-Pro-Entitled` header). It is spoofable; the downside of a forged
-    claim is only extra cheap LLM cost, still bounded by the rate limiter.
+  * Pro accounts are never limited. `is_pro` is the SERVER-VERIFIED entitlement
+    (app/entitlements.py) — an Apple-verified StoreKit transaction persisted per
+    account, honoring billing grace — passed in by the caller. It is no longer a
+    client-trusted header.
   * GRANDFATHERING: accounts created strictly before FREE_LIMIT_EFFECTIVE_DATE
     are exempt forever, so moving the date forward never retroactively restricts an
     existing user. The default date is in the past (1970), so NO account is

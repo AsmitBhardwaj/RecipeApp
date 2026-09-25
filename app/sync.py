@@ -19,7 +19,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field, field_validator
 
-from . import db
+from . import db, entitlements
 from .auth.router import current_user
 from .auth.service import User
 from .models import Recipe
@@ -119,4 +119,13 @@ def recipes_batch(req: BatchRequest, user: User = Depends(current_user)) -> Batc
     # library, so this only reads from the shared recipe cache.
     seen: set[str] = set()
     ids = [i for i in req.ids if not (i in seen or seen.add(i))]
-    return BatchResponse(recipes=db.recipes_by_ids(ids))
+    recipes = db.recipes_by_ids(ids)
+    # Nutrition (calories/macros) is a Pro feature that rides on the shared recipe
+    # payload — strip it server-side for non-Pro accounts so a modified client
+    # can't reveal it. Server-verified entitlement, not a client claim.
+    if not entitlements.is_pro_user(user.id):
+        recipes = [
+            r.model_copy(update={"nutrition": None}) if r.nutrition is not None else r
+            for r in recipes
+        ]
+    return BatchResponse(recipes=recipes)
