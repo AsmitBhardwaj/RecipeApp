@@ -85,6 +85,13 @@ public struct PantrySuggestionsClient {
         guard let http = response as? HTTPURLResponse else {
             throw RecipeProviderError.invalidResponse("non-HTTP response")
         }
+        // 429 + "spend_cap_reached" = the hard 30-day spend cap (only the
+        // generation fallback spends, so only it trips this). Distinct case → the
+        // "this month's usage limit" message; other 429s stay the generic "slow
+        // down" httpStatus.
+        if http.statusCode == 429, Self.decodeErrorCode(data) == "spend_cap_reached" {
+            throw RecipeProviderError.spendCapReached
+        }
         guard (200..<300).contains(http.statusCode) else {
             throw RecipeProviderError.httpStatus(http.statusCode)
         }
@@ -93,6 +100,23 @@ public struct PantrySuggestionsClient {
         } catch {
             throw RecipeProviderError.invalidResponse("could not decode response: \(error)")
         }
+    }
+}
+
+// MARK: - Error-envelope decoding
+
+extension PantrySuggestionsClient {
+    /// Pull `detail.error_code` out of a coded error body; nil when absent.
+    fileprivate static func decodeErrorCode(_ data: Data) -> String? {
+        (try? JSONDecoder().decode(PantryErrorEnvelope.self, from: data))?.detail.errorCode
+    }
+}
+
+private struct PantryErrorEnvelope: Decodable {
+    let detail: Detail
+    struct Detail: Decodable {
+        let errorCode: String?
+        enum CodingKeys: String, CodingKey { case errorCode = "error_code" }
     }
 }
 

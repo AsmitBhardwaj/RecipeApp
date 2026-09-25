@@ -30,7 +30,7 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from . import budget, burstlimit, config, db, llm_cost, ratelimit
+from . import budget, burstlimit, config, db, llm_cost, ratelimit, spendcap
 from .auth.router import current_user
 from .auth.service import User
 from .models import CostEstimate, Recipe
@@ -158,6 +158,20 @@ def plan_on_a_budget(
             detail={
                 "error_code": exc.code,
                 "message": "You've reached today's budget-plan limit. Please try again tomorrow.",
+                "limit": exc.limit,
+                "window": exc.window_label,
+            },
+        )
+    # Hard per-account 30-day dollar cap (app/spendcap.py) — the enforcing backstop
+    # above the count caps; blocks once trailing-30-day estimated spend is over it.
+    try:
+        spendcap.check(user.id)
+    except spendcap.SpendCapExceeded as exc:
+        raise HTTPException(
+            status_code=429,
+            detail={
+                "error_code": exc.code,
+                "message": "You've hit your recent usage limit. It frees up as your usage from the past 30 days ages off.",
                 "limit": exc.limit,
                 "window": exc.window_label,
             },

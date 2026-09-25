@@ -81,6 +81,11 @@ struct ShareRootView: View {
         /// we never persisted a PendingJob for this attempt, so the app shows no
         /// stuck "Extracting…" card afterward.
         case limitReached
+        /// No usable signed-in session in the shared App Group (signed out, or the
+        /// refresh token is dead). The import endpoints now require a valid token,
+        /// so instead of submitting (a guaranteed 401) we tell the user to open the
+        /// app and sign in. No PendingJob is persisted, so nothing shows as stuck.
+        case needsSignIn
     }
 
     var body: some View {
@@ -161,6 +166,20 @@ struct ShareRootView: View {
                 .multilineTextAlignment(.center)
             filledButton("Close", action: onFinish)
                 .padding(.top, 6)
+
+        case .needsSignIn:
+            Image(systemName: "person.crop.circle.badge.exclamationmark")
+                .font(.largeTitle)
+                .foregroundStyle(sage)
+            Text("Open Platter and sign in to save recipes")
+                .font(.headline)
+                .multilineTextAlignment(.center)
+            Text("Recipes save to your account, so you'll need to be signed in. This link wasn't saved — nothing is processing.")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+            filledButton("Close", action: onFinish)
+                .padding(.top, 6)
         }
     }
 
@@ -196,9 +215,18 @@ struct ShareRootView: View {
             return
         }
 
+        // Import requires a signed-in account. If there's no session in the shared
+        // App Group, don't submit (it would just 401) — send the user to the app to
+        // sign in. Nothing is persisted, so no stuck "Extracting…" card appears.
+        guard SessionTokenProvider().hasSession else {
+            phase = .needsSignIn
+            return
+        }
+
         do {
             // Same provider + store the main app uses. PendingJobStore defaults to
-            // the shared App Group suite (group.com.recipeapp.shared2).
+            // the shared App Group suite (group.com.recipeapp.shared2). The provider
+            // refreshes an expiring access token before sending.
             let job = try await APIRecipeProvider().submitJob(url: raw)
             PendingJobStore().upsert(
                 PendingJob(jobId: job.jobId, url: raw, submittedAt: Date(), lastStatus: job.status)
@@ -210,6 +238,10 @@ struct ShareRootView: View {
             // Do NOT persist a PendingJob — there is no job, so the app must not
             // show a processing card for this. Just tell the user to upgrade.
             phase = .limitReached
+        } catch RecipeProviderError.httpStatus(401) {
+            // A session existed but the token is unusable (refresh token dead/revoked)
+            // — treat it as signed-out rather than a generic error.
+            phase = .needsSignIn
         } catch let error as RecipeProviderError {
             phase = .failure(error.userMessage)
         } catch {

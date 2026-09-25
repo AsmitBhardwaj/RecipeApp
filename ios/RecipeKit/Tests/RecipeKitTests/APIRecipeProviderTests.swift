@@ -227,10 +227,45 @@ final class APIRecipeProviderTests: XCTestCase {
         }
     }
 
+    /// A 429 carrying "spend_cap_reached" maps to the distinct `.spendCapReached`
+    /// case (with the "this month's usage limit" message), not a generic 429.
+    func testHTTP429SpendCapMapsToSpendCapReached() async {
+        StubURLProtocol.handler = { request in
+            (HTTPURLResponse(url: request.url!, statusCode: 429, httpVersion: nil, headerFields: nil)!,
+             Data("{\"detail\":{\"error_code\":\"spend_cap_reached\"}}".utf8))
+        }
+        do {
+            _ = try await makeProvider().submitJob(url: "https://www.instagram.com/reel/x/")
+            XCTFail("expected failure")
+        } catch let error as RecipeProviderError {
+            XCTAssertEqual(error, .spendCapReached)
+            XCTAssertTrue(error.userMessage.contains("platterapp.privacy@gmail.com"))
+        } catch {
+            XCTFail("expected RecipeProviderError, got \(error)")
+        }
+    }
+
+    /// A 429 WITHOUT the spend-cap code stays the generic slow-down httpStatus, so
+    /// only the real dollar-cap trip shows the usage-limit copy.
+    func testGeneric429StaysHTTPStatus() async {
+        StubURLProtocol.handler = { request in
+            (HTTPURLResponse(url: request.url!, statusCode: 429, httpVersion: nil, headerFields: nil)!,
+             Data("{\"detail\":\"rate limited\"}".utf8))
+        }
+        do {
+            _ = try await makeProvider().submitJob(url: "https://www.instagram.com/reel/x/")
+            XCTFail("expected failure")
+        } catch let error as RecipeProviderError {
+            XCTAssertEqual(error, .httpStatus(429))
+        } catch {
+            XCTFail("expected RecipeProviderError, got \(error)")
+        }
+    }
+
     /// Builds a provider capturing the outbound request, with injectable auth /
     /// pro closures.
     private func headerProvider(
-        authToken: @escaping () -> String?,
+        authToken: @escaping () async -> String?,
         proEntitled: @escaping () -> Bool
     ) -> (APIRecipeProvider, () -> URLRequest?) {
         let config = URLSessionConfiguration.ephemeral
