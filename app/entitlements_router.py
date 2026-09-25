@@ -17,7 +17,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from . import appstore, config, db, entitlements
+from . import appstore, entitlements
 from .auth.router import current_user
 from .auth.service import User
 from .entitlements import EntitlementError
@@ -74,24 +74,19 @@ def my_entitlement(user: User = Depends(current_user)) -> EntitlementStatusRespo
 
 
 # --------------------------------------------------------------------------- #
-# App Store Server Notifications V2 — STUB
+# App Store Server Notifications V2
 # --------------------------------------------------------------------------- #
 #
-# WHAT IT DOES NOW: verifies the Apple-signed payload, decodes the embedded
-# transaction/renewal info, and (when we already track that subscription) updates
-# the stored entitlement's expiry/grace so renewals, expiries, refunds and grace
-# transitions are reflected without waiting for the client to re-verify.
+# Apple POSTs subscription lifecycle events (renew / expire / billing grace /
+# refund / revoke / renewal-status change) as a single signed JWS. We verify it
+# against the bundled Apple root certs and apply it to the stored entitlement so
+# the server reflects the subscription without waiting for the client to
+# re-verify. Handling is idempotent (Apple retries and can redeliver), and we
+# return 200 quickly.
 #
-# TO FINISH (follow-up):
-#   1. Enter this URL in App Store Connect → your app → App Information →
-#      "App Store Server Notifications", for BOTH Production and Sandbox:
-#         https://recipeapp-production-3a60.up.railway.app/v1/appstore/notifications
-#   2. Requires the same APPSTORE_* config as verify (root certs are bundled; the
-#      API key is only needed for the grace lookup).
-#   3. Decide/confirm per-type handling below and add tests with Apple's sample
-#      signed payloads (or a fake verifier), mirroring test_entitlements.py.
-#   4. Consider idempotency/ordering (notificationUUID) and Apple's retry policy
-#      (return 2xx once accepted so Apple stops retrying).
+# SETUP: enter this URL in App Store Connect → your app → App Information →
+# "App Store Server Notifications", for BOTH the Production and Sandbox Version 2
+# URLs: https://recipeapp-production-3a60.up.railway.app/v1/appstore/notifications
 
 
 class NotificationRequest(BaseModel):
@@ -101,41 +96,30 @@ class NotificationRequest(BaseModel):
 
 @router.post("/appstore/notifications")
 def appstore_notifications(req: NotificationRequest) -> dict:
-    # Fail closed on config, but ALWAYS return 2xx to Apple once we've accepted the
-    # request, so Apple's retry queue doesn't back up on transient issues.
+    # Verify the Apple signature, then apply. We return 200 for anything we
+    # successfully verified (Apple should not retry a delivered notification), and
+    # 400 only when the signature itself doesn't verify. The work is a couple of
+    # verifies + one idempotent DB write — fast enough to answer inline.
     try:
-        certs = appstore._load_root_certs()  # noqa: SLF001 — internal helper reuse
-        from appstoreserverlibrary.models.Environment import Environment
-        from appstoreserverlibrary.signed_data_verifier import SignedDataVerifier
+        parsed = appstore.parse_notification(req.signedPayload)
+    except appstore.InvalidNotification as exc:
+        _log.warning("appstore notification failed verification: %s", exc)
+        raise HTTPException(status_code=400, detail="invalid signedPayload")
+    except Exception as exc:  # noqa: BLE001 — config/parse error: let Apple retry
+        _log.error("appstore notification verify error: %s", exc)
+        raise HTTPException(status_code=500, detail="notification processing error")
 
-        # Notifications may come from either environment; try production then sandbox.
-        payload = None
-        for env in (Environment.PRODUCTION, Environment.SANDBOX):
-            app_apple_id = config.APPSTORE_APP_APPLE_ID if env == Environment.PRODUCTION else None
-            if env == Environment.PRODUCTION and app_apple_id is None:
-                continue
-            try:
-                verifier = SignedDataVerifier(
-                    certs, False, env, config.APPSTORE_BUNDLE_ID, app_apple_id
-                )
-                payload = verifier.verify_and_decode_notification(req.signedPayload)
-                break
-            except Exception:  # noqa: BLE001 — wrong env / parse; try the next
-                continue
-
-        if payload is None:
-            _log.warning("appstore notification: could not verify signedPayload")
-            return {"status": "ignored"}
-
-        _log.info(
-            "appstore notification: type=%s subtype=%s uuid=%s",
-            getattr(payload, "notificationType", None),
-            getattr(payload, "subtype", None),
-            getattr(payload, "notificationUUID", None),
+    try:
+        action = entitlements.apply_notification(parsed)
+    except Exception as exc:  # noqa: BLE001 — transient DB error: 500 so Apple retries
+        _log.error(
+            "appstore notification apply failed (type=%s uuid=%s): %s",
+            parsed.notification_type, parsed.notification_uuid, exc,
         )
-        # STUB: full per-type application of the embedded transaction/renewal info
-        # to the stored entitlement is the follow-up work described above.
-        return {"status": "accepted"}
-    except Exception as exc:  # noqa: BLE001
-        _log.warning("appstore notification handling failed: %s", exc)
-        return {"status": "error"}
+        raise HTTPException(status_code=500, detail="notification apply error")
+
+    _log.info(
+        "appstore notification type=%s subtype=%s uuid=%s -> %s",
+        parsed.notification_type, parsed.subtype, parsed.notification_uuid, action,
+    )
+    return {"status": "ok", "action": action}

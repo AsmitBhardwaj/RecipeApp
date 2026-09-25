@@ -53,6 +53,10 @@ class InvalidTransaction(Exception):
     bundle id, or unverifiable in both Production and Sandbox)."""
 
 
+class InvalidNotification(Exception):
+    """An App Store Server Notification (V2) failed signature verification."""
+
+
 @dataclass(frozen=True)
 class VerifiedTransaction:
     """The subset of a verified StoreKit transaction the entitlement layer needs."""
@@ -64,6 +68,22 @@ class VerifiedTransaction:
     expires_at: Optional[datetime]
     app_account_token: Optional[str]
     revocation_date: Optional[datetime]
+
+
+@dataclass(frozen=True)
+class ParsedNotification:
+    """The verified, decoded contents of an App Store Server Notification (V2) that
+    the entitlement layer needs to update a stored row."""
+
+    notification_type: Optional[str]
+    subtype: Optional[str]
+    notification_uuid: Optional[str]
+    environment: Optional[str]
+    original_transaction_id: Optional[str]
+    product_id: Optional[str]
+    expires_at: Optional[datetime]
+    revocation_date: Optional[datetime]
+    grace_expires_at: Optional[datetime]
 
 
 def _ms_to_dt(ms: Optional[int]) -> Optional[datetime]:
@@ -153,6 +173,72 @@ def verify_transaction(signed_transaction: str) -> VerifiedTransaction:
         )
 
     raise InvalidTransaction(f"transaction failed verification: {last_error}")
+
+
+def _enum_value(obj, raw):
+    """An app-store-server-library enum field is None for values the SDK doesn't
+    recognize; fall back to the paired `raw*` string so new Apple types still flow
+    through as data."""
+    return obj.value if obj is not None else raw
+
+
+def parse_notification(signed_payload: str) -> ParsedNotification:
+    """Verify an App Store Server Notification (V2) against Apple and decode the
+    parts needed to update an entitlement. Tries Production then Sandbox. The
+    embedded transaction/renewal info is verified with the SAME environment
+    verifier that accepted the notification. Raises `InvalidNotification` if
+    neither environment accepts the signature."""
+    from appstoreserverlibrary.signed_data_verifier import VerificationException
+
+    last_error: Optional[Exception] = None
+    for environment in _ordered_environments():
+        try:
+            verifier = _verifier_for(environment)
+        except AppStoreNotConfigured as exc:
+            last_error = exc
+            continue
+        try:
+            payload = verifier.verify_and_decode_notification(signed_payload)
+        except VerificationException as exc:
+            last_error = exc
+            continue
+
+        data = payload.data
+        env_value = environment.value
+        original_txn: Optional[str] = None
+        product_id: Optional[str] = None
+        expires_at: Optional[datetime] = None
+        revocation_date: Optional[datetime] = None
+        grace_expires_at: Optional[datetime] = None
+
+        if data is not None:
+            if data.environment is not None:
+                env_value = data.environment.value
+            if data.signedTransactionInfo:
+                txn = verifier.verify_and_decode_signed_transaction(data.signedTransactionInfo)
+                original_txn = txn.originalTransactionId
+                product_id = txn.productId
+                expires_at = _ms_to_dt(txn.expiresDate)
+                revocation_date = _ms_to_dt(txn.revocationDate)
+            if data.signedRenewalInfo:
+                renewal = verifier.verify_and_decode_renewal_info(data.signedRenewalInfo)
+                grace_expires_at = _ms_to_dt(renewal.gracePeriodExpiresDate)
+                if original_txn is None:
+                    original_txn = renewal.originalTransactionId
+
+        return ParsedNotification(
+            notification_type=_enum_value(payload.notificationType, payload.rawNotificationType),
+            subtype=_enum_value(payload.subtype, payload.rawSubtype),
+            notification_uuid=payload.notificationUUID,
+            environment=env_value,
+            original_transaction_id=original_txn,
+            product_id=product_id,
+            expires_at=expires_at,
+            revocation_date=revocation_date,
+            grace_expires_at=grace_expires_at,
+        )
+
+    raise InvalidNotification(f"notification failed verification: {last_error}")
 
 
 def _api_configured() -> bool:
