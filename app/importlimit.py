@@ -20,8 +20,11 @@ Design (see config.FREE_IMPORT_LIMIT / FREE_LIMIT_EFFECTIVE_DATE):
     (the `X-Pro-Entitled` header). It is spoofable; the downside of a forged
     claim is only extra cheap LLM cost, still bounded by the rate limiter.
   * GRANDFATHERING: accounts created strictly before FREE_LIMIT_EFFECTIVE_DATE
-    are exempt forever, so enabling the limit never retroactively restricts an
-    existing user. With the date left in the far future, everyone is exempt.
+    are exempt forever, so moving the date forward never retroactively restricts an
+    existing user. The default date is in the past (1970), so NO account is
+    grandfathered and the five-import free plan applies to everyone — the intended
+    launch behavior. Push the date into the future only to exempt existing users
+    before a later launch.
   * Counting is by SUCCESSFUL import (a job that reaches `_finalize`), including
     cache hits. Failed / site_blocked jobs never finalize, and a paste-text retry
     reuses the same job_id, so the ledger's job_id PRIMARY KEY prevents any
