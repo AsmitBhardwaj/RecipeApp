@@ -204,6 +204,23 @@ class EndpointTests(_DBBase):
             r = self.client.post("/v1/appstore/notifications", json={"signedPayload": "forged"})
         self.assertEqual(r.status_code, 400)
 
+    def test_endpoint_exempt_from_app_key_gate(self):
+        # Apple never sends X-App-Key; with the gate ENABLED the notifications route
+        # must still be reachable (the Apple signature is the auth), while a normal
+        # gated route is rejected 401 without the key.
+        config.APP_KEY = "secret-app-key"
+        try:
+            self._seed(pro_days=-1)
+            with mock.patch.object(appstore, "parse_notification",
+                                   return_value=_pn("DID_RENEW", expires_days=30)):
+                r = self.client.post("/v1/appstore/notifications", json={"signedPayload": "jws"})
+            self.assertEqual(r.status_code, 200, r.text)  # not 401
+            # A different route with no app key is gated.
+            gated = self.client.post("/v1/jobs", json={"url": "http://x"})
+            self.assertEqual(gated.status_code, 401)
+        finally:
+            config.APP_KEY = None
+
 
 if __name__ == "__main__":
     unittest.main()
