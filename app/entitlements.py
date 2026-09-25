@@ -184,3 +184,80 @@ def verify_and_store(
         updated_at=_iso(moment),
     )
     return status_for_user(user.id, moment)
+
+
+# --------------------------------------------------------------------------- #
+# App Store Server Notifications V2 — apply a verified notification
+# --------------------------------------------------------------------------- #
+
+# Notification types that renew/extend the active period (clear any billing grace).
+_RENEWED_TYPES = frozenset({"DID_RENEW", "SUBSCRIBED", "OFFER_REDEEMED", "RESUBSCRIBE"})
+
+
+def apply_notification(parsed, now: Optional[datetime] = None) -> str:
+    """Apply a verified App Store notification to the stored entitlement.
+
+    IDEMPOTENT: the new expiry/grace are recomputed from the notification's own
+    authoritative timestamps, so Apple's retries (or out-of-order redeliveries)
+    converge to the same row. Only updates an EXISTING entitlement, keyed by
+    `original_transaction_id` — a notification for a subscription we've never
+    verified from a client is logged and ignored (we can't attribute it to an
+    account). Returns a short action label for logging. Never raises on a normal
+    outcome."""
+    moment = _now(now)
+    otid = parsed.original_transaction_id
+    if not otid:
+        return "ignored_no_transaction"
+    existing = db.get_entitlement_by_original_txn(otid)
+    if not existing:
+        return "ignored_unknown_subscription"
+
+    nt = parsed.notification_type
+    pro_dt = _parse(existing.get("pro_expires_at"))
+    grace_dt = _parse(existing.get("grace_expires_at"))
+    product = parsed.product_id or existing.get("product_id")
+
+    if nt in _RENEWED_TYPES:
+        # Renewed: extend the active period, no longer in grace.
+        pro_dt = parsed.expires_at or pro_dt
+        grace_dt = None
+    elif nt == "DID_FAIL_TO_RENEW":
+        # Billing issue. If Apple opened a billing-grace window, the renewal info
+        # carries its expiry; otherwise there is no grace (plain billing retry).
+        grace_dt = parsed.grace_expires_at
+    elif nt == "GRACE_PERIOD_EXPIRED":
+        # Grace ended without recovery — drop grace (access ends unless still paid).
+        grace_dt = None
+    elif nt == "EXPIRED":
+        # Subscription lapsed; reflect the transaction's own (past) expiry, no grace.
+        pro_dt = parsed.expires_at or pro_dt
+        grace_dt = None
+    elif nt in ("REFUND", "REVOKE"):
+        # Refunded or access revoked (e.g. Family Sharing) — end access now.
+        pro_dt = None
+        grace_dt = None
+    elif nt == "DID_CHANGE_RENEWAL_STATUS":
+        # Auto-renew toggled on/off — current access is unchanged; just refresh the
+        # expiry if the transaction carried one.
+        if parsed.expires_at:
+            pro_dt = parsed.expires_at
+    else:
+        # Types we don't act on (PRICE_INCREASE, CONSUMPTION_REQUEST, TEST, …).
+        return f"ignored_type:{nt}"
+
+    # A revoked transaction always ends access, whatever the type says.
+    if parsed.revocation_date:
+        pro_dt = None
+        grace_dt = None
+
+    db.upsert_entitlement(
+        user_id=existing["user_id"],
+        product_id=product,
+        original_transaction_id=otid,
+        pro_expires_at=_iso(pro_dt),
+        grace_expires_at=_iso(grace_dt),
+        environment=parsed.environment or existing.get("environment") or "Production",
+        last_verified_at=existing.get("last_verified_at") or _iso(moment),
+        updated_at=_iso(moment),
+    )
+    return f"applied:{nt}"
