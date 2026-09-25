@@ -247,6 +247,24 @@ def _api_configured() -> bool:
     )
 
 
+def private_key_loaded_ok() -> bool:
+    """Whether the configured App Store Connect key parses as a P-256 EC key."""
+    if not config.APPSTORE_PRIVATE_KEY:
+        return False
+    try:
+        from cryptography.hazmat.primitives.asymmetric import ec
+        from cryptography.hazmat.primitives.serialization import load_pem_private_key
+
+        key = load_pem_private_key(
+            config.APPSTORE_PRIVATE_KEY.encode("utf-8"), password=None
+        )
+        return isinstance(key, ec.EllipticCurvePrivateKey) and isinstance(
+            key.curve, ec.SECP256R1
+        )
+    except (TypeError, ValueError):
+        return False
+
+
 def fetch_grace_expiry(original_transaction_id: str, environment: str) -> Optional[datetime]:
     """Look up a subscription's billing-grace expiry via the App Store Server API.
 
