@@ -12,14 +12,14 @@
 //  free-trial phrasing are mapped from the live `Product` (and its
 //  `introductoryOffer`) in `cardData(for:…)`, so an App Store Connect price change
 //  flows through without this view going stale. Yearly is $29.99/yr PERMANENTLY
-//  with a 7-day free trial — there is no discounted-first-year path. The one
-//  figure that is intentionally NOT a real price is the struck-through "$45/yr" on
-//  the Yearly box: a fixed round marketing anchor (see `yearlyCompareAtDisplay`),
-//  display-only. The "Save X%" badge is computed from the REAL prices
-//  (1 − yearly ÷ monthly×12), NOT from that anchor, so it stays honest to actual
-//  pricing. Sample prices live only in the DEBUG harness/previews. Purchase/
-//  entitlement logic is unchanged: selection is a productID resolved back to the
-//  live `Product` for `SubscriptionService.purchase`.
+//  with a 7-day free trial — there is no discounted-first-year path. The Yearly
+//  box's struck-through comparison price is the REAL monthly price × 12, localized
+//  via the monthly product's own `priceFormatStyle`, so it is honest and localizes
+//  with the storefront. If the monthly product isn't loaded there is no strike
+//  (never a hardcoded literal). The "Save X%" badge is likewise computed from the
+//  REAL prices (1 − yearly ÷ monthly×12). Sample prices live only in the DEBUG
+//  harness/previews. Purchase/entitlement logic is unchanged: selection is a
+//  productID resolved back to the live `Product` for `SubscriptionService.purchase`.
 //
 
 import StoreKit
@@ -45,7 +45,7 @@ struct PlanCardData: Identifiable, Equatable {
     let periodNoun: String          // "MONTHLY" / "YEARLY"
     let headlinePrice: String       // the big number — the plan's real base price
     let periodSuffix: String        // "/mo" / "/yr"
-    let strikethroughPrice: String? // Yearly's fixed display anchor, e.g. "$45/yr"
+    let strikethroughPrice: String? // Yearly's comparison price: real monthly × 12, localized
     let saveBadgeText: String?      // "Save 64%" — computed as 1 − yearly ÷ monthly×12
     let subtitle: String            // "Billed monthly" / "7-day free trial"
     let trialText: String?          // "7 days free" when a free-trial intro exists
@@ -83,12 +83,23 @@ struct PlatterProPaywallView: View {
 
     private var planData: [PlanCardData] {
         let products = subscriptions.products
-        // Monthly-equivalent annual spend, used to compute the Yearly "Save X%"
-        // badge (1 − yearly ÷ monthly×12). Read from the live monthly product.
-        let monthlyPerYear: Decimal? = products
-            .first { $0.subscription?.subscriptionPeriod.unit == .month }
-            .map { $0.price * 12 }
-        return products.map { Self.cardData(for: $0, monthlyEquivalentPerYear: monthlyPerYear) }
+        // The live monthly product drives both the Yearly "Save X%" badge and its
+        // struck-through comparison price — the honest cost of paying monthly for a
+        // year.
+        let monthlyProduct = products.first { $0.subscription?.subscriptionPeriod.unit == .month }
+        // Monthly-equivalent annual spend (1 − yearly ÷ monthly×12 for the badge).
+        let monthlyPerYear: Decimal? = monthlyProduct.map { $0.price * 12 }
+        // Struck-through anchor = real monthly × 12, localized via the monthly
+        // product's own currency style. Nil (no strike shown) when monthly isn't
+        // loaded — never a hardcoded literal.
+        let compareAt: String? = monthlyProduct.map { ($0.price * 12).formatted($0.priceFormatStyle) }
+        return products.map {
+            Self.cardData(
+                for: $0,
+                monthlyEquivalentPerYear: monthlyPerYear,
+                yearlyCompareAtDisplay: compareAt
+            )
+        }
     }
 
     private var readyPlans: [PlanCardData] {
@@ -499,17 +510,11 @@ struct PlatterProPaywallView: View {
 
     // MARK: Product → card mapping (the only place real prices are read)
 
-    /// The struck-through comparison price on the Yearly box. A deliberate ROUND
-    /// marketing anchor — NOT a configured/real price. Platter Pro Yearly is
-    /// $29.99/yr permanently, so there is no real price to strike; this anchor is
-    /// intentionally hardcoded here rather than read from StoreKit. USD-literal — a
-    /// non-USD storefront would show this verbatim (revisit if pricing localizes).
-    /// NOTE: this anchor is display-only; the "Save X%" badge is computed from the
-    /// real monthly×12, NOT from this anchor, so the strike and the badge express
-    /// two different comparisons by design.
-    static let yearlyCompareAtDisplay = "$45"
-
-    static func cardData(for product: Product, monthlyEquivalentPerYear: Decimal?) -> PlanCardData {
+    static func cardData(
+        for product: Product,
+        monthlyEquivalentPerYear: Decimal?,
+        yearlyCompareAtDisplay: String?
+    ) -> PlanCardData {
         let unit = product.subscription?.subscriptionPeriod.unit
         let noun: String
         let suffix: String
@@ -534,13 +539,16 @@ struct PlatterProPaywallView: View {
             subtitle = trialStatusLine(from: offer.period)
         }
 
-        // The Yearly box shows the fixed struck comparison anchor ($45) plus a
-        // "Save X%" badge computed from the REAL prices (1 − yearly ÷ monthly×12),
-        // NOT from the anchor — so the badge stays honest to actual pricing.
+        // The Yearly box shows a struck comparison price — the real monthly × 12,
+        // localized (passed in) — plus a "Save X%" badge computed from the same
+        // real prices (1 − yearly ÷ monthly×12). Both are nil-safe: with no monthly
+        // product loaded there is no strike and no badge, never a hardcoded figure.
         var strikethrough: String?
         var saveBadge: String?
         if unit == .year {
-            strikethrough = yearlyCompareAtDisplay + suffix
+            if let compareAt = yearlyCompareAtDisplay {
+                strikethrough = compareAt + suffix
+            }
             if let monthlyPerYear = monthlyEquivalentPerYear {
                 saveBadge = savePercent(discounted: product.price, regular: monthlyPerYear)
             }
@@ -610,16 +618,17 @@ private extension SubscriptionService.PurchaseState {
 
 /// Sample data mirroring what production renders from the live products (Yearly
 /// $29.99/yr permanent with a 7-day free trial; Monthly $6.99/mo). The struck
-/// "$45" is the fixed display-only comparison anchor (see `yearlyCompareAtDisplay`);
-/// the "Save X%" badge is computed from the real prices — 1 − 29.99/(6.99×12) ≈
-/// 64%. Illustrative for previews/QA — production derives all of this via `cardData`.
+/// "$83.88/yr" is the honest comparison price — the real monthly × 12 ($6.99×12),
+/// which production formats via the monthly product's `priceFormatStyle`. The
+/// "Save X%" badge is computed from the same prices — 1 − 29.99/(6.99×12) ≈ 64%.
+/// Illustrative for previews/QA — production derives all of this via `cardData`.
 extension PlanCardData {
     static let sampleYearly = PlanCardData(
         id: "preview.yearly",
         periodNoun: "YEARLY",
         headlinePrice: "$29.99",
         periodSuffix: "/yr",
-        strikethroughPrice: "$45/yr",
+        strikethroughPrice: "$83.88/yr",
         saveBadgeText: "Save 64%",
         subtitle: "7-day free trial",
         trialText: "7 days free"

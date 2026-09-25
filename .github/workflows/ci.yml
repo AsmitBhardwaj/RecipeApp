@@ -11,6 +11,36 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  backend-tests:
+    name: Backend unit tests (pytest)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+
+      # Match the deployed runtime (.python-version / Railway builds cp312 wheels).
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          # pytest is a dev-only dependency — intentionally NOT in the production
+          # requirements.txt (the Railway deploy manifest), so install it here.
+          pip install pytest
+
+      # No secrets needed: DATABASE_URL is cleared so the app uses a local SQLite
+      # file (the same way the suite runs locally); APP_KEY unset => the app-key
+      # gate fails open for tests.
+      - name: Run pytest
+        env:
+          DATABASE_URL: ""
+        run: python -m pytest tests/ -q
+
   recipekit-tests:
     name: RecipeKit unit tests (swift test)
     runs-on: macos-latest
