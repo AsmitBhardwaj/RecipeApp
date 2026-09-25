@@ -42,7 +42,7 @@
               "locale" : "en_US"
             }
           ],
-          "productID" : "dev.platter.placeholder.pro.monthly",
+          "productID" : "com.recipeapp.RecipeApp2.pro.monthly",
           "recurringSubscriptionPeriod" : "P1M",
           "referenceName" : "Platter Pro Monthly",
           "subscriptionGroupID" : "3A5CC107-72CE-44C2-AF80-74984A38F334",
@@ -71,7 +71,7 @@
               "locale" : "en_US"
             }
           ],
-          "productID" : "dev.platter.placeholder.pro.yearly",
+          "productID" : "com.recipeapp.RecipeApp2.pro.yearly",
           "recurringSubscriptionPeriod" : "P1Y",
           "referenceName" : "Platter Pro Yearly",
           "subscriptionGroupID" : "3A5CC107-72CE-44C2-AF80-74984A38F334",
