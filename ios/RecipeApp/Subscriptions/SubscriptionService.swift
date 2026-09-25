@@ -44,6 +44,7 @@ final class SubscriptionService: ObservableObject {
     }
 
     @Published private(set) var products: [Product] = []
+    @Published private(set) var introOfferEligibility: [String: Bool] = [:]
     @Published private(set) var entitlementState: ProEntitlementState = .unknown
     @Published private(set) var purchaseState: PurchaseState = .idle
     @Published private(set) var isLoadingProducts = false
@@ -117,6 +118,7 @@ final class SubscriptionService: ObservableObject {
     func reloadProductsAndEntitlement() async {
         isLoadingProducts = true
         productLoadError = nil
+        introOfferEligibility = [:]
 
         let requested = SubscriptionConfiguration.productIDs
         storeLog.log("Requesting StoreKit products: \(requested.sorted().joined(separator: ", "), privacy: .public)")
@@ -125,6 +127,16 @@ final class SubscriptionService: ObservableObject {
             storeLog.log("StoreKit returned \(loaded.count, privacy: .public) product(s): \(loaded.map(\.id).sorted().joined(separator: ", "), privacy: .public)")
             let byID = Dictionary(uniqueKeysWithValues: loaded.map { ($0.id, $0) })
             products = SubscriptionConfiguration.orderedProductIDs.compactMap { byID[$0] }
+            var eligibility: [String: Bool] = [:]
+            for product in products {
+                guard let subscription = product.subscription,
+                      subscription.introductoryOffer != nil else {
+                    eligibility[product.id] = false
+                    continue
+                }
+                eligibility[product.id] = await subscription.isEligibleForIntroOffer
+            }
+            introOfferEligibility = eligibility
 
             if products.isEmpty {
                 // Empty here almost always means no StoreKit configuration is
@@ -137,6 +149,7 @@ final class SubscriptionService: ObservableObject {
         } catch {
             storeLog.error("Product.products(for:) threw: \(String(describing: error), privacy: .public)")
             productLoadError = Self.userMessage(for: error, fallback: "Couldn't load Platter Pro plans.")
+            introOfferEligibility = [:]
         }
 
         isLoadingProducts = false

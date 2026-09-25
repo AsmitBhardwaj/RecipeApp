@@ -40,6 +40,7 @@ struct RecipeDetailView: View {
                 hero
                 VStack(alignment: .leading, spacing: 24) {
                     header
+                    sourceAttributionRow
                     cookAndServingsRow
                     nutritionSection
                     if !recipe.instructions.isEmpty {
@@ -151,6 +152,29 @@ struct RecipeDetailView: View {
             // retained so this can be reinstated later.
             Text(recipe.title)
                 .font(.editorialTitle(size: 30, relativeTo: .largeTitle))
+        }
+    }
+
+    @ViewBuilder
+    private var sourceAttributionRow: some View {
+        if let attribution = recipe.sourceAttribution {
+            Link(destination: attribution.url) {
+                HStack(spacing: 8) {
+                    Image(systemName: "link")
+                        .accessibilityHidden(true)
+                    Text(attribution.label)
+                        .lineLimit(2)
+                    Spacer(minLength: 0)
+                    Image(systemName: "arrow.up.right")
+                        .font(.caption.weight(.semibold))
+                        .accessibilityHidden(true)
+                }
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(Color.accentColor)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
+            }
+            .accessibilityHint("Opens the original recipe source")
         }
     }
 
