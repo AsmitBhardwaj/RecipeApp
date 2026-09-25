@@ -51,6 +51,13 @@ struct AccountView: View {
         cookingPreferences.country.flatMap { GroceryCountry.localizedName(for: $0) }
     }
 
+    private var displayedVersion: String {
+        let info = Bundle.main.infoDictionary
+        let version = info?["CFBundleShortVersionString"] as? String ?? "—"
+        let build = info?["CFBundleVersion"] as? String ?? "—"
+        return "\(version) (\(build))"
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             header
@@ -161,7 +168,7 @@ struct AccountView: View {
 
                     settingsSection("About") {
                         SettingsCard {
-                            SettingsValueRow(icon: "number", title: "Version", value: "1.0 (mock)")
+                            SettingsValueRow(icon: "number", title: "Version", value: displayedVersion)
                             SettingsDivider()
                             SettingsValueRow(icon: "fork.knife", title: "Recipes are", value: "Free & unlimited")
                         }
