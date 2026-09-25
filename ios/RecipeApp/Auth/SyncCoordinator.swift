@@ -60,7 +60,6 @@ final class SyncCoordinator: ObservableObject {
     init(
         userId: String,
         tokenProvider: @escaping () async throws -> String,
-        proEntitled: @escaping @MainActor () -> Bool = { ProEntitlementCache.isEntitled },
         suiteName: String = AppGroup.identifier
     ) {
         self.userScope = userId
@@ -70,7 +69,6 @@ final class SyncCoordinator: ObservableObject {
         self.client = SyncClient(accessTokenProvider: tokenProvider)
         self.pantryClient = PantrySuggestionsClient(accessTokenProvider: tokenProvider)
         self.budgetClient = BudgetPlanClient(
-            proEntitled: proEntitled,
             accessTokenProvider: tokenProvider
         )
         self.engine = SyncEngine(

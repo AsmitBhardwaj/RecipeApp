@@ -15,6 +15,7 @@ from fastapi.testclient import TestClient
 
 from app import budget, config, db
 from app.models import CostEstimate, LLMRecipe
+from tests.entitlement_utils import grant_pro, revoke_pro
 from app.pipeline import regional_cost
 from app.pipeline.llm import BudgetPlanRecipeLLM
 
@@ -182,10 +183,13 @@ class BudgetPlanEndpointTests(unittest.TestCase):
         os.unlink(self._path)
 
     def _headers(self, pro: bool = True) -> dict:
-        h = {"Authorization": f"Bearer {self.token}", "X-User-Id": "device-1"}
+        # Pro is now a server-verified stored entitlement, not a header. Seed/clear
+        # it to match the requested state, then return plain auth headers.
         if pro:
-            h["X-Pro-Entitled"] = "1"
-        return h
+            grant_pro(self.user.id)
+        else:
+            revoke_pro(self.user.id)
+        return {"Authorization": f"Bearer {self.token}", "X-User-Id": "device-1"}
 
     def _body(self, **over) -> dict:
         body = {
@@ -221,7 +225,7 @@ class BudgetPlanEndpointTests(unittest.TestCase):
         ]
 
     def test_free_user_cannot_call_endpoint(self) -> None:
-        # No X-Pro-Entitled → 403 pro_required, before any generation.
+        # No stored entitlement → 403 pro_required, before any generation.
         r = self.client.post("/v1/meal-plan/budget", json=self._body(), headers=self._headers(pro=False))
         self.assertEqual(r.status_code, 403)
         self.assertEqual(r.json()["detail"]["error_code"], "pro_required")

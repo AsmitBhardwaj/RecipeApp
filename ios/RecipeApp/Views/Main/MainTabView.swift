@@ -53,8 +53,7 @@ struct MainTabView: View {
         _claimSummary = State(initialValue: claim)
         let coordinator = SyncCoordinator(
             userId: userId,
-            tokenProvider: { try await auth.validAccessToken() },
-            proEntitled: { subscriptions.isProUnlocked }
+            tokenProvider: { try await auth.validAccessToken() }
         )
         self.userScope = userId
         _sync = StateObject(wrappedValue: coordinator)

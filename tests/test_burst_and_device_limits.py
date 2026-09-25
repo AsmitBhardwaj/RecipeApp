@@ -28,6 +28,7 @@ from fastapi.testclient import TestClient
 
 from app import burstlimit, config, db, devicesignal
 from app.auth.providers import VerifiedIdentity
+from tests.entitlement_utils import grant_pro, revoke_pro
 
 
 def _fresh_db() -> str:
@@ -222,10 +223,12 @@ class ImportBurstEndpointTests(_DBBase):
         super().tearDown()
 
     def _headers(self, pro: bool) -> dict:
-        h = {"Authorization": f"Bearer {self.token}", "X-User-Id": "device-1"}
+        # Pro is a server-verified stored entitlement now — seed/clear it to match.
         if pro:
-            h["X-Pro-Entitled"] = "1"
-        return h
+            grant_pro(self.user.id)
+        else:
+            revoke_pro(self.user.id)
+        return {"Authorization": f"Bearer {self.token}", "X-User-Id": "device-1"}
 
     def test_pro_hits_burst_but_never_paywall(self) -> None:
         h = self._headers(pro=True)
@@ -297,6 +300,9 @@ class BudgetAndPantryCapTests(_DBBase):
 
         self.user = service.create_email_user("caps@example.com", "pw-123456", "Caps")
         self.token, _ = security.create_access_token(self.user.id)
+        # Budget + pantry are Pro-gated; seed a verified entitlement so these
+        # tests exercise the per-day CAP, not the paywall.
+        grant_pro(self.user.id)
         self.main = main
         self.client = TestClient(main.app)
 
@@ -311,7 +317,6 @@ class BudgetAndPantryCapTests(_DBBase):
         return {
             "Authorization": f"Bearer {self.token}",
             "X-User-Id": "device-1",
-            "X-Pro-Entitled": "1",
         }
 
     def _budget_body(self) -> dict:

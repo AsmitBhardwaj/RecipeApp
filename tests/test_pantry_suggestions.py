@@ -18,6 +18,7 @@ from fastapi.testclient import TestClient
 
 from app import config, db, pantry
 from app.main import app
+from tests.entitlement_utils import grant_pro, revoke_pro
 from app.models import (
     Confidence,
     DishIdentification,
@@ -184,6 +185,12 @@ class EndpointTests(unittest.TestCase):
         r = self.client.post("/auth/register", json={"email": "pantry@user.com", "password": "supersecret1"})
         self.assertEqual(r.status_code, 200, r.text)
         self.auth = {"Authorization": f"Bearer {r.json()['access_token']}"}
+        # Pantry suggestions are now Pro-gated server-side; seed a verified
+        # entitlement for the test account so the suggestion logic is reachable.
+        from app.auth import service
+
+        self.user_id = service.get_user_by_email("pantry@user.com").id
+        grant_pro(self.user_id)
 
     def tearDown(self):
         config.DB_PATH = self._orig_db
@@ -205,6 +212,13 @@ class EndpointTests(unittest.TestCase):
 
     def test_requires_auth(self):
         self.assertEqual(self.client.post("/v1/pantry/suggestions", json={}).status_code, 401)
+
+    def test_free_user_gets_pro_required(self):
+        # No stored entitlement → 403 pro_required, before any suggestion work.
+        revoke_pro(self.user_id)
+        r = self._suggest(allow_generation=False)
+        self.assertEqual(r.status_code, 403, r.text)
+        self.assertEqual(r.json()["detail"]["error_code"], "pro_required")
 
     def test_cache_search_uses_synced_pantry(self):
         db.save_recipe(CARBONARA)

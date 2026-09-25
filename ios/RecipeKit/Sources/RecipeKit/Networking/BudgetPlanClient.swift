@@ -4,8 +4,9 @@
 //
 //  Networking for Plan on a Budget: POST /v1/meal-plan/budget. Account-scoped and
 //  Pro-gated server-side, so — like PantrySuggestionsClient — every request carries
-//  a Bearer access token plus the X-App-Key, and additionally the `X-Pro-Entitled`
-//  claim the server checks. Injected base URL / URLSession keep it unit-testable.
+//  a Bearer access token plus the X-App-Key. Pro is verified from the account's
+//  stored entitlement server-side (no client Pro header). Injected base URL /
+//  URLSession keep it unit-testable.
 //
 
 import Foundation
@@ -14,20 +15,17 @@ public struct BudgetPlanClient {
     private let baseURL: URL
     private let session: URLSession
     private let appKey: () -> String
-    private let proEntitled: @MainActor () -> Bool
     private let accessTokenProvider: () async throws -> String
 
     public init(
         baseURL: URL = APIRecipeProvider.defaultBaseURL,
         session: URLSession = .shared,
         appKey: @escaping () -> String = { AppConfig.appKey },
-        proEntitled: @escaping @MainActor () -> Bool = { ProEntitlementCache.isEntitled },
         accessTokenProvider: @escaping () async throws -> String
     ) {
         self.baseURL = baseURL
         self.session = session
         self.appKey = appKey
-        self.proEntitled = proEntitled
         self.accessTokenProvider = accessTokenProvider
     }
 
@@ -62,7 +60,6 @@ public struct BudgetPlanClient {
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         let key = appKey()
         if !key.isEmpty { request.setValue(key, forHTTPHeaderField: "X-App-Key") }
-        if await proEntitled() { request.setValue("1", forHTTPHeaderField: "X-Pro-Entitled") }
         let token = try await accessTokenProvider()
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         return request

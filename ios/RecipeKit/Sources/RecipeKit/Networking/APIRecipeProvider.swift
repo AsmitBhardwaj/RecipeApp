@@ -40,11 +40,6 @@ public struct APIRecipeProvider: RecipeProvider {
     /// a valid session (401 otherwise). Async for the refresh round-trip.
     /// Injectable for tests.
     let authToken: () async -> String?
-    /// The client's Pro entitlement claim, cached in the App Group so the Share
-    /// Extension (which can't query StoreKit) can send it too. Sent as
-    /// `X-Pro-Entitled` and used only to waive the free-import limit. Injectable
-    /// for tests.
-    let proEntitled: @MainActor () -> Bool
     /// Poll cadence and total budget for `submitRecipe`.
     let pollInterval: Duration
     let maxWait: Duration
@@ -55,7 +50,6 @@ public struct APIRecipeProvider: RecipeProvider {
         userID: @escaping () -> String = { RecipeKit.currentUserID },
         appKey: @escaping () -> String = { AppConfig.appKey },
         authToken: @escaping () async -> String? = { await SessionTokenProvider().accessTokenOrNil() },
-        proEntitled: @escaping @MainActor () -> Bool = { ProEntitlementCache.isEntitled },
         pollInterval: Duration = .seconds(1.5),
         maxWait: Duration = .seconds(120)
     ) {
@@ -64,7 +58,6 @@ public struct APIRecipeProvider: RecipeProvider {
         self.userID = userID
         self.appKey = appKey
         self.authToken = authToken
-        self.proEntitled = proEntitled
         self.pollInterval = pollInterval
         self.maxWait = maxWait
     }
@@ -211,11 +204,11 @@ public struct APIRecipeProvider: RecipeProvider {
         if let token = await authToken(), !token.isEmpty {
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
-        // Pro claim: waives the limit server-side. Sent only when entitled, so a
-        // free client sends nothing (the backend defaults to non-Pro).
-        if await proEntitled() {
-            request.setValue("1", forHTTPHeaderField: "X-Pro-Entitled")
-        }
+        // Pro is server-verified per account (via /v1/entitlements/verify) — the
+        // client no longer sends any Pro header. The backend reads the stored,
+        // Apple-verified entitlement for the authenticated account, so the Share
+        // Extension's imports are recognized as Pro automatically once the main
+        // app has verified the subscription.
     }
 
     private func send<T: Decodable>(_ request: URLRequest) async throws -> T {

@@ -98,6 +98,29 @@ import_events = Table(
     Index("ix_import_events_account_month", "account_id", "year_month"),
 )
 
+# Server-verified Pro entitlement (app/entitlements.py). ONE row per account,
+# written only from a StoreKit 2 transaction verified against Apple — never from a
+# client header. Kept as its own table (not columns on `users`) so it is created
+# cleanly by `create_all` with no Postgres column migration, matching the pattern
+# used by import_events / account_device_signals. `original_transaction_id` is
+# Apple's stable per-subscription key and is UNIQUE across accounts: a given
+# subscription grants Pro to at most one Platter account at a time (verifying it
+# from a new account moves it and revokes the old one — see entitlements.py).
+# `pro_expires_at` / `grace_expires_at` are ISO-8601 UTC strings (or null).
+entitlements = Table(
+    "entitlements",
+    metadata,
+    Column("user_id", String, primary_key=True),
+    Column("product_id", Text, nullable=False),
+    Column("original_transaction_id", Text, nullable=False, unique=True),
+    Column("pro_expires_at", Text),
+    Column("grace_expires_at", Text),
+    Column("environment", Text, nullable=False),
+    Column("last_verified_at", Text, nullable=False),
+    Column("updated_at", Text, nullable=False),
+    Index("ix_entitlements_original_txn", "original_transaction_id"),
+)
+
 # Device-level account-creation abuse signal (app/devicesignal.py). One row per
 # account, recording the device (the client's persistent `X-User-Id`) it was
 # created from and whether that device had ALREADY created another account within
@@ -347,6 +370,79 @@ def count_imports_in_month(account_id: str, year_month: str) -> int:
     )
     with _get_engine().begin() as conn:
         return int(conn.execute(stmt).scalar_one())
+
+
+# --------------------------------------------------------------------------- #
+# Entitlements (server-verified Pro — app/entitlements.py)
+# --------------------------------------------------------------------------- #
+
+
+def get_entitlement(user_id: str) -> Optional[dict]:
+    """The entitlement row for an account, or None. Returned as a plain dict so
+    the policy layer stays free of SQLAlchemy row objects."""
+    with _get_engine().begin() as conn:
+        row = conn.execute(
+            select(entitlements).where(entitlements.c.user_id == user_id)
+        ).mappings().fetchone()
+    return dict(row) if row else None
+
+
+def get_entitlement_by_original_txn(original_transaction_id: str) -> Optional[dict]:
+    """The entitlement row that currently owns a given Apple subscription
+    (`original_transaction_id`), or None. Used to enforce that one subscription
+    maps to at most one account."""
+    with _get_engine().begin() as conn:
+        row = conn.execute(
+            select(entitlements).where(
+                entitlements.c.original_transaction_id == original_transaction_id
+            )
+        ).mappings().fetchone()
+    return dict(row) if row else None
+
+
+def upsert_entitlement(
+    *,
+    user_id: str,
+    product_id: str,
+    original_transaction_id: str,
+    pro_expires_at: Optional[str],
+    grace_expires_at: Optional[str],
+    environment: str,
+    last_verified_at: str,
+    updated_at: str,
+) -> None:
+    """Insert or replace an account's entitlement row (keyed by user_id)."""
+    stmt = _insert(entitlements).values(
+        user_id=user_id,
+        product_id=product_id,
+        original_transaction_id=original_transaction_id,
+        pro_expires_at=pro_expires_at,
+        grace_expires_at=grace_expires_at,
+        environment=environment,
+        last_verified_at=last_verified_at,
+        updated_at=updated_at,
+    )
+    stmt = stmt.on_conflict_do_update(
+        index_elements=["user_id"],
+        set_={
+            "product_id": stmt.excluded.product_id,
+            "original_transaction_id": stmt.excluded.original_transaction_id,
+            "pro_expires_at": stmt.excluded.pro_expires_at,
+            "grace_expires_at": stmt.excluded.grace_expires_at,
+            "environment": stmt.excluded.environment,
+            "last_verified_at": stmt.excluded.last_verified_at,
+            "updated_at": stmt.excluded.updated_at,
+        },
+    )
+    with _get_engine().begin() as conn:
+        conn.execute(stmt)
+
+
+def delete_entitlement(user_id: str) -> None:
+    """Remove an account's entitlement row (used when a subscription is moved to a
+    different account, so the old account no longer reads as Pro)."""
+    with _get_engine().begin() as conn:
+        conn.execute(delete(entitlements).where(entitlements.c.user_id == user_id))
 
 
 # --------------------------------------------------------------------------- #

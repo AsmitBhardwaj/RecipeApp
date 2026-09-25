@@ -56,8 +56,46 @@ final class SubscriptionService: ObservableObject {
     private var updatesTask: Task<Void, Never>?
     private var hasStarted = false
 
-    init(defaults: UserDefaults = .standard) {
+    /// The signed-in account's id as a UUID, stamped onto a purchase as
+    /// `appAccountToken` so the backend can bind the subscription to this account.
+    /// Returns nil when signed out or the id isn't UUID-shaped.
+    private let accountUUID: () -> UUID?
+    /// Sends a verified transaction's `jwsRepresentation` to the backend, which
+    /// re-verifies it against Apple and persists Pro for the account (the server is
+    /// the authority for API access). Injectable for tests; the default posts to
+    /// `/v1/entitlements/verify`.
+    private let verifyTransaction: (String) async -> Void
+
+    enum EntitlementSyncError: Error { case notSignedIn }
+
+    init(
+        defaults: UserDefaults = .standard,
+        accountUUID: @escaping () -> UUID? = { nil },
+        verifyTransaction: ((String) async -> Void)? = nil
+    ) {
         self.defaults = defaults
+        self.accountUUID = accountUUID
+        self.verifyTransaction = verifyTransaction ?? Self.makeServerVerifier()
+    }
+
+    /// Builds the production server-verify closure: post the JWS to the backend
+    /// using the shared account session token. Server-sync failures are logged and
+    /// swallowed — local verified StoreKit state still drives the UI, and the next
+    /// refresh (or a later launch) retries the sync.
+    private static func makeServerVerifier() -> (String) async -> Void {
+        return { jws in
+            let client = EntitlementClient(accessTokenProvider: {
+                guard let token = await SessionTokenProvider().accessTokenOrNil() else {
+                    throw EntitlementSyncError.notSignedIn
+                }
+                return token
+            })
+            do {
+                _ = try await client.verify(signedTransaction: jws)
+            } catch {
+                storeLog.error("entitlement server sync failed: \(String(describing: error), privacy: .public)")
+            }
+        }
     }
 
     deinit {
@@ -109,11 +147,17 @@ final class SubscriptionService: ObservableObject {
         isRefreshingEntitlement = true
 
         var currentRecords: [SubscriptionEntitlementRecord] = []
+        var currentVerifiedJWS: String?
         for await result in Transaction.currentEntitlements {
             guard SubscriptionConfiguration.productIDs.contains(result.unsafePayloadValue.productID) else {
                 continue
             }
             currentRecords.append(record(from: result))
+            // Only a verified transaction is worth sending to the server; the
+            // backend re-verifies it against Apple regardless.
+            if case .verified = result {
+                currentVerifiedJWS = result.jwsRepresentation
+            }
         }
 
         var latestRecords: [SubscriptionEntitlementRecord] = []
@@ -129,12 +173,22 @@ final class SubscriptionService: ObservableObject {
             productIDs: SubscriptionConfiguration.productIDs
         )
         cacheDisplayState()
-        // Mirror the verified Pro status into the App Group so the Share Extension
-        // (which can't query StoreKit) can send the X-Pro-Entitled claim that
-        // waives the server-side free-import limit. Derived from verified state,
-        // never from cached UI text.
+        // Mirror the verified Pro status into the App Group purely as a UI
+        // convenience: it lets a returning subscriber see Pro content on cold
+        // launch with no flash of a locked state before StoreKit resolves (see
+        // ProGate). It is NOT sent to the backend any more — server access is
+        // gated by the Apple-verified entitlement posted below. Derived from
+        // verified state, never from cached UI text.
         ProEntitlementCache.set(entitlementState.grantsAccess)
         isRefreshingEntitlement = false
+
+        // Push the verified transaction to the backend so the server-side
+        // entitlement (the authority for API access, and what the Share Extension
+        // relies on) reflects this subscription. Covers purchase, restore,
+        // Transaction.updates, and launch — all of which route through here.
+        if let jws = currentVerifiedJWS {
+            await verifyTransaction(jws)
+        }
     }
 
     func purchase(_ product: Product) async {
@@ -145,7 +199,17 @@ final class SubscriptionService: ObservableObject {
 
         purchaseState = .purchasing
         do {
-            switch try await product.purchase() {
+            // Stamp the account UUID as appAccountToken so the backend binds this
+            // subscription to the signed-in account (one subscription → one
+            // account). Omitted when signed out / non-UUID id; the server then
+            // binds by original_transaction_id instead.
+            let purchaseOptions: Set<Product.PurchaseOption>
+            if let token = accountUUID() {
+                purchaseOptions = [.appAccountToken(token)]
+            } else {
+                purchaseOptions = []
+            }
+            switch try await product.purchase(options: purchaseOptions) {
             case .success(let verification):
                 switch verification {
                 case .verified(let transaction):
