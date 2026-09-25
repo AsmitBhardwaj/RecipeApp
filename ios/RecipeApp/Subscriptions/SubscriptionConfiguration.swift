@@ -8,11 +8,10 @@
 import Foundation
 
 enum SubscriptionConfiguration {
-    // DEVELOPMENT PLACEHOLDERS. Replace these two values with the exact
-    // auto-renewable subscription product IDs created in App Store Connect
-    // before shipping. Keep PlatterPro.storekit in sync with any change.
-    static let monthlyProductID = "dev.platter.placeholder.pro.monthly"
-    static let yearlyProductID = "dev.platter.placeholder.pro.yearly"
+    // The live auto-renewable subscription product IDs, created in App Store
+    // Connect. Keep PlatterPro.storekit in sync with any change to these.
+    static let monthlyProductID = "com.recipeapp.RecipeApp2.pro.monthly"
+    static let yearlyProductID = "com.recipeapp.RecipeApp2.pro.yearly"
 
     static let productIDs: Set<String> = [monthlyProductID, yearlyProductID]
     static let orderedProductIDs = [yearlyProductID, monthlyProductID]
