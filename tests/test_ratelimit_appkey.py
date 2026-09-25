@@ -124,19 +124,38 @@ class AppKeyGateTests(unittest.TestCase):
             setattr(config, k, 100000)
 
         import app.main as main
+        from app.auth import security, service
+
+        # /v1/jobs now requires a valid session token (current_user), so mint a
+        # real account + access token to authenticate the app-key-focused calls.
+        self.user = service.create_email_user("gate@example.com", "pw-123456", "Gate")
+        self.token, _ = security.create_access_token(self.user.id)
 
         self.main = main
-        main.orchestrator.create_job = lambda url, uid, account_id=None: Job(
-            job_id="j1",
-            user_id=uid,
-            url=url,
-            canonical_video_id="v1",
-            platform="instagram",
-            status="queued",
-            created_at=datetime.now(timezone.utc).isoformat(),
-        )
+        # Count create_job calls so a rejected request can be shown to do NO work.
+        self.create_calls = 0
+
+        def _stub_create(url, uid, account_id=None):
+            self.create_calls += 1
+            return Job(
+                job_id="j1",
+                user_id=uid,
+                url=url,
+                canonical_video_id="v1",
+                platform="instagram",
+                status="queued",
+                created_at=datetime.now(timezone.utc).isoformat(),
+            )
+
+        main.orchestrator.create_job = _stub_create
         main.orchestrator.process_job = lambda job: None
         self.client = TestClient(main.app)
+
+    def _auth(self, extra: dict | None = None) -> dict:
+        h = {"X-App-Key": "top-secret", "Authorization": f"Bearer {self.token}"}
+        if extra:
+            h.update(extra)
+        return h
 
     def tearDown(self) -> None:
         config.DB_PATH = self._orig_db
@@ -159,21 +178,30 @@ class AppKeyGateTests(unittest.TestCase):
         self.assertEqual(r.status_code, 401)
 
     def test_correct_key_passes(self) -> None:
+        r = self.client.post("/v1/jobs", json={"url": "http://x"}, headers=self._auth())
+        self.assertEqual(r.status_code, 200)
+
+    def test_missing_token_rejected_without_work(self) -> None:
+        # App key present but no session token: 401 from current_user, and the
+        # pipeline (create_job / any OpenAI call) is never reached.
+        r = self.client.post(
+            "/v1/jobs", json={"url": "http://x"}, headers={"X-App-Key": "top-secret"}
+        )
+        self.assertEqual(r.status_code, 401)
+        self.assertEqual(self.create_calls, 0)
+
+    def test_gate_disabled_when_no_key_configured(self) -> None:
+        config.APP_KEY = None  # fail-open for local dev — but auth is still required
         r = self.client.post(
             "/v1/jobs",
             json={"url": "http://x"},
-            headers={"X-App-Key": "top-secret", "X-User-Id": "user-A"},
+            headers={"Authorization": f"Bearer {self.token}"},
         )
-        self.assertEqual(r.status_code, 200)
-
-    def test_gate_disabled_when_no_key_configured(self) -> None:
-        config.APP_KEY = None  # fail-open for local dev
-        r = self.client.post("/v1/jobs", json={"url": "http://x"})
         self.assertEqual(r.status_code, 200)
 
     def test_rate_limit_maps_to_429(self) -> None:
         config.RATE_LIMIT_USER_PER_MIN = 2
-        h = {"X-App-Key": "top-secret", "X-User-Id": "burst"}
+        h = self._auth()
         codes = [
             self.client.post("/v1/jobs", json={"url": "http://x"}, headers=h).status_code
             for _ in range(3)

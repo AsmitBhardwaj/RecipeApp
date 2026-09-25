@@ -435,6 +435,23 @@ def accounts_over_spend(since_iso: str, threshold_usd: float) -> list[dict]:
     return [dict(r) for r in rows]
 
 
+def account_spend_since(account_id: str, since_iso: str) -> float:
+    """Total estimated LLM spend (USD) for ONE account since `since_iso`
+    (ISO-8601 UTC). Powers the hard per-account 30-day spend cap (app/spendcap.py),
+    so it must be cheap — served by the (account_id, created_at) index. Rows with a
+    NULL cost (a model with no configured pricing) contribute 0."""
+    from sqlalchemy import func
+
+    cost = func.coalesce(func.sum(llm_cost_events.c.estimated_cost_usd), 0.0)
+    stmt = (
+        select(cost)
+        .where(llm_cost_events.c.account_id == account_id)
+        .where(llm_cost_events.c.created_at >= since_iso)
+    )
+    with _get_engine().begin() as conn:
+        return float(conn.execute(stmt).scalar() or 0.0)
+
+
 # --------------------------------------------------------------------------- #
 # Device-level account-creation signal (app/devicesignal.py)
 # --------------------------------------------------------------------------- #

@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import hmac
 import html
+import logging
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -15,8 +16,8 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from pydantic import BaseModel, field_validator, model_validator
 
-from . import burstlimit, config, db, importlimit, ratelimit, spendsignal
-from .auth.router import current_user, optional_current_user, router as auth_router
+from . import burstlimit, config, db, importlimit, ratelimit, spendcap, spendsignal
+from .auth.router import current_user, router as auth_router
 from .auth.service import User
 from .models import Job, Recipe
 from .mealplan import router as mealplan_router
@@ -135,6 +136,26 @@ def _enforce_import_burst_limit(account: Optional[User]) -> None:
         )
 
 
+def _enforce_spend_cap(account: User) -> None:
+    """Reject with 429 + the distinct `spend_cap_reached` code when an account is
+    at/over its HARD trailing-30-day estimated-spend cap (app/spendcap.py). Applies
+    to Pro and free alike (cost is cost); sits above the count-based burst caps as a
+    dollar backstop. Like the burst caps, the code differs from the paywall's 402
+    so the client shows a "try later" message, not an upgrade prompt."""
+    try:
+        spendcap.check(account.id)
+    except spendcap.SpendCapExceeded as exc:
+        raise HTTPException(
+            status_code=429,
+            detail={
+                "error_code": exc.code,
+                "message": "You've hit your recent usage limit. It frees up as your usage from the past 30 days ages off.",
+                "limit": exc.limit,
+                "window": exc.window_label,
+            },
+        )
+
+
 def _client_ip(request: Request) -> str:
     """Real client IP. Behind the Railway proxy the true address is the first
     hop of X-Forwarded-For; `request.client` would just be the proxy."""
@@ -215,9 +236,13 @@ def health_ready() -> JSONResponse:
     try:
         db_status = db.health_check()
     except Exception as exc:  # noqa: BLE001 - any DB failure => not ready
+        # Log the real error server-side, but do NOT return it: a DB exception
+        # string can carry the connection DSN (host/user), and /health is publicly
+        # reachable (exempt from the app-key gate) for uptime probes.
+        logging.getLogger("uvicorn.error").error("readiness check failed: %s", exc)
         return JSONResponse(
             status_code=503,
-            content={"status": "unhealthy", "database": "error", "detail": str(exc)},
+            content={"status": "unhealthy", "database": "error"},
         )
     return JSONResponse(
         status_code=200,
@@ -230,14 +255,18 @@ def submit_job(
     req: JobRequest,
     background_tasks: BackgroundTasks,
     request: Request,
-    account: Optional[User] = Depends(optional_current_user),
+    account: User = Depends(current_user),
 ) -> JobResponse:
+    # Auth is REQUIRED here (current_user → 401 on a missing/invalid token) so no
+    # OpenAI call is ever made for an unauthenticated caller. Identity is the
+    # verified account (JWT `sub`); the spoofable X-User-Id is no longer trusted
+    # or read on this route.
+
     # Rate-limit only the expensive submit path — GET polling (every ~1.5s) must
-    # not burn the extraction budget. Both the per-user-id and per-IP dimensions
-    # are enforced (see app/ratelimit.py).
-    user_id = _resolve_user_id(request)
+    # not burn the extraction budget. Keyed on the verified account id and the
+    # client IP (see app/ratelimit.py).
     try:
-        ratelimit.check(user_id, _client_ip(request))
+        ratelimit.check(account.id, _client_ip(request))
     except ratelimit.RateLimitExceeded as exc:
         raise HTTPException(status_code=429, detail=str(exc))
 
@@ -251,13 +280,17 @@ def submit_job(
     # a free user at their monthly limit still gets the paywall, not this.
     _enforce_import_burst_limit(account)
 
+    # Hard per-account 30-day dollar cap — the enforcing backstop above the count
+    # caps (429 + spend_cap_reached). Blocks once trailing-30-day estimated spend
+    # is over the cap, regardless of Pro status.
+    _enforce_spend_cap(account)
+
     # Persist a queued job and return its id immediately — the extension can't
     # hold the request open while we scrape + call the LLM. The actual work runs
     # after the response is sent (CLAUDE.md §3: submit-and-close). The verified
-    # account id (if signed in) is stamped on the job so the eventual success is
-    # counted against the right account, across devices.
-    account_id = account.id if account else None
-    job = orchestrator.create_job(req.url, user_id, account_id=account_id)
+    # account id is stamped on the job so the eventual success is counted against
+    # the right account, across devices.
+    job = orchestrator.create_job(req.url, account.id, account_id=account.id)
     background_tasks.add_task(orchestrator.process_job, job)
     return _with_recipe(job)  # recipe is None while status == "queued"
 
@@ -279,20 +312,20 @@ def paste_job_text(
     job_id: str,
     req: PasteRequest,
     request: Request,
-    account: Optional[User] = Depends(optional_current_user),
+    account: User = Depends(current_user),
 ) -> JobResponse:
     """Retry a failed job with user-pasted recipe text (the remedy for the
     `site_blocked` state and its caption analog — see
-    orchestrator.process_pasted_text). Same app-key gate (middleware) and
-    per-user/per-IP rate limit as the submit path.
+    orchestrator.process_pasted_text). Auth is REQUIRED (current_user → 401 on a
+    missing/invalid token, before any LLM work); same app-key gate (middleware)
+    and per-account/per-IP rate limit as the submit path.
 
     Runs synchronously and returns the finished recipe (or a failed job): unlike
     the fire-and-forget submit path, the caller (the paste screen) is actively
     waiting on the result.
     """
-    user_id = _resolve_user_id(request)
     try:
-        ratelimit.check(user_id, _client_ip(request))
+        ratelimit.check(account.id, _client_ip(request))
     except ratelimit.RateLimitExceeded as exc:
         raise HTTPException(status_code=429, detail=str(exc))
 
@@ -301,6 +334,7 @@ def paste_job_text(
     # burst/daily import ceiling, both checked before any work.
     _enforce_import_limit(account, request)
     _enforce_import_burst_limit(account)
+    _enforce_spend_cap(account)
 
     text = req.text.strip()
     if len(text) < 10:
@@ -311,10 +345,9 @@ def paste_job_text(
         raise HTTPException(status_code=404, detail="job not found")
 
     # Attribute the import to the signed-in account so its success is counted
-    # under the right account (the original job may have been created anonymously
-    # or before this field existed).
-    if account is not None:
-        job.account_id = account.id
+    # under the right account (the original job may have been created before this
+    # field existed).
+    job.account_id = account.id
 
     job = orchestrator.process_pasted_text(job, text)
     return _with_recipe(job)

@@ -255,15 +255,15 @@ class ImportBurstEndpointTests(_DBBase):
         self.assertEqual(r.status_code, 402)
         self.assertEqual(r.json()["detail"]["error_code"], "free_limit_reached")
 
-    def test_anonymous_import_is_not_burst_limited(self) -> None:
-        # No token → no account → the per-account burst cap does not apply (these
-        # requests are bounded only by the per-user/IP limiter). Well past 2.
+    def test_unauthenticated_import_is_rejected(self) -> None:
+        # /v1/jobs now requires a valid session token (current_user): with no token
+        # every attempt is 401 — no account is ever created, so no LLM work runs.
         h = {"X-User-Id": "device-anon"}
         codes = [
             self.client.post("/v1/jobs", json={"url": "http://x"}, headers=h).status_code
             for _ in range(5)
         ]
-        self.assertTrue(all(c == 200 for c in codes), codes)
+        self.assertTrue(all(c == 401 for c in codes), codes)
 
     def test_paste_path_is_burst_limited(self) -> None:
         h = self._headers(pro=True)

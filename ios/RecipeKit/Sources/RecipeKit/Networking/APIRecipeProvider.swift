@@ -34,10 +34,12 @@ public struct APIRecipeProvider: RecipeProvider {
     /// tests; defaults to the build-time value in the app bundle.
     let appKey: () -> String
     /// The signed-in account's Bearer access token, or nil when not signed in.
-    /// Read from the shared App-Group keychain so BOTH the app and the Share
-    /// Extension attach it — this is what lets the backend enforce the free-import
-    /// limit per account, across devices. Injectable for tests.
-    let authToken: () -> String?
+    /// Resolved from the shared App-Group session, REFRESHING an expiring token
+    /// first (see `SessionTokenProvider`) so both the app and the Share Extension
+    /// send a currently-valid token — required now that /v1/jobs and /paste demand
+    /// a valid session (401 otherwise). Async for the refresh round-trip.
+    /// Injectable for tests.
+    let authToken: () async -> String?
     /// The client's Pro entitlement claim, cached in the App Group so the Share
     /// Extension (which can't query StoreKit) can send it too. Sent as
     /// `X-Pro-Entitled` and used only to waive the free-import limit. Injectable
@@ -52,7 +54,7 @@ public struct APIRecipeProvider: RecipeProvider {
         session: URLSession = .shared,
         userID: @escaping () -> String = { RecipeKit.currentUserID },
         appKey: @escaping () -> String = { AppConfig.appKey },
-        authToken: @escaping () -> String? = { AuthSessionStore().load()?.accessToken },
+        authToken: @escaping () async -> String? = { await SessionTokenProvider().accessTokenOrNil() },
         proEntitled: @escaping @MainActor () -> Bool = { ProEntitlementCache.isEntitled },
         pollInterval: Duration = .seconds(1.5),
         maxWait: Duration = .seconds(120)
@@ -201,10 +203,12 @@ public struct APIRecipeProvider: RecipeProvider {
         if !key.isEmpty {
             request.setValue(key, forHTTPHeaderField: "X-App-Key")
         }
-        // Verified account (Bearer) so the free-import limit counts per account,
-        // not per spoofable device id. Absent when signed out — the backend then
-        // treats the request as anonymous.
-        if let token = authToken(), !token.isEmpty {
+        // Verified account (Bearer), refreshed if the stored token is expiring.
+        // Required by /v1/jobs and /paste (401 without it); also lets the backend
+        // count the free-import limit per account. Absent only when signed out or a
+        // refresh definitively failed — those routes then return 401 and the caller
+        // routes the user to sign-in.
+        if let token = await authToken(), !token.isEmpty {
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
         // Pro claim: waives the limit server-side. Sent only when entitled, so a
@@ -239,6 +243,13 @@ public struct APIRecipeProvider: RecipeProvider {
         if http.statusCode == 402 {
             throw RecipeProviderError.freeLimitReached
         }
+        // 429 with the backend code "spend_cap_reached" = the hard per-account
+        // 30-day spend cap. Surface it as a distinct case (not a generic 429) so
+        // the UI shows the "this month's usage limit" message; any other 429 stays
+        // the generic "slow down" httpStatus.
+        if http.statusCode == 429, Self.decodeErrorCode(data) == "spend_cap_reached" {
+            throw RecipeProviderError.spendCapReached
+        }
         guard (200..<300).contains(http.statusCode) else {
             throw RecipeProviderError.httpStatus(http.statusCode)
         }
@@ -247,6 +258,25 @@ public struct APIRecipeProvider: RecipeProvider {
         } catch {
             throw RecipeProviderError.invalidResponse("could not decode response: \(error)")
         }
+    }
+}
+
+// MARK: - Error-envelope decoding
+
+extension APIRecipeProvider {
+    /// Pull `detail.error_code` out of a coded error body ({ "detail": { "error_code": … } }).
+    /// Returns nil when the body isn't that shape (e.g. a plain-string detail), so
+    /// callers fall back to status-code handling.
+    fileprivate static func decodeErrorCode(_ data: Data) -> String? {
+        (try? JSONDecoder().decode(CodedErrorEnvelope.self, from: data))?.detail.errorCode
+    }
+}
+
+private struct CodedErrorEnvelope: Decodable {
+    let detail: Detail
+    struct Detail: Decodable {
+        let errorCode: String?
+        enum CodingKeys: String, CodingKey { case errorCode = "error_code" }
     }
 }
 

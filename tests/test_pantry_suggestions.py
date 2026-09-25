@@ -268,6 +268,54 @@ class EndpointTests(unittest.TestCase):
         self.assertIsNone(gen["nutrition"])  # suppressed on the wire too
         self.assertEqual(body["counts"]["generated"], 1)
 
+    # --- Hard 30-day spend cap: gates ONLY the generation-fallback path --------
+
+    def _seed_spend_over_cap(self) -> None:
+        """Record enough LLM cost for this account (this instant, in-window) to be
+        over the cap, and pin the cap to a known value for the test."""
+        from datetime import datetime, timezone
+
+        config.PER_ACCOUNT_30D_SPEND_CAP_USD = 5.0
+        me = self.client.get("/auth/me", headers=self.auth).json()
+        db.record_llm_cost_event(
+            account_id=me["id"],
+            call_type="pantry_suggestion",
+            model="test-model",
+            prompt_tokens=1,
+            cached_tokens=0,
+            completion_tokens=1,
+            estimated_cost_usd=6.0,  # > 5.0 cap
+            created_at=datetime.now(timezone.utc).isoformat(),
+        )
+
+    def test_cache_search_not_blocked_when_over_spend_cap(self):
+        orig_cap = config.PER_ACCOUNT_30D_SPEND_CAP_USD
+        try:
+            db.save_recipe(CARBONARA)
+            db.save_recipe(OMELETTE)  # plentiful -> no generation
+            self._seed_spend_over_cap()
+            with mock.patch.object(pantry.llm, "suggest_dishes_from_pantry") as gen:
+                r = self._suggest(pantry_override=["egg", "spaghetti", "bacon"])
+            # Cache-search makes no LLM call, so the spend cap must NOT block it.
+            self.assertEqual(r.status_code, 200, r.text)
+            gen.assert_not_called()
+            self.assertTrue(len(r.json()["matches"]) > 0)
+        finally:
+            config.PER_ACCOUNT_30D_SPEND_CAP_USD = orig_cap
+
+    def test_generation_blocked_when_over_spend_cap(self):
+        orig_cap = config.PER_ACCOUNT_30D_SPEND_CAP_USD
+        try:
+            # Empty cache -> generation would fire, but the account is over the cap.
+            self._seed_spend_over_cap()
+            with mock.patch.object(pantry.llm, "suggest_dishes_from_pantry") as gen:
+                r = self._suggest(pantry_override=["egg", "rice"])
+            self.assertEqual(r.status_code, 429, r.text)
+            self.assertEqual(r.json()["detail"]["error_code"], "spend_cap_reached")
+            gen.assert_not_called()  # blocked BEFORE any LLM work
+        finally:
+            config.PER_ACCOUNT_30D_SPEND_CAP_USD = orig_cap
+
 
 if __name__ == "__main__":
     unittest.main()

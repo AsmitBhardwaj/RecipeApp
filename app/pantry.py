@@ -26,7 +26,7 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
-from . import burstlimit, db, llm_cost
+from . import burstlimit, db, llm_cost, spendcap
 from .auth.router import current_user
 from .auth.service import User
 from .ingredient_matching import ingredients_match, normalize_ingredient_name
@@ -299,7 +299,12 @@ def build_suggestions(
     generated: List[Suggestion] = []
     if allow_generation and len(matches) < SPARSE_THRESHOLD:
         # Only this fallback fans out to the LLM (cache-search above makes no model
-        # call) — attribute its cost to this account under "pantry_suggestion".
+        # call), so the hard 30-day spend cap is checked HERE, not on the endpoint —
+        # a cache-only search never spends and must never be blocked. Raises
+        # SpendCapExceeded, which the router maps to 429; cache `matches` are still
+        # computed above, but we fail the request rather than return a partial.
+        spendcap.check(user_id)
+        # Attribute its cost to this account under "pantry_suggestion".
         with llm_cost.track(user_id, "pantry_suggestion"):
             generated = generate_pantry_suggestions(pantry_norm, limit)
 
@@ -333,9 +338,23 @@ def pantry_suggestions(
                 "window": exc.window_label,
             },
         )
-    return build_suggestions(
-        user.id,
-        limit=req.limit,
-        pantry_override=req.pantry_override,
-        allow_generation=req.allow_generation,
-    )
+    # NOTE: the hard 30-day spend cap is NOT enforced here — cache-search makes no
+    # LLM call and must stay free. It is checked inside build_suggestions, only on
+    # the generation-fallback path (the only branch that spends), surfaced as 429.
+    try:
+        return build_suggestions(
+            user.id,
+            limit=req.limit,
+            pantry_override=req.pantry_override,
+            allow_generation=req.allow_generation,
+        )
+    except spendcap.SpendCapExceeded as exc:
+        raise HTTPException(
+            status_code=429,
+            detail={
+                "error_code": exc.code,
+                "message": "You've hit your recent usage limit. It frees up as your usage from the past 30 days ages off.",
+                "limit": exc.limit,
+                "window": exc.window_label,
+            },
+        )

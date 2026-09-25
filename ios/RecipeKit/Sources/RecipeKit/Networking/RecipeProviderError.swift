@@ -28,9 +28,20 @@ public enum RecipeProviderError: Error, Equatable {
     /// backend code "free_limit_reached"). A distinct case — never a generic
     /// failure — so the UI can route straight to the Platter Pro paywall.
     case freeLimitReached
+    /// The account hit the hard per-account 30-day spend cap (HTTP 429, backend
+    /// code "spend_cap_reached"). A distinct case — never a generic 429 "slow
+    /// down" — so every entry point (import, paste, pantry) shows the same honest
+    /// "this month's usage limit" message with the contact address.
+    case spendCapReached
     /// The response wasn't shaped as expected (decoding failed, or a completed
     /// job carried no recipe).
     case invalidResponse(String)
+
+    /// The single source of truth for the spend-cap message, shared verbatim by
+    /// every surface (RecipeProviderError + BudgetPlanError) so the copy can't
+    /// drift between import, paste, budget-plan, and pantry.
+    public static let spendCapMessage =
+        "You've hit your usage limit for the last 30 days. It frees up gradually as older usage ages off — contact platterapp.privacy@gmail.com if you need more."
 
     /// A short, user-facing message suitable for an alert or error state.
     public var userMessage: String {
@@ -51,6 +62,8 @@ public enum RecipeProviderError: Error, Equatable {
             return "That doesn't look like a valid link. Paste an Instagram, TikTok, or recipe-website URL."
         case .freeLimitReached:
             return "You've reached this month's free import limit. Upgrade to Platter Pro for unlimited imports."
+        case .spendCapReached:
+            return Self.spendCapMessage
         case .invalidResponse:
             return "We got an unexpected response from the server. Please try again."
         }

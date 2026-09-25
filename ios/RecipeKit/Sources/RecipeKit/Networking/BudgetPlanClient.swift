@@ -93,6 +93,9 @@ public struct BudgetPlanClient {
         if http.statusCode == 400, decodeErrorCode(data) == "budget_above_maximum" {
             throw BudgetPlanError.aboveMaximum(maxBudget: decodeMaxBudget(data) ?? 0)
         }
+        if http.statusCode == 429, decodeErrorCode(data) == "spend_cap_reached" {
+            throw BudgetPlanError.spendCapReached
+        }
         guard (200..<300).contains(http.statusCode) else {
             throw BudgetPlanError.http(http.statusCode)
         }

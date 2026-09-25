@@ -77,6 +77,10 @@ public enum BudgetPlanError: Error, Equatable {
     /// 400 — budget above the per-person maximum; carries the server's maximum.
     /// Surfaced as a clear error (no silent clamp) so the user lowers it.
     case aboveMaximum(maxBudget: Int)
+    /// 429 — the hard per-account 30-day spend cap (backend code
+    /// "spend_cap_reached"). Distinct from a generic `http(429)` so the UI shows
+    /// the shared "this month's usage limit" message, same as import/paste/pantry.
+    case spendCapReached
     case offline
     case timedOut
     case network(String)
@@ -87,6 +91,8 @@ public enum BudgetPlanError: Error, Equatable {
         switch self {
         case .proRequired:
             return "Plan on a Budget is a Platter Pro feature."
+        case .spendCapReached:
+            return RecipeProviderError.spendCapMessage
         case .belowMinimum(let minBudget):
             return "That budget is below the minimum of $\(minBudget) for your household size."
         case .aboveMaximum(let maxBudget):

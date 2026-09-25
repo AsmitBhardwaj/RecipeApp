@@ -168,6 +168,23 @@ SPEND_FLAG_WINDOW_DAYS: int = int(os.getenv("SPEND_FLAG_WINDOW_DAYS", "30"))
 SPEND_FLAG_THRESHOLD_USD: float = float(os.getenv("SPEND_FLAG_THRESHOLD_USD", "100"))  # PLACEHOLDER
 
 # --------------------------------------------------------------------------- #
+# HARD per-account spend cap (app/spendcap.py) — an ENFORCING backstop, not the
+# advisory flag above. Once an account's estimated LLM spend over the TRAILING 30
+# DAYS (summed from llm_cost_events) is at/over this many dollars, the LLM-backed
+# endpoints reject further calls with HTTP 429 (a rolling window, so it eases as
+# old spend ages out — no fixed reset instant).
+#
+# This sits ABOVE the count-based burst caps (imports 100/day, budget 10/day,
+# pantry 20/day), so it only trips when per-call cost is far higher than modeled,
+# a count cap is misconfigured, or costs run away — a real user on the count caps
+# never reaches it. PLACEHOLDER dollar value; tune against the real per-account
+# 30-day cost distribution post-launch. Set to 0 (or negative) to DISABLE the
+# hard cap and fall back to the count caps + the advisory flag only.
+PER_ACCOUNT_30D_SPEND_CAP_USD: float = float(
+    os.getenv("PER_ACCOUNT_30D_SPEND_CAP_USD", "5.00")
+)  # PLACEHOLDER
+
+# --------------------------------------------------------------------------- #
 # Plan on a Budget (docs/budget-meal-planning.md).
 #
 # The minimum weekly budget scales with household size: a household of N cannot

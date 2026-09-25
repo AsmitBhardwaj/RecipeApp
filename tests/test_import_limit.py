@@ -260,11 +260,12 @@ class EndpointEnforcementTests(_DBTestBase):
         r = self.client.post("/v1/jobs", json={"url": "http://x"}, headers=self._headers())
         self.assertEqual(r.status_code, 200)
 
-    def test_anonymous_over_seeded_count_is_not_limited(self) -> None:
-        # No token => no account => the per-account cap does not apply.
+    def test_unauthenticated_is_rejected_before_any_work(self) -> None:
+        # /v1/jobs now requires a valid session token: no token => 401, and the
+        # pipeline (create_job / any OpenAI call) is never reached.
         self._seed(5)
         r = self.client.post("/v1/jobs", json={"url": "http://x"}, headers={"X-User-Id": "device-1"})
-        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.status_code, 401)
 
     def test_paste_endpoint_enforces_limit(self) -> None:
         self._seed(2)
