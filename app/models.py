@@ -161,6 +161,12 @@ class Recipe(BaseModel):
     image_url: Optional[str] = None
     # "web_image" = image pulled from the recipe page (JSON-LD image / og:image).
     image_source: Literal["video_thumbnail", "stock_photo", "web_image", "none"] = "none"
+    # Durable attribution for the recipe content itself (separate from image
+    # provenance). Nullable for legacy/generated recipes where no trustworthy
+    # external source exists.
+    source_url: Optional[str] = None
+    source_platform: Optional[Literal["instagram", "tiktok", "web"]] = None
+    source_creator: Optional[str] = None
 
     # Nullable placeholder for a future feature (CLAUDE.md §8) — cheap to add now
     # so no schema migration is needed when transcription lands.

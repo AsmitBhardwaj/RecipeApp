@@ -41,9 +41,11 @@ public struct AuthAPI {
         try await tokenCall("auth/login", body: ["email": email, "password": password])
     }
 
-    public func apple(identityToken: String, fullName: String?) async throws -> AuthSession {
+    public func apple(identityToken: String, authorizationCode: String, fullName: String?) async throws -> AuthSession {
         try await tokenCall("auth/apple", body: [
-            "identity_token": identityToken, "full_name": fullName,
+            "identity_token": identityToken,
+            "authorization_code": authorizationCode,
+            "full_name": fullName,
         ])
     }
 

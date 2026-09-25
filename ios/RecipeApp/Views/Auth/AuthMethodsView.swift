@@ -209,7 +209,9 @@ struct AuthMethodsView: View {
         case .success(let authorization):
             guard let credential = authorization.credential as? ASAuthorizationAppleIDCredential,
                   let tokenData = credential.identityToken,
-                  let token = String(data: tokenData, encoding: .utf8) else {
+                  let token = String(data: tokenData, encoding: .utf8),
+                  let codeData = credential.authorizationCode,
+                  let authorizationCode = String(data: codeData, encoding: .utf8) else {
                 errorMessage = "Apple didn’t return a usable credential."
                 return
             }
@@ -219,7 +221,13 @@ struct AuthMethodsView: View {
                 return formatted.isEmpty ? nil : formatted
             }
             Task {
-                do { try await auth.signInWithApple(identityToken: token, fullName: name) }
+                do {
+                    try await auth.signInWithApple(
+                        identityToken: token,
+                        authorizationCode: authorizationCode,
+                        fullName: name
+                    )
+                }
                 catch { present(error) }
             }
         case .failure(let error):

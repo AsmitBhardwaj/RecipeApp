@@ -20,6 +20,9 @@ class LoginRequest(BaseModel):
 class AppleRequest(BaseModel):
     # The identity token from the native Sign in with Apple flow.
     identity_token: str
+    # One-time code exchanged server-side for the revocation credential required
+    # when the user later deletes their account.
+    authorization_code: str = Field(min_length=1, max_length=4096)
     # Apple returns the user's name ONLY on the very first authorization; the
     # client forwards it here so we can capture it (Stage 3).
     full_name: Optional[str] = Field(default=None, max_length=200)

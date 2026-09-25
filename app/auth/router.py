@@ -23,7 +23,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from .. import config, db
-from . import providers, security, service
+from . import apple_revocation, providers, security, service
 from .schemas import (
     AppleRequest,
     GoogleRequest,
@@ -183,7 +183,18 @@ def apple(req: AppleRequest, request: Request) -> TokenResponse:
         identity = providers.verify_apple(req.identity_token)
     except providers.ProviderError as exc:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc))
+    try:
+        revocation_token = apple_revocation.exchange_authorization_code(req.authorization_code)
+        encrypted_revocation_token = apple_revocation.encrypt_refresh_token(revocation_token)
+    except apple_revocation.AppleRevocationError:
+        # Never fall back to a login that cannot meet Apple's later deletion
+        # requirement, and never return Apple response details or credentials.
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Sign in with Apple is temporarily unavailable",
+        )
     user = service.upsert_provider_user(identity, req.full_name, device_id=_device_id(request))
+    db.store_apple_revocation_credential(user.id, encrypted_revocation_token)
     return _issue(user)
 
 
@@ -243,4 +254,16 @@ def delete_me(user: User = Depends(current_user)) -> None:
     # token (current_user); irreversibly removes the account and all data scoped
     # to it. Any outstanding refresh tokens are dropped, so existing sessions on
     # other devices can no longer refresh.
-    db.delete_account(user.id)
+    encrypted = db.get_apple_revocation_credential(user.id)
+    retry_encrypted = None
+    retry_code = None
+    if encrypted:
+        attempt = apple_revocation.revoke_encrypted(encrypted)
+        if not attempt.succeeded:
+            retry_encrypted = encrypted
+            retry_code = attempt.safe_error_code
+    db.delete_account(
+        user.id,
+        revocation_retry_encrypted=retry_encrypted,
+        revocation_error_code=retry_code,
+    )

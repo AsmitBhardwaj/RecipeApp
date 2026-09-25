@@ -49,8 +49,14 @@ final class AuthModel: ObservableObject {
         try await apply { try await self.api.login(email: email, password: password) }
     }
 
-    func signInWithApple(identityToken: String, fullName: String?) async throws {
-        try await apply { try await self.api.apple(identityToken: identityToken, fullName: fullName) }
+    func signInWithApple(identityToken: String, authorizationCode: String, fullName: String?) async throws {
+        try await apply {
+            try await self.api.apple(
+                identityToken: identityToken,
+                authorizationCode: authorizationCode,
+                fullName: fullName
+            )
+        }
     }
 
     func signInWithGoogle(idToken: String, fullName: String?) async throws {
