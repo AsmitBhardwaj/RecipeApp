@@ -16,7 +16,17 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from pydantic import BaseModel, field_validator, model_validator
 
-from . import burstlimit, config, db, entitlements, importlimit, ratelimit, spendcap, spendsignal
+from . import (
+    appstore,
+    burstlimit,
+    config,
+    db,
+    entitlements,
+    importlimit,
+    ratelimit,
+    spendcap,
+    spendsignal,
+)
 from .auth.router import current_user, optional_current_user, router as auth_router
 from .auth.service import User
 from .entitlements_router import router as entitlements_router
@@ -43,9 +53,13 @@ app.include_router(entitlements_router)
 @app.on_event("startup")
 def _startup() -> None:
     db.init_db()
+    appstore_key_loaded = appstore.private_key_loaded_ok()
+    logging.getLogger("uvicorn.error").log(
+        logging.INFO if appstore_key_loaded else logging.ERROR,
+        "App Store private key loaded OK: %s",
+        appstore_key_loaded,
+    )
     if config.JWT_SECRET_IS_DEV_FALLBACK:
-        import logging
-
         logging.getLogger("uvicorn.error").warning(
             "JWT_SECRET is unset — using the INSECURE dev fallback. Set JWT_SECRET "
             "in the environment before serving real users."

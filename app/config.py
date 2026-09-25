@@ -79,9 +79,37 @@ APPLE_PRIVATE_KEY: str | None = os.getenv("APPLE_PRIVATE_KEY")
 # /v1/entitlements/verify returns 503 and no account is ever upgraded.
 APPSTORE_ISSUER_ID: str | None = os.getenv("APPSTORE_ISSUER_ID")
 APPSTORE_KEY_ID: str | None = os.getenv("APPSTORE_KEY_ID")
+
+
+def _normalize_appstore_private_key(raw: str | None) -> str | None:
+    """Return a canonical PKCS#8 PEM for an App Store Connect ``.p8`` key.
+
+    Railway variables are commonly pasted either as the base64 body alone or
+    with newlines escaped as the two characters ``\\n``.  Apple's SDK expects
+    PEM armor and real newlines, so normalize both forms at the config boundary.
+    """
+    if raw is None:
+        return None
+
+    value = raw.strip().replace("\\r\\n", "\n").replace("\\n", "\n")
+    begin = "-----BEGIN PRIVATE KEY-----"
+    end = "-----END PRIVATE KEY-----"
+
+    if value.startswith(begin) and end in value:
+        return f"{value}\n"
+
+    body = value.replace(begin, "").replace(end, "")
+    body = "".join(body.split())
+    if not body:
+        return None
+    return f"{begin}\n{body}\n{end}\n"
+
+
 # Full .p8 PEM contents (multi-line, "-----BEGIN PRIVATE KEY----- ..."), stored
 # in an env var exactly like APPLE_PRIVATE_KEY above.
-APPSTORE_PRIVATE_KEY: str | None = os.getenv("APPSTORE_PRIVATE_KEY")
+APPSTORE_PRIVATE_KEY: str | None = _normalize_appstore_private_key(
+    os.getenv("APPSTORE_PRIVATE_KEY")
+)
 # The app's bundle id and numeric App Store id. The bundle id is checked against
 # every verified transaction; the Apple id is required by Apple's library to
 # verify PRODUCTION transactions.
