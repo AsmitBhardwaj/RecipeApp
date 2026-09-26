@@ -28,6 +28,7 @@ from . import (
     spendsignal,
 )
 from .auth.router import current_user, optional_current_user, router as auth_router
+from .auth import apple_revocation
 from .auth.service import User
 from .entitlements_router import router as entitlements_router
 from .models import Job, Recipe
@@ -53,6 +54,16 @@ app.include_router(entitlements_router)
 @app.on_event("startup")
 def _startup() -> None:
     db.init_db()
+    try:
+        completed, pending = apple_revocation.retry_pending()
+        if completed or pending:
+            logging.getLogger("uvicorn.error").info(
+                "Apple revocation retry batch: completed=%s pending=%s", completed, pending
+            )
+    except Exception:  # retry work must never prevent the API from starting
+        logging.getLogger("uvicorn.error").exception(
+            "Apple revocation retry batch failed without exposing credentials"
+        )
     appstore_key_loaded = appstore.private_key_loaded_ok()
     logging.getLogger("uvicorn.error").log(
         logging.INFO if appstore_key_loaded else logging.ERROR,
@@ -418,7 +429,11 @@ class FeedbackRequest(BaseModel):
 
 
 @app.post("/feedback")
-def submit_feedback(req: FeedbackRequest, request: Request) -> dict:
+def submit_feedback(
+    req: FeedbackRequest,
+    request: Request,
+    account: Optional[User] = Depends(optional_current_user),
+) -> dict:
     # Same abuse-prevention as the job endpoint: APP_KEY (middleware) + the
     # persistent per-user/per-IP rate limiter.
     user_id = _resolve_user_id(request)
@@ -428,6 +443,7 @@ def submit_feedback(req: FeedbackRequest, request: Request) -> dict:
         raise HTTPException(status_code=429, detail=str(exc))
 
     feedback_id = db.save_feedback(
+        account_id=account.id if account else None,
         rating=req.rating,
         message=req.message,
         contact_email=req.contact_email,

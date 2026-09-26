@@ -34,6 +34,7 @@ class VideoMetadata:
     thumbnail_url: Optional[str]
     video_id: Optional[str]
     title: Optional[str]
+    creator: Optional[str] = None
 
 
 def _classify(message: str) -> str:
@@ -75,6 +76,7 @@ def fetch_metadata(url: str) -> VideoMetadata:
         thumbnail_url=info.get("thumbnail"),
         video_id=info.get("id"),
         title=info.get("title"),
+        creator=info.get("uploader") or info.get("creator") or info.get("channel"),
     )
 
 
@@ -135,6 +137,25 @@ def _ig_recursive_find_caption(node):
     return None
 
 
+def _ig_recursive_find_creator(node):
+    if isinstance(node, dict):
+        owner = node.get("owner")
+        if isinstance(owner, dict):
+            username = owner.get("username")
+            if isinstance(username, str) and username.strip():
+                return username.strip()
+        for value in node.values():
+            found = _ig_recursive_find_creator(value)
+            if found:
+                return found
+    elif isinstance(node, list):
+        for item in node:
+            found = _ig_recursive_find_creator(item)
+            if found:
+                return found
+    return None
+
+
 def _ig_extract_caption_from_html(html: str):
     """Primary strategy: locate contextJSON, un-escape, walk to caption text."""
     m = _CONTEXTJSON_KEY_RE.search(html)
@@ -156,6 +177,17 @@ def _ig_extract_caption_from_html(html: str):
         pass
 
     return _ig_recursive_find_caption(data)
+
+
+def _ig_extract_creator_from_html(html: str):
+    m = _CONTEXTJSON_KEY_RE.search(html)
+    if not m:
+        return None
+    start = m.end()
+    end = _ig_find_matching_close_quote(html, start)
+    raw = html[start:end]
+    data = json.loads(json.loads('"' + raw + '"'))
+    return _ig_recursive_find_creator(data)
 
 
 def _ig_extract_caption_fallbacks(html: str):
@@ -197,6 +229,7 @@ def fetch_instagram_metadata(url: str) -> VideoMetadata:
 
     try:
         caption = _ig_extract_caption_from_html(html)
+        creator = _ig_extract_creator_from_html(html)
         if caption is None:
             caption = _ig_extract_caption_fallbacks(html)
     except Exception as exc:  # noqa: BLE001 - malformed contextJSON, etc.
@@ -216,4 +249,5 @@ def fetch_instagram_metadata(url: str) -> VideoMetadata:
         thumbnail_url=None,  # intentionally skipped — see TODO.md
         video_id=shortcode,
         title=None,
+        creator=creator,
     )

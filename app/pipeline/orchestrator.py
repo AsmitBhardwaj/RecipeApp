@@ -64,7 +64,8 @@ def _finalize(job: Job, recipe: Recipe) -> Job:
             user_id=job.user_id,
             recipe_id=recipe.recipe_id,
             saved_at=_now(),
-        )
+        ),
+        account_id=job.account_id,
     )
     job.recipe_id = recipe.recipe_id
     job.status = "complete"
@@ -209,6 +210,9 @@ def _process_job(job: Job) -> Job:
         source_type=source_type,  # type: ignore[arg-type]
         image_url=image_url,
         image_source=image_source,  # type: ignore[arg-type]
+        source_url=resolved.url,
+        source_platform=resolved.platform,  # type: ignore[arg-type]
+        source_creator=meta.creator,
     )
 
     return _finalize(job, recipe)
@@ -305,6 +309,8 @@ def _process_pasted_text(job: Job, text: str) -> Job:
         source_type=source_type,  # type: ignore[arg-type]
         image_url=image_url,
         image_source=image_source,  # type: ignore[arg-type]
+        source_url=job.url,
+        source_platform=job.platform,
     )
     return _finalize(job, recipe)
 
@@ -315,7 +321,7 @@ def _process_web(job: Job, resolved: urls.ResolvedUrl) -> Job:
     """
     # SSRF-guarded fetch (the guard runs inside web.safe_get, per hop).
     try:
-        html, _final_url = web.safe_get(resolved.url)
+        html, final_url = web.safe_get(resolved.url)
     except netguard.BlockedURLError as exc:
         return _fail(job, exc.code, exc.message)
     except web.WebFetchError as exc:
@@ -373,6 +379,9 @@ def _process_web(job: Job, resolved: urls.ResolvedUrl) -> Job:
         source_type=source_type,  # type: ignore[arg-type]
         image_url=image_url,
         image_source=image_source,  # type: ignore[arg-type]
+        source_url=final_url,
+        source_platform="web",
+        source_creator=web.source_creator(html),
     )
 
     return _finalize(job, recipe)

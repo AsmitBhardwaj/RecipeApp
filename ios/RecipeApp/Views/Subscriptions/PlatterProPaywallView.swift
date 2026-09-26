@@ -23,6 +23,7 @@
 //
 
 import StoreKit
+import RecipeKit
 import SwiftUI
 
 // MARK: - Palette (fixed brand colors for this screen, light/dark independent)
@@ -49,6 +50,8 @@ struct PlanCardData: Identifiable, Equatable {
     let saveBadgeText: String?      // "Save 64%" — computed as 1 − yearly ÷ monthly×12
     let subtitle: String            // "Billed monthly" / "7-day free trial"
     let trialText: String?          // "7 days free" when a free-trial intro exists
+    let ctaTitle: String
+    let ctaDisclosure: String
 }
 
 enum PlanContent: Equatable {
@@ -96,6 +99,7 @@ struct PlatterProPaywallView: View {
         return products.map {
             Self.cardData(
                 for: $0,
+                isEligibleForIntroOffer: subscriptions.introOfferEligibility[$0.id] == true,
                 monthlyEquivalentPerYear: monthlyPerYear,
                 yearlyCompareAtDisplay: compareAt
             )
@@ -149,11 +153,20 @@ struct PlatterProPaywallView: View {
         }
     }
 
-    // MARK: Restore link (top-right, low emphasis). The paywall is always shown
-    // as a sheet, so swipe-down handles dismissal — there is no ✕ by design.
+    // MARK: Close + restore controls
 
     private var restoreBar: some View {
         HStack {
+            Button {
+                dismiss()
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 16, weight: .bold))
+                    .frame(width: 44, height: 44)
+                    .contentShape(Rectangle())
+            }
+            .foregroundStyle(Color.ppCream)
+            .accessibilityLabel("Close paywall")
             Spacer()
             Button("Restore") {
                 Task { await subscriptions.restorePurchases() }
@@ -410,8 +423,8 @@ struct PlatterProPaywallView: View {
         VStack(spacing: 12) {
             if let caption = ctaCaption {
                 Text(caption)
-                    .font(.system(size: 12))
-                    .foregroundStyle(Color.ppCream.opacity(0.6))
+                    .font(.system(size: 17, weight: .bold))
+                    .foregroundStyle(Color.ppCream)
                     .multilineTextAlignment(.center)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -428,12 +441,7 @@ struct PlatterProPaywallView: View {
     /// pricing/offer, so it can never contradict the plan boxes. The base price is
     /// permanent (no "first year" discount), so a trial just precedes the price.
     private var ctaCaption: String? {
-        guard let plan = selectedPlan else { return nil }
-        let word = plan.periodSuffix == "/yr" ? "year" : (plan.periodSuffix == "/mo" ? "month" : "period")
-        if let trial = plan.trialText {
-            return "\(trial), then \(plan.headlinePrice)/\(word) — cancel anytime"
-        }
-        return "\(plan.headlinePrice)/\(word) — cancel anytime"
+        selectedPlan?.ctaDisclosure
     }
 
     /// Trial-aware CTA copy: the free-trial plan (Yearly) leads with the trial;
@@ -441,7 +449,7 @@ struct PlatterProPaywallView: View {
     /// never misleading about a free week the selected plan doesn't offer.
     private var purchaseButtonTitle: String {
         if subscriptions.purchaseState == .purchasing { return "Working…" }
-        return selectedPlan?.trialText != nil ? "Start Your Free Week" : "Continue with Pro"
+        return selectedPlan?.ctaTitle ?? "Continue with Pro"
     }
 
     private var purchaseButton: some View {
@@ -512,6 +520,7 @@ struct PlatterProPaywallView: View {
 
     static func cardData(
         for product: Product,
+        isEligibleForIntroOffer: Bool,
         monthlyEquivalentPerYear: Decimal?,
         yearlyCompareAtDisplay: String?
     ) -> PlanCardData {
@@ -527,17 +536,23 @@ struct PlatterProPaywallView: View {
         }
 
         let headline = trimmedPrice(product.displayPrice)  // real, permanent base price
-        var subtitle = unit == .month ? "Billed monthly" : "Billed annually"
-        var trial: String?
-
-        // A free-trial introductory offer drives the trial copy (CTA caption) and
-        // the box's status line. Platter Pro configures a 7-day free trial on
-        // Yearly; the $29 base is permanent, so there is NO discounted-first-period
-        // path any more.
-        if let offer = product.subscription?.introductoryOffer, offer.paymentMode == .freeTrial {
-            trial = trialText(from: offer.period)
-            subtitle = trialStatusLine(from: offer.period)
+        let billingUnit = Self.billingUnit(from: unit)
+        let offer = product.subscription?.introductoryOffer
+        let freeTrial: IntroTrialPeriod?
+        if let offer, offer.paymentMode == .freeTrial {
+            freeTrial = IntroTrialPeriod(
+                value: offer.period.value,
+                unit: Self.billingUnit(from: offer.period.unit)
+            )
+        } else {
+            freeTrial = nil
         }
+        let presentation = PaywallPresentation.make(
+            localizedPrice: headline,
+            billingUnit: billingUnit,
+            freeTrial: freeTrial,
+            isEligibleForIntroOffer: isEligibleForIntroOffer
+        )
 
         // The Yearly box shows a struck comparison price — the real monthly × 12,
         // localized (passed in) — plus a "Save X%" badge computed from the same
@@ -561,9 +576,21 @@ struct PlatterProPaywallView: View {
             periodSuffix: suffix,
             strikethroughPrice: strikethrough,
             saveBadgeText: saveBadge,
-            subtitle: subtitle,
-            trialText: trial
+            subtitle: presentation.planSubtitle,
+            trialText: presentation.trialText,
+            ctaTitle: presentation.ctaTitle,
+            ctaDisclosure: presentation.disclosure
         )
+    }
+
+    private static func billingUnit(from unit: Product.SubscriptionPeriod.Unit?) -> SubscriptionBillingUnit {
+        switch unit {
+        case .day: return .day
+        case .week: return .week
+        case .month: return .month
+        case .year: return .year
+        default: return .period
+        }
     }
 
     /// Drops a trailing ".00" so a whole-dollar price reads "$29", not "$29.00".
@@ -581,28 +608,6 @@ struct PlatterProPaywallView: View {
         return "Save \(percent)%"
     }
 
-    /// Short trial copy for the CTA caption, e.g. "7 days free".
-    private static func trialText(from period: Product.SubscriptionPeriod) -> String {
-        let n = period.value
-        switch period.unit {
-        case .day:   return "\(n) \(n == 1 ? "day" : "days") free"
-        case .week:  return "\(n * 7) days free"
-        case .month: return "\(n) \(n == 1 ? "month" : "months") free"
-        case .year:  return "\(n) \(n == 1 ? "year" : "years") free"
-        @unknown default: return "Free trial"
-        }
-    }
-
-    /// The Yearly box's status line, e.g. "7-day free trial".
-    private static func trialStatusLine(from period: Product.SubscriptionPeriod) -> String {
-        switch period.unit {
-        case .day:   return "\(period.value)-day free trial"
-        case .week:  return "\(period.value * 7)-day free trial"
-        case .month: return "\(period.value)-month free trial"
-        case .year:  return "\(period.value)-year free trial"
-        @unknown default: return "Free trial"
-        }
-    }
 }
 
 private extension SubscriptionService.PurchaseState {
@@ -631,7 +636,9 @@ extension PlanCardData {
         strikethroughPrice: "$83.88/yr",
         saveBadgeText: "Save 64%",
         subtitle: "7-day free trial",
-        trialText: "7 days free"
+        trialText: "7 days free",
+        ctaTitle: "Start Free Trial",
+        ctaDisclosure: "7 days free, then $29.99/year. Auto-renews annually until canceled."
     )
     static let sampleMonthly = PlanCardData(
         id: "preview.monthly",
@@ -641,7 +648,9 @@ extension PlanCardData {
         strikethroughPrice: nil,
         saveBadgeText: nil,
         subtitle: "Billed monthly",
-        trialText: nil
+        trialText: nil,
+        ctaTitle: "Continue with Pro",
+        ctaDisclosure: "$6.99/month. Auto-renews monthly until canceled."
     )
 }
 

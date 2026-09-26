@@ -60,7 +60,23 @@ GOOGLE_CLIENT_IDS: list[str] = _csv("GOOGLE_CLIENT_IDS")
 # (Stage 5). These identify our app to Apple for that call; unused until Stage 5.
 APPLE_TEAM_ID: str | None = os.getenv("APPLE_TEAM_ID")
 APPLE_KEY_ID: str | None = os.getenv("APPLE_KEY_ID")
-APPLE_PRIVATE_KEY: str | None = os.getenv("APPLE_PRIVATE_KEY")
+
+
+def _normalize_pem(raw: str | None) -> str | None:
+    if raw is None:
+        return None
+    value = raw.strip().replace("\\r\\n", "\n").replace("\\n", "\n")
+    return f"{value}\n" if value else None
+
+
+APPLE_PRIVATE_KEY: str | None = _normalize_pem(os.getenv("APPLE_PRIVATE_KEY"))
+# Dedicated server-side secret used to encrypt Apple's revocation credential at
+# rest. Use a random value of at least 32 characters; it is never sent to Apple
+# or to the client. Deliberately not derived from JWT_SECRET so either secret can
+# be rotated independently.
+APPLE_REVOCATION_ENCRYPTION_KEY: str | None = os.getenv(
+    "APPLE_REVOCATION_ENCRYPTION_KEY"
+)
 
 # --------------------------------------------------------------------------- #
 # App Store server-verified Pro entitlement (app/appstore.py, app/entitlements.py)

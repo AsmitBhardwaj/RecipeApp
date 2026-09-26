@@ -19,6 +19,9 @@ API on both the sqlite and postgresql dialects.
 """
 from __future__ import annotations
 
+import json
+import uuid
+from datetime import datetime, timezone
 from typing import Optional
 
 from sqlalchemy import (
@@ -34,7 +37,10 @@ from sqlalchemy import (
     Text,
     create_engine,
     delete,
+    inspect,
     select,
+    text,
+    update,
 )
 from sqlalchemy.dialects.postgresql import insert as _pg_insert
 from sqlalchemy.dialects.sqlite import insert as _sqlite_insert
@@ -53,6 +59,7 @@ jobs = Table(
     "jobs",
     metadata,
     Column("job_id", String, primary_key=True),
+    Column("account_id", String, index=True),
     Column("data", Text, nullable=False),
 )
 
@@ -61,6 +68,9 @@ recipes = Table(
     metadata,
     Column("recipe_id", String, primary_key=True),
     Column("canonical_video_id", String, nullable=False, unique=True, index=True),
+    Column("source_url", Text),
+    Column("source_platform", String),
+    Column("source_creator", Text),
     Column("data", Text, nullable=False),
 )
 
@@ -69,6 +79,7 @@ user_recipes = Table(
     metadata,
     Column("user_id", String, primary_key=True),
     Column("recipe_id", String, primary_key=True),
+    Column("account_id", String, index=True),
     Column("custom_name", Text),
     Column("sort_key", Text),
     Column("saved_at", Text, nullable=False),
@@ -167,6 +178,7 @@ feedback = Table(
     "feedback",
     metadata,
     Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("account_id", String, index=True),
     Column("rating", Integer),
     Column("message", Text),
     Column("contact_email", Text),
@@ -216,6 +228,29 @@ refresh_tokens = Table(
     Column("issued_at", Text, nullable=False),
     Column("expires_at", Text, nullable=False),
     Column("revoked", Boolean, nullable=False, default=False),
+)
+
+# Apple's authorization code is exchanged for a refresh token at sign-in. The
+# refresh token is encrypted before persistence and retained only until Apple
+# confirms revocation. A failed revocation is moved to the anonymous retry queue
+# during local account deletion, so deletion never depends on Apple's uptime.
+apple_revocation_credentials = Table(
+    "apple_revocation_credentials",
+    metadata,
+    Column("user_id", String, primary_key=True),
+    Column("encrypted_refresh_token", Text, nullable=False),
+    Column("updated_at", Text, nullable=False),
+)
+
+apple_revocation_tasks = Table(
+    "apple_revocation_tasks",
+    metadata,
+    Column("id", String, primary_key=True),
+    Column("encrypted_refresh_token", Text, nullable=False),
+    Column("attempts", Integer, nullable=False, default=0),
+    Column("last_error_code", String),
+    Column("created_at", Text, nullable=False),
+    Column("updated_at", Text, nullable=False),
 )
 
 # --- Sync (Stage 2) -------------------------------------------------------- #
@@ -320,7 +355,110 @@ def init_db() -> None:
     if _engine is not None:
         _engine.dispose()
     _engine = _build_engine()
+    # create_all does not add columns to existing installations. Keep these
+    # additive migrations deliberately small and portable across SQLite/Postgres.
+    _add_missing_columns(_engine)
     metadata.create_all(_engine)
+    _backfill_promoted_columns(_engine)
+
+
+def _add_missing_columns(engine: Engine) -> None:
+    existing_tables = set(inspect(engine).get_table_names())
+    additions = {
+        "jobs": {"account_id": "VARCHAR"},
+        "user_recipes": {"account_id": "VARCHAR"},
+        "recipes": {
+            "source_url": "TEXT",
+            "source_platform": "VARCHAR",
+            "source_creator": "TEXT",
+        },
+        "feedback": {"account_id": "VARCHAR"},
+    }
+    with engine.begin() as conn:
+        for table_name, columns in additions.items():
+            if table_name not in existing_tables:
+                continue
+            present = {c["name"] for c in inspect(conn).get_columns(table_name)}
+            for column_name, sql_type in columns.items():
+                if column_name not in present:
+                    conn.execute(text(f'ALTER TABLE "{table_name}" ADD COLUMN "{column_name}" {sql_type}'))
+        for index_name, table_name, column_name in (
+            ("ix_jobs_account_id", "jobs", "account_id"),
+            ("ix_user_recipes_account_id", "user_recipes", "account_id"),
+            ("ix_feedback_account_id", "feedback", "account_id"),
+        ):
+            if table_name in existing_tables:
+                conn.execute(
+                    text(
+                        f'CREATE INDEX IF NOT EXISTS "{index_name}" '
+                        f'ON "{table_name}" ("{column_name}")'
+                    )
+                )
+
+
+def _backfill_promoted_columns(engine: Engine) -> None:
+    """Promote attribution/account fields already present in JSON blobs.
+
+    For old recipes, only reconstruct a source URL from a completed job carrying
+    the exact canonical id. No creator or URL is guessed from a title.
+    """
+    with engine.begin() as conn:
+        for row in conn.execute(select(jobs.c.job_id, jobs.c.account_id, jobs.c.data)).mappings():
+            try:
+                data = json.loads(row["data"])
+            except (TypeError, json.JSONDecodeError):
+                continue
+            account_id = data.get("account_id")
+            if account_id and not row["account_id"]:
+                conn.execute(update(jobs).where(jobs.c.job_id == row["job_id"]).values(account_id=account_id))
+            recipe_id = data.get("recipe_id")
+            device_id = data.get("user_id")
+            if account_id and recipe_id and device_id:
+                conn.execute(
+                    update(user_recipes)
+                    .where(
+                        user_recipes.c.user_id == device_id,
+                        user_recipes.c.recipe_id == recipe_id,
+                        user_recipes.c.account_id.is_(None),
+                    )
+                    .values(account_id=account_id)
+                )
+
+        job_rows = conn.execute(select(jobs.c.data)).scalars().all()
+        trusted_urls: dict[str, tuple[str, Optional[str]]] = {}
+        for raw in job_rows:
+            try:
+                data = json.loads(raw)
+            except (TypeError, json.JSONDecodeError):
+                continue
+            canonical = data.get("canonical_video_id")
+            url = data.get("url")
+            platform = data.get("platform")
+            if canonical and url and data.get("status") == "complete":
+                trusted_urls.setdefault(canonical, (url, platform))
+
+        for row in conn.execute(select(recipes)).mappings():
+            try:
+                data = json.loads(row["data"])
+            except (TypeError, json.JSONDecodeError):
+                continue
+            source_url = row["source_url"] or data.get("source_url")
+            source_platform = row["source_platform"] or data.get("source_platform")
+            source_creator = row["source_creator"] or data.get("source_creator")
+            if not source_url and row["canonical_video_id"] in trusted_urls:
+                source_url, source_platform = trusted_urls[row["canonical_video_id"]]
+                data["source_url"] = source_url
+                data["source_platform"] = source_platform
+            conn.execute(
+                update(recipes)
+                .where(recipes.c.recipe_id == row["recipe_id"])
+                .values(
+                    source_url=source_url,
+                    source_platform=source_platform,
+                    source_creator=source_creator,
+                    data=json.dumps(data, separators=(",", ":")),
+                )
+            )
 
 
 # --------------------------------------------------------------------------- #
@@ -329,8 +467,13 @@ def init_db() -> None:
 
 
 def save_job(job: Job) -> None:
-    stmt = _insert(jobs).values(job_id=job.job_id, data=job.model_dump_json())
-    stmt = stmt.on_conflict_do_update(index_elements=["job_id"], set_={"data": stmt.excluded.data})
+    stmt = _insert(jobs).values(
+        job_id=job.job_id, account_id=job.account_id, data=job.model_dump_json()
+    )
+    stmt = stmt.on_conflict_do_update(
+        index_elements=["job_id"],
+        set_={"account_id": stmt.excluded.account_id, "data": stmt.excluded.data},
+    )
     with _get_engine().begin() as conn:
         conn.execute(stmt)
 
@@ -631,9 +774,20 @@ def save_recipe(recipe: Recipe) -> None:
     stmt = _insert(recipes).values(
         recipe_id=recipe.recipe_id,
         canonical_video_id=recipe.canonical_video_id,
+        source_url=recipe.source_url,
+        source_platform=recipe.source_platform,
+        source_creator=recipe.source_creator,
         data=recipe.model_dump_json(),
     )
-    stmt = stmt.on_conflict_do_update(index_elements=["recipe_id"], set_={"data": stmt.excluded.data})
+    stmt = stmt.on_conflict_do_update(
+        index_elements=["recipe_id"],
+        set_={
+            "source_url": stmt.excluded.source_url,
+            "source_platform": stmt.excluded.source_platform,
+            "source_creator": stmt.excluded.source_creator,
+            "data": stmt.excluded.data,
+        },
+    )
     with _get_engine().begin() as conn:
         conn.execute(stmt)
 
@@ -667,15 +821,22 @@ def all_recipes() -> list[Recipe]:
 # --------------------------------------------------------------------------- #
 
 
-def save_user_recipe(link: UserRecipe) -> None:
+def save_user_recipe(link: UserRecipe, *, account_id: Optional[str] = None) -> None:
     stmt = _insert(user_recipes).values(
         user_id=link.user_id,
         recipe_id=link.recipe_id,
+        account_id=account_id,
         custom_name=link.custom_name,
         sort_key=link.sort_key,
         saved_at=link.saved_at,
     )
-    stmt = stmt.on_conflict_do_nothing(index_elements=["user_id", "recipe_id"])
+    if account_id is None:
+        stmt = stmt.on_conflict_do_nothing(index_elements=["user_id", "recipe_id"])
+    else:
+        stmt = stmt.on_conflict_do_update(
+            index_elements=["user_id", "recipe_id"],
+            set_={"account_id": stmt.excluded.account_id},
+        )
     with _get_engine().begin() as conn:
         conn.execute(stmt)
 
@@ -711,6 +872,7 @@ def rate_limit_cleanup(older_than: int) -> None:
 
 def save_feedback(
     *,
+    account_id: Optional[str] = None,
     rating: Optional[int],
     message: Optional[str],
     contact_email: Optional[str],
@@ -720,6 +882,7 @@ def save_feedback(
 ) -> int:
     """Insert one feedback row; returns its new id."""
     stmt = feedback.insert().values(
+        account_id=account_id,
         rating=rating,
         message=message,
         contact_email=contact_email,
@@ -907,17 +1070,146 @@ def delete_user_sync_data(user_id: str) -> None:
         conn.execute(delete(sync_state).where(sync_state.c.user_id == user_id))
 
 
-def delete_account(user_id: str) -> None:
+def store_apple_revocation_credential(user_id: str, encrypted_refresh_token: str) -> None:
+    now = datetime.now(timezone.utc).isoformat()
+    stmt = _insert(apple_revocation_credentials).values(
+        user_id=user_id,
+        encrypted_refresh_token=encrypted_refresh_token,
+        updated_at=now,
+    ).on_conflict_do_update(
+        index_elements=["user_id"],
+        set_={
+            "encrypted_refresh_token": encrypted_refresh_token,
+            "updated_at": now,
+        },
+    )
+    with _get_engine().begin() as conn:
+        conn.execute(stmt)
+
+
+def get_apple_revocation_credential(user_id: str) -> Optional[str]:
+    with _get_engine().begin() as conn:
+        return conn.execute(
+            select(apple_revocation_credentials.c.encrypted_refresh_token).where(
+                apple_revocation_credentials.c.user_id == user_id
+            )
+        ).scalar_one_or_none()
+
+
+def list_apple_revocation_tasks(limit: int = 10) -> list[dict]:
+    with _get_engine().begin() as conn:
+        rows = conn.execute(
+            select(apple_revocation_tasks)
+            .order_by(apple_revocation_tasks.c.created_at)
+            .limit(limit)
+        ).mappings().all()
+    return [dict(row) for row in rows]
+
+
+def complete_apple_revocation_task(task_id: str) -> None:
+    with _get_engine().begin() as conn:
+        conn.execute(delete(apple_revocation_tasks).where(apple_revocation_tasks.c.id == task_id))
+
+
+def fail_apple_revocation_task(task_id: str, safe_error_code: str) -> None:
+    now = datetime.now(timezone.utc).isoformat()
+    with _get_engine().begin() as conn:
+        conn.execute(
+            update(apple_revocation_tasks)
+            .where(apple_revocation_tasks.c.id == task_id)
+            .values(
+                attempts=apple_revocation_tasks.c.attempts + 1,
+                last_error_code=safe_error_code[:80],
+                updated_at=now,
+            )
+        )
+
+
+def delete_account(
+    user_id: str,
+    *,
+    revocation_retry_encrypted: Optional[str] = None,
+    revocation_error_code: Optional[str] = None,
+) -> None:
     """Hard-delete a user and everything scoped to them, in one transaction
     (Stage 5, in-app account deletion). Removes synced records + seq counter, the
     per-user recipe join rows, all refresh tokens, provider identities, and the
-    account row itself. The shared recipe CACHE (keyed by canonical video id) is
-    intentionally left intact — it's not personal data and other users rely on it.
+    account row itself. Recipe cache rows survive only while another user is
+    associated with them; orphaned rows may contain pasted personal content and
+    are removed.
     """
     with _get_engine().begin() as conn:
+        user_row = conn.execute(select(users.c.email).where(users.c.id == user_id)).fetchone()
+        email = user_row[0] if user_row else None
+
+        if revocation_retry_encrypted:
+            now = datetime.now(timezone.utc).isoformat()
+            conn.execute(
+                apple_revocation_tasks.insert().values(
+                    id=uuid.uuid4().hex,
+                    encrypted_refresh_token=revocation_retry_encrypted,
+                    attempts=0,
+                    last_error_code=(revocation_error_code or "temporary_failure")[:80],
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+
         conn.execute(delete(sync_items).where(sync_items.c.user_id == user_id))
         conn.execute(delete(sync_state).where(sync_state.c.user_id == user_id))
-        conn.execute(delete(user_recipes).where(user_recipes.c.user_id == user_id))
+        owned_recipe_ids = conn.execute(
+            select(user_recipes.c.recipe_id).where(
+                (user_recipes.c.account_id == user_id) | (user_recipes.c.user_id == user_id)
+            )
+        ).scalars().all()
+        conn.execute(
+            delete(user_recipes).where(
+                (user_recipes.c.account_id == user_id) | (user_recipes.c.user_id == user_id)
+            )
+        )
+        # A recipe body can contain user-pasted content. Remove it when this was
+        # its last account association, but preserve cache rows still shared by
+        # another user as required by the product's global idempotency cache.
+        for recipe_id in owned_recipe_ids:
+            still_shared = conn.execute(
+                select(user_recipes.c.recipe_id).where(user_recipes.c.recipe_id == recipe_id).limit(1)
+            ).first()
+            if still_shared is None:
+                conn.execute(delete(recipes).where(recipes.c.recipe_id == recipe_id))
+        conn.execute(delete(jobs).where(jobs.c.account_id == user_id))
+        conn.execute(delete(import_events).where(import_events.c.account_id == user_id))
+        conn.execute(delete(entitlements).where(entitlements.c.user_id == user_id))
+        conn.execute(delete(llm_cost_events).where(llm_cost_events.c.account_id == user_id))
+        conn.execute(
+            delete(account_device_signals).where(account_device_signals.c.account_id == user_id)
+        )
+        conn.execute(
+            update(account_device_signals)
+            .where(account_device_signals.c.related_account_id == user_id)
+            .values(related_account_id=None, flagged=False)
+        )
+        conn.execute(delete(feedback).where(feedback.c.account_id == user_id))
+        if email:
+            # Legacy feedback predates account_id; exact normalized-email match is
+            # the only trustworthy way to attribute and remove it.
+            from sqlalchemy import func
+
+            conn.execute(
+                delete(feedback).where(func.lower(feedback.c.contact_email) == email.lower())
+            )
+            conn.execute(
+                delete(rate_limits).where(
+                    (rate_limits.c.bucket_key.contains(user_id))
+                    | (rate_limits.c.bucket_key.contains(email))
+                )
+            )
+        else:
+            conn.execute(delete(rate_limits).where(rate_limits.c.bucket_key.contains(user_id)))
+        conn.execute(
+            delete(apple_revocation_credentials).where(
+                apple_revocation_credentials.c.user_id == user_id
+            )
+        )
         conn.execute(delete(refresh_tokens).where(refresh_tokens.c.user_id == user_id))
         conn.execute(delete(auth_identities).where(auth_identities.c.user_id == user_id))
         conn.execute(delete(users).where(users.c.id == user_id))

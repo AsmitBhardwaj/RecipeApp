@@ -37,6 +37,9 @@ public struct Recipe: Codable, Identifiable, Hashable {
     public let sourceType: SourceType
     public let imageUrl: String?
     public let imageSource: ImageSource
+    public let sourceUrl: String?
+    public let sourcePlatform: String?
+    public let sourceCreator: String?
 
     /// Future-facing nullable field (CLAUDE.md §8). Always null today.
     public let transcript: String?
@@ -65,7 +68,10 @@ public struct Recipe: Codable, Identifiable, Hashable {
         imageUrl: String?,
         imageSource: ImageSource,
         transcript: String?,
-        nutrition: Nutrition? = nil
+        nutrition: Nutrition? = nil,
+        sourceUrl: String? = nil,
+        sourcePlatform: String? = nil,
+        sourceCreator: String? = nil
     ) {
         self.recipeId = recipeId
         self.canonicalVideoId = canonicalVideoId
@@ -80,6 +86,9 @@ public struct Recipe: Codable, Identifiable, Hashable {
         self.sourceType = sourceType
         self.imageUrl = imageUrl
         self.imageSource = imageSource
+        self.sourceUrl = sourceUrl
+        self.sourcePlatform = sourcePlatform
+        self.sourceCreator = sourceCreator
         self.transcript = transcript
         self.nutrition = nutrition
     }
@@ -98,6 +107,9 @@ public struct Recipe: Codable, Identifiable, Hashable {
         case sourceType = "source_type"
         case imageUrl = "image_url"
         case imageSource = "image_source"
+        case sourceUrl = "source_url"
+        case sourcePlatform = "source_platform"
+        case sourceCreator = "source_creator"
         case transcript
         case nutrition
     }

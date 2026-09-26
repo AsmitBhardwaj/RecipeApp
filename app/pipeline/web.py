@@ -166,3 +166,18 @@ def og_image(html: str) -> Optional[str]:
     if tag and tag.get("content"):
         return tag["content"].strip()
     return None
+
+
+def source_creator(html: str) -> Optional[str]:
+    """Return only explicit page author metadata; never infer from page text."""
+    if not html:
+        return None
+    soup = BeautifulSoup(html, "lxml")
+    for attrs in (
+        {"name": "author"},
+        {"property": "article:author"},
+    ):
+        tag = soup.find("meta", attrs=attrs)
+        if tag and tag.get("content") and tag["content"].strip():
+            return tag["content"].strip()
+    return None

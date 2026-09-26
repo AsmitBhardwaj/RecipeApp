@@ -28,9 +28,10 @@ class AppStorePrivateKeyConfigTests(unittest.TestCase):
         pem = "-----BEGIN PRIVATE KEY-----\nabc123\n-----END PRIVATE KEY-----\n"
         self.assertEqual(config._normalize_appstore_private_key(pem), pem)
 
+    @mock.patch("app.main.apple_revocation.retry_pending", return_value=(0, 0))
     @mock.patch("app.main.db.init_db")
     @mock.patch("app.main.appstore.private_key_loaded_ok", return_value=True)
-    def test_startup_logs_success_without_key_material(self, _loaded, _init_db):
+    def test_startup_logs_success_without_key_material(self, _loaded, _init_db, _retry):
         from app import main
 
         with mock.patch.object(config, "JWT_SECRET_IS_DEV_FALLBACK", False):

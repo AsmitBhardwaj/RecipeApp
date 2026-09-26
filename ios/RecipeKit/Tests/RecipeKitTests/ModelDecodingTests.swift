@@ -40,6 +40,9 @@ final class ModelDecodingTests: XCTestCase {
       "source_type": "caption",
       "image_url": null,
       "image_source": "none",
+      "source_url": "https://www.instagram.com/reel/XYZ/",
+      "source_platform": "instagram",
+      "source_creator": "testchef",
       "transcript": null,
       "nutrition": null
     }
@@ -56,6 +59,9 @@ final class ModelDecodingTests: XCTestCase {
         XCTAssertNil(recipe.imageUrl)
         XCTAssertEqual(recipe.imageSource, ImageSource.none)
         XCTAssertEqual(recipe.sourceType, .caption)
+        XCTAssertEqual(recipe.sourceUrl, "https://www.instagram.com/reel/XYZ/")
+        XCTAssertEqual(recipe.sourcePlatform, "instagram")
+        XCTAssertEqual(recipe.sourceCreator, "testchef")
         XCTAssertEqual(recipe.ingredients.count, 2)
         XCTAssertEqual(recipe.ingredients[1].name, "salt")
         XCTAssertEqual(recipe.ingredients[1].notes, "to taste")
