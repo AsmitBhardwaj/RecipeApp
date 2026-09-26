@@ -61,6 +61,13 @@ final class SubscriptionService: ObservableObject {
     /// The server-verified entitlement for the SIGNED-IN account. This is the Pro
     /// gate. Starts false; set only from a server response for the current account.
     @Published private(set) var serverIsPro: Bool = false
+    /// True once a server entitlement response has resolved for the current account
+    /// (so the app-open paywall only decides after resolution — no flash for Pro).
+    /// Reset on account change. Stays false when offline / the check fails.
+    @Published private(set) var serverEntitlementResolved: Bool = false
+    /// Set once the onboarding paywall has been presented this app session, so the
+    /// periodic app-open paywall is not also shown in the same session.
+    @Published private(set) var onboardingPaywallShownThisSession: Bool = false
     @Published private(set) var purchaseState: PurchaseState = .idle
     @Published private(set) var isLoadingProducts = false
     @Published private(set) var isRefreshingEntitlement = false
@@ -318,9 +325,22 @@ final class SubscriptionService: ObservableObject {
     func resetForAccountChange() async {
         entitlementState = .unknown
         serverIsPro = false
+        serverEntitlementResolved = false
         purchaseState = .idle
         defaults.removeObject(forKey: Self.cachedStatusKey)
         ProEntitlementCache.clear()
+    }
+
+    /// True while a purchase or restore is mid-flight — the app-open paywall must
+    /// not appear over it.
+    var purchaseInProgress: Bool {
+        purchaseState == .purchasing || purchaseState == .activating
+    }
+
+    /// Called when the onboarding paywall is presented, so the periodic app-open
+    /// paywall is suppressed for the rest of this session.
+    func markOnboardingPaywallShown() {
+        onboardingPaywallShownThisSession = true
     }
 
     /// Whether Pro-gated UI should be UNLOCKED for the signed-in account: the
@@ -360,6 +380,7 @@ final class SubscriptionService: ObservableObject {
         // free account stays free.
         guard let status else { return }
         serverIsPro = status.isPro
+        serverEntitlementResolved = true
         ProEntitlementCache.set(status.isPro, accountId: accountID())
         defaults.set(status.isPro ? "Active" : "Upgrade", forKey: Self.cachedStatusKey)
     }
