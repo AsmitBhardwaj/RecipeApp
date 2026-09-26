@@ -117,7 +117,9 @@ struct PlatterProPaywallView: View {
 
     private var canPurchase: Bool {
         if case .ready = planContent {
-            return selectedProductID != nil && subscriptions.purchaseState != .purchasing
+            return selectedProductID != nil
+                && subscriptions.purchaseState != .purchasing
+                && subscriptions.purchaseState != .activating
         }
         return false
     }
@@ -419,22 +421,65 @@ struct PlatterProPaywallView: View {
 
     // MARK: Pinned bottom bar
 
+    @ViewBuilder
     private var bottomBar: some View {
         VStack(spacing: 12) {
-            if let caption = ctaCaption {
-                Text(caption)
-                    .font(.system(size: 17, weight: .bold))
-                    .foregroundStyle(Color.ppCream)
-                    .multilineTextAlignment(.center)
-                    .fixedSize(horizontal: false, vertical: true)
+            // Edge case: the device's Apple ID already owns Platter Pro, but the
+            // signed-in account isn't entitled. A normal Subscribe CTA would fail
+            // with "already subscribed", so offer Restore-to-this-account instead.
+            if subscriptions.needsRestore {
+                restoreToAccountBar
+            } else {
+                if let caption = ctaCaption {
+                    Text(caption)
+                        .font(.system(size: 17, weight: .bold))
+                        .foregroundStyle(Color.ppCream)
+                        .multilineTextAlignment(.center)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                purchaseButton
             }
-            purchaseButton
             legalRow
         }
         .padding(.horizontal, 24)
         .padding(.top, 12)
         .padding(.bottom, 8)
         .background(Color.ppBackground)
+    }
+
+    /// Shown when the device's Apple ID already has Platter Pro but this account
+    /// doesn't: a clear explanation plus a primary "Restore to this account" button
+    /// (which transfers the subscription to the signed-in account).
+    private var restoreToAccountBar: some View {
+        VStack(spacing: 8) {
+            Text("This Apple ID already has Platter Pro")
+                .font(.system(size: 17, weight: .bold))
+                .foregroundStyle(Color.ppCream)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+            Button {
+                Task { await subscriptions.restorePurchases() }
+            } label: {
+                HStack(spacing: 8) {
+                    if subscriptions.purchaseState == .purchasing || subscriptions.purchaseState == .activating {
+                        ProgressView().tint(Color.ppBackground)
+                    }
+                    Text(subscriptions.purchaseState == .purchasing ? "Restoring…" : "Restore to this account")
+                        .font(.system(size: 17, weight: .bold))
+                }
+                .foregroundStyle(Color.ppBackground)
+                .frame(maxWidth: .infinity, minHeight: 56)
+                .background(Color.ppCream, in: Capsule())
+            }
+            .buttonStyle(.plain)
+            .disabled(subscriptions.purchaseState == .purchasing || subscriptions.purchaseState == .activating)
+            .accessibilityHint("Moves your Platter Pro subscription to the signed-in account")
+            Text("Pro will move to this account from the one that bought it.")
+                .font(.system(size: 12))
+                .foregroundStyle(Color.ppCream.opacity(0.6))
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+        }
     }
 
     /// The small line above the CTA. Derived from the selected plan's live
@@ -449,6 +494,7 @@ struct PlatterProPaywallView: View {
     /// never misleading about a free week the selected plan doesn't offer.
     private var purchaseButtonTitle: String {
         if subscriptions.purchaseState == .purchasing { return "Working…" }
+        if subscriptions.purchaseState == .activating { return "Activating Pro…" }
         return selectedPlan?.ctaTitle ?? "Continue with Pro"
     }
 
@@ -459,7 +505,7 @@ struct PlatterProPaywallView: View {
             Task { await subscriptions.purchase(product) }
         } label: {
             HStack(spacing: 8) {
-                if subscriptions.purchaseState == .purchasing {
+                if subscriptions.purchaseState == .purchasing || subscriptions.purchaseState == .activating {
                     ProgressView().tint(Color.ppBackground)
                 }
                 Text(purchaseButtonTitle)

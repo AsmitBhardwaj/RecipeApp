@@ -2,8 +2,15 @@
 //  SubscriptionService.swift
 //  RecipeApp
 //
-//  App-wide StoreKit 2 product, purchase, restore, and entitlement coordinator.
-//  Verified StoreKit transactions are the sole source of Pro access.
+//  App-wide StoreKit 2 product, purchase, and restore coordinator.
+//
+//  Pro access is gated on the SERVER entitlement for the SIGNED-IN account
+//  (`/v1/entitlements/*`), never on device-local StoreKit alone. Device StoreKit
+//  (`Transaction.currentEntitlements`) is Apple-ID-scoped and identical for every
+//  Platter account on a device, so it is used ONLY to (a) obtain a signed
+//  transaction to refresh the matching account and (b) detect the paywall
+//  "already subscribed on this Apple ID, different account" case. It never unlocks
+//  Pro by itself.
 //
 
 import Foundation
@@ -21,6 +28,7 @@ final class SubscriptionService: ObservableObject {
     enum PurchaseState: Equatable {
         case idle
         case purchasing
+        case activating
         case pending
         case cancelled
         case succeeded
@@ -29,6 +37,8 @@ final class SubscriptionService: ObservableObject {
 
         var message: String? {
             switch self {
+            case .activating:
+                return "Activating Pro…"
             case .pending:
                 return "Your purchase is waiting for approval. Pro will activate after Apple confirms it."
             case .cancelled:
@@ -45,7 +55,12 @@ final class SubscriptionService: ObservableObject {
 
     @Published private(set) var products: [Product] = []
     @Published private(set) var introOfferEligibility: [String: Bool] = [:]
+    /// Device StoreKit entitlement (Apple-ID-scoped). NOT the Pro gate — see file
+    /// header. Used only for the paywall "already subscribed" detection.
     @Published private(set) var entitlementState: ProEntitlementState = .unknown
+    /// The server-verified entitlement for the SIGNED-IN account. This is the Pro
+    /// gate. Starts false; set only from a server response for the current account.
+    @Published private(set) var serverIsPro: Bool = false
     @Published private(set) var purchaseState: PurchaseState = .idle
     @Published private(set) var isLoadingProducts = false
     @Published private(set) var isRefreshingEntitlement = false
@@ -58,43 +73,59 @@ final class SubscriptionService: ObservableObject {
     private var hasStarted = false
 
     /// The signed-in account's id as a UUID, stamped onto a purchase as
-    /// `appAccountToken` so the backend can bind the subscription to this account.
-    /// Returns nil when signed out or the id isn't UUID-shaped.
+    /// `appAccountToken` so the backend binds the subscription to this account.
     private let accountUUID: () -> UUID?
-    /// Sends a verified transaction's `jwsRepresentation` to the backend, which
-    /// re-verifies it against Apple and persists Pro for the account (the server is
-    /// the authority for API access). Injectable for tests; the default posts to
-    /// `/v1/entitlements/verify`.
-    private let verifyTransaction: (String) async -> Void
+    /// The signed-in account's id string, used to key the per-account no-flash cache.
+    private let accountID: () -> String?
+    /// Posts a signed transaction to `/v1/entitlements/verify` and returns the
+    /// server's entitlement for the signed-in account. `transfer` is true only for
+    /// an explicit Restore. Returns nil on network/auth failure. Injectable for tests.
+    private let syncTransaction: (_ jws: String, _ transfer: Bool) async -> ServerEntitlementStatus?
+    /// Fetches `/v1/entitlements/me` for the signed-in account. Returns nil on
+    /// failure. Injectable for tests.
+    private let fetchEntitlement: () async -> ServerEntitlementStatus?
 
     enum EntitlementSyncError: Error { case notSignedIn }
 
     init(
         defaults: UserDefaults = .standard,
         accountUUID: @escaping () -> UUID? = { nil },
-        verifyTransaction: ((String) async -> Void)? = nil
+        accountID: @escaping () -> String? = { nil },
+        syncTransaction: ((_ jws: String, _ transfer: Bool) async -> ServerEntitlementStatus?)? = nil,
+        fetchEntitlement: (() async -> ServerEntitlementStatus?)? = nil
     ) {
         self.defaults = defaults
         self.accountUUID = accountUUID
-        self.verifyTransaction = verifyTransaction ?? Self.makeServerVerifier()
+        self.accountID = accountID
+        self.syncTransaction = syncTransaction ?? Self.makeSync()
+        self.fetchEntitlement = fetchEntitlement ?? Self.makeFetch()
     }
 
-    /// Builds the production server-verify closure: post the JWS to the backend
-    /// using the shared account session token. Server-sync failures are logged and
-    /// swallowed — local verified StoreKit state still drives the UI, and the next
-    /// refresh (or a later launch) retries the sync.
-    private static func makeServerVerifier() -> (String) async -> Void {
-        return { jws in
-            let client = EntitlementClient(accessTokenProvider: {
-                guard let token = await SessionTokenProvider().accessTokenOrNil() else {
-                    throw EntitlementSyncError.notSignedIn
-                }
-                return token
-            })
-            do {
-                _ = try await client.verify(signedTransaction: jws)
-            } catch {
-                storeLog.error("entitlement server sync failed: \(String(describing: error), privacy: .public)")
+    private static func makeClient() -> EntitlementClient {
+        EntitlementClient(accessTokenProvider: {
+            guard let token = await SessionTokenProvider().accessTokenOrNil() else {
+                throw EntitlementSyncError.notSignedIn
+            }
+            return token
+        })
+    }
+
+    private static func makeSync() -> (String, Bool) async -> ServerEntitlementStatus? {
+        return { jws, transfer in
+            do { return try await makeClient().verify(signedTransaction: jws, transfer: transfer) }
+            catch {
+                storeLog.error("entitlement verify failed: \(String(describing: error), privacy: .public)")
+                return nil
+            }
+        }
+    }
+
+    private static func makeFetch() -> () async -> ServerEntitlementStatus? {
+        return {
+            do { return try await makeClient().me() }
+            catch {
+                storeLog.error("entitlement fetch failed: \(String(describing: error), privacy: .public)")
+                return nil
             }
         }
     }
@@ -104,7 +135,7 @@ final class SubscriptionService: ObservableObject {
     }
 
     /// Starts exactly one transaction listener, then loads products and refreshes
-    /// verified entitlement state. Safe to call from multiple screens.
+    /// the account's server entitlement. Safe to call from multiple screens.
     func start() async {
         guard !hasStarted else {
             await refreshEntitlement()
@@ -156,52 +187,26 @@ final class SubscriptionService: ObservableObject {
         await refreshEntitlement()
     }
 
+    /// Refreshes the signed-in account's server entitlement. Reads device StoreKit
+    /// only to (a) refresh the matching account (transfer=false — never claims
+    /// another account's subscription) and (b) populate `entitlementState` for the
+    /// paywall. Falls back to `/v1/entitlements/me` for the account's truth.
     func refreshEntitlement() async {
         isRefreshingEntitlement = true
+        let jws = await readDeviceEntitlement()
 
-        var currentRecords: [SubscriptionEntitlementRecord] = []
-        var currentVerifiedJWS: String?
-        for await result in Transaction.currentEntitlements {
-            guard SubscriptionConfiguration.productIDs.contains(result.unsafePayloadValue.productID) else {
-                continue
-            }
-            currentRecords.append(record(from: result))
-            // Only a verified transaction is worth sending to the server; the
-            // backend re-verifies it against Apple regardless.
-            if case .verified = result {
-                currentVerifiedJWS = result.jwsRepresentation
-            }
+        var status: ServerEntitlementStatus?
+        if let jws {
+            // Automatic sync: refresh only. The server grants only if this account
+            // owns the subscription (or appAccountToken matches); it will NOT move a
+            // subscription owned by another account.
+            status = await syncTransaction(jws, false)
         }
-
-        var latestRecords: [SubscriptionEntitlementRecord] = []
-        for productID in SubscriptionConfiguration.productIDs {
-            if let result = await Transaction.latest(for: productID) {
-                latestRecords.append(record(from: result))
-            }
+        if status == nil {
+            status = await fetchEntitlement()
         }
-
-        entitlementState = ProEntitlementEvaluator.evaluate(
-            current: currentRecords,
-            latest: latestRecords,
-            productIDs: SubscriptionConfiguration.productIDs
-        )
-        cacheDisplayState()
-        // Mirror the verified Pro status into the App Group purely as a UI
-        // convenience: it lets a returning subscriber see Pro content on cold
-        // launch with no flash of a locked state before StoreKit resolves (see
-        // ProGate). It is NOT sent to the backend any more — server access is
-        // gated by the Apple-verified entitlement posted below. Derived from
-        // verified state, never from cached UI text.
-        ProEntitlementCache.set(entitlementState.grantsAccess)
+        applyServerStatus(status)
         isRefreshingEntitlement = false
-
-        // Push the verified transaction to the backend so the server-side
-        // entitlement (the authority for API access, and what the Share Extension
-        // relies on) reflects this subscription. Covers purchase, restore,
-        // Transaction.updates, and launch — all of which route through here.
-        if let jws = currentVerifiedJWS {
-            await verifyTransaction(jws)
-        }
     }
 
     func purchase(_ product: Product) async {
@@ -213,9 +218,7 @@ final class SubscriptionService: ObservableObject {
         purchaseState = .purchasing
         do {
             // Stamp the account UUID as appAccountToken so the backend binds this
-            // subscription to the signed-in account (one subscription → one
-            // account). Omitted when signed out / non-UUID id; the server then
-            // binds by original_transaction_id instead.
+            // subscription to the signed-in account (one subscription → one account).
             let purchaseOptions: Set<Product.PurchaseOption>
             if let token = accountUUID() {
                 purchaseOptions = [.appAccountToken(token)]
@@ -227,13 +230,22 @@ final class SubscriptionService: ObservableObject {
                 switch verification {
                 case .verified(let transaction):
                     await transaction.finish()
-                    await refreshEntitlement()
-                    purchaseState = entitlementState.grantsAccess
-                        ? .succeeded
-                        : .failed("The purchase completed, but an active entitlement wasn't found yet. Please try Restore Purchases.")
+                    // Wait for the server to confirm Pro FOR THIS ACCOUNT before
+                    // showing Pro — the purchase carries appAccountToken, so the
+                    // server grants this account.
+                    purchaseState = .activating
+                    _ = await readDeviceEntitlement()
+                    let status = await syncTransaction(verification.jwsRepresentation, false)
+                    applyServerStatus(status)
+                    if serverIsPro {
+                        purchaseState = .succeeded
+                    } else if status == nil {
+                        purchaseState = .failed("We couldn't reach the server to activate Pro. Please try again.")
+                    } else {
+                        purchaseState = .failed("The purchase completed, but Pro wasn't activated for this account. Please try again.")
+                    }
                 case .unverified:
                     purchaseState = .unverified
-                    await refreshEntitlement()
                 }
             case .pending:
                 purchaseState = .pending
@@ -247,12 +259,19 @@ final class SubscriptionService: ObservableObject {
         }
     }
 
+    /// Explicit "Restore Purchases": may MOVE the subscription to this account
+    /// (transfer=true, newest-wins) — the only path that transfers.
     func restorePurchases() async {
         purchaseState = .purchasing
         do {
             try await AppStore.sync()
-            await refreshEntitlement()
-            purchaseState = entitlementState.grantsAccess
+            let jws = await readDeviceEntitlement()
+            if let jws {
+                applyServerStatus(await syncTransaction(jws, true))
+            } else {
+                applyServerStatus(await fetchEntitlement())
+            }
+            purchaseState = serverIsPro
                 ? .succeeded
                 : .failed("No active Platter Pro subscription was found for this Apple Account.")
         } catch {
@@ -278,54 +297,102 @@ final class SubscriptionService: ObservableObject {
     }
 
     func clearPurchaseMessage() {
-        if purchaseState != .purchasing { purchaseState = .idle }
+        if purchaseState != .purchasing && purchaseState != .activating { purchaseState = .idle }
     }
 
     func clearManagementError() {
         managementError = nil
     }
 
-    /// Clears this device's locally-cached Pro signals, then re-derives entitlement
-    /// from verified StoreKit state. Called on sign-out and account deletion so a
-    /// prior account's cached Pro status can't leak into the next account on this
-    /// device.
-    ///
-    /// This deliberately does NOT (and cannot) cancel the underlying subscription —
-    /// that belongs to the Apple Account, not the app account, and Apple exposes no
-    /// such API. `refreshEntitlement()` re-reads the verified, Apple-ID-scoped
-    /// truth: if that Apple ID still owns an active subscription, live Pro is
-    /// correctly restored; otherwise everything settles to "not Pro".
+    #if DEBUG
+    /// Screenshot/preview harness only: force the account's server-Pro state so the
+    /// free/Pro variants can be captured without signing in or hitting the backend.
+    func _debugSetServerPro(_ value: Bool) { serverIsPro = value }
+    #endif
+
+    /// Clears this device's cached Pro signals for ALL accounts on sign-out /
+    /// account deletion, and resets server Pro to false. Deliberately does NOT
+    /// re-read device StoreKit — a new sign-in must start FREE until the server
+    /// confirms Pro for that specific account (device Apple-ID subscriptions do not
+    /// leak Pro across Platter accounts).
     func resetForAccountChange() async {
         entitlementState = .unknown
+        serverIsPro = false
         purchaseState = .idle
         defaults.removeObject(forKey: Self.cachedStatusKey)
         ProEntitlementCache.clear()
-        await refreshEntitlement()
     }
 
-    /// Reusable gate for future Pro-only features. This never consults cached UI
-    /// state, a button tap, or an account field.
-    var hasProAccess: Bool {
-        entitlementState.grantsAccess
-    }
-
-    /// Whether Pro-gated UI should be UNLOCKED. Combines the verified live grant
-    /// with the App-Group–cached entitlement (`ProGate.isUnlocked`) so a returning
-    /// subscriber sees Pro content with NO flash of a locked state while the
-    /// StoreKit refresh is still resolving on cold launch. Presentation gate only
-    /// — not a security/cost boundary. Reads `hasProAccess` (an @Published-derived
-    /// value), so SwiftUI views observing this service re-render when a purchase
-    /// completes in-session.
+    /// Whether Pro-gated UI should be UNLOCKED for the signed-in account: the
+    /// server entitlement, or the per-account cached server answer (no-flash on
+    /// cold launch / offline). Device StoreKit alone never unlocks this.
     var isProUnlocked: Bool {
-        ProGate.isUnlocked(live: hasProAccess, cached: ProEntitlementCache.isEntitled)
+        ProGate.isUnlocked(serverIsPro: serverIsPro, cached: ProEntitlementCache.isEntitled(accountId: accountID()))
+    }
+
+    /// Account-scoped Pro (same as `isProUnlocked`). Kept for call sites that read
+    /// "does this account have Pro".
+    var hasProAccess: Bool { isProUnlocked }
+
+    /// The device's Apple ID owns an active Platter Pro subscription (from device
+    /// StoreKit). Used only by the paywall.
+    var deviceHasEntitlement: Bool { entitlementState.grantsAccess }
+
+    /// Paywall edge case: the device's Apple ID already has Platter Pro but the
+    /// signed-in account is not entitled — offer Restore, not Subscribe.
+    var needsRestore: Bool {
+        ProGate.needsRestore(deviceHasEntitlement: deviceHasEntitlement, serverIsPro: serverIsPro)
     }
 
     var settingsStatusText: String {
-        if entitlementState.grantsAccess { return "Active" }
-        if isRefreshingEntitlement || entitlementState == .unknown {
+        if serverIsPro { return "Active" }
+        if isRefreshingEntitlement {
             return defaults.string(forKey: Self.cachedStatusKey) ?? "Checking…"
         }
         return "Upgrade"
+    }
+
+    // MARK: - Private
+
+    private func applyServerStatus(_ status: ServerEntitlementStatus?) {
+        // Offline / no signal: leave serverIsPro and the cache untouched so a
+        // returning subscriber keeps Pro via the per-account cache (no flash) and a
+        // free account stays free.
+        guard let status else { return }
+        serverIsPro = status.isPro
+        ProEntitlementCache.set(status.isPro, accountId: accountID())
+        defaults.set(status.isPro ? "Active" : "Upgrade", forKey: Self.cachedStatusKey)
+    }
+
+    /// Reads device StoreKit into `entitlementState` (for the paywall) and returns a
+    /// verified current transaction's JWS, if any.
+    @discardableResult
+    private func readDeviceEntitlement() async -> String? {
+        var currentRecords: [SubscriptionEntitlementRecord] = []
+        var currentVerifiedJWS: String?
+        for await result in Transaction.currentEntitlements {
+            guard SubscriptionConfiguration.productIDs.contains(result.unsafePayloadValue.productID) else {
+                continue
+            }
+            currentRecords.append(record(from: result))
+            if case .verified = result {
+                currentVerifiedJWS = result.jwsRepresentation
+            }
+        }
+
+        var latestRecords: [SubscriptionEntitlementRecord] = []
+        for productID in SubscriptionConfiguration.productIDs {
+            if let result = await Transaction.latest(for: productID) {
+                latestRecords.append(record(from: result))
+            }
+        }
+
+        entitlementState = ProEntitlementEvaluator.evaluate(
+            current: currentRecords,
+            latest: latestRecords,
+            productIDs: SubscriptionConfiguration.productIDs
+        )
+        return currentVerifiedJWS
     }
 
     private func listenForTransactions() {
@@ -342,6 +409,8 @@ final class SubscriptionService: ObservableObject {
                 case .unverified:
                     break
                 }
+                // Refresh only (transfer=false) — a renewal must not move the
+                // subscription to whatever account happens to be signed in.
                 await self.refreshEntitlement()
             }
         }
@@ -366,10 +435,6 @@ final class SubscriptionService: ObservableObject {
                 revocationDate: transaction.revocationDate
             )
         }
-    }
-
-    private func cacheDisplayState() {
-        defaults.set(entitlementState.grantsAccess ? "Active" : "Upgrade", forKey: Self.cachedStatusKey)
     }
 
     private static func userMessage(for error: Error, fallback: String) -> String {

@@ -44,10 +44,16 @@ public struct EntitlementClient {
 
     private struct VerifyBody: Encodable {
         let signed_transaction: String
+        let transfer: Bool
     }
 
     /// Verify one signed transaction and return the resulting server entitlement.
-    public func verify(signedTransaction: String) async throws -> ServerEntitlementStatus {
+    ///
+    /// - `transfer`: pass `true` ONLY for an explicit "Restore Purchases" tap, which
+    ///   lets the server move the subscription to this account (newest-wins).
+    ///   Automatic launch / sign-in / `Transaction.updates` sync passes `false`
+    ///   (refresh only — never claim another account's subscription).
+    public func verify(signedTransaction: String, transfer: Bool = false) async throws -> ServerEntitlementStatus {
         var request = URLRequest(url: baseURL.appendingPathComponent("v1/entitlements/verify"))
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -55,8 +61,25 @@ public struct EntitlementClient {
         let key = appKey()
         if !key.isEmpty { request.setValue(key, forHTTPHeaderField: "X-App-Key") }
         request.setValue("Bearer \(try await accessTokenProvider())", forHTTPHeaderField: "Authorization")
-        request.httpBody = try JSONEncoder().encode(VerifyBody(signed_transaction: signedTransaction))
+        request.httpBody = try JSONEncoder().encode(
+            VerifyBody(signed_transaction: signedTransaction, transfer: transfer)
+        )
+        return try await send(request)
+    }
 
+    /// The signed-in account's current server entitlement (no Apple round-trip;
+    /// reads the stored entitlement). Used to gate the UI on the account, not the
+    /// device's Apple ID.
+    public func me() async throws -> ServerEntitlementStatus {
+        var request = URLRequest(url: baseURL.appendingPathComponent("v1/entitlements/me"))
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        let key = appKey()
+        if !key.isEmpty { request.setValue(key, forHTTPHeaderField: "X-App-Key") }
+        request.setValue("Bearer \(try await accessTokenProvider())", forHTTPHeaderField: "Authorization")
+        return try await send(request)
+    }
+
+    private func send(_ request: URLRequest) async throws -> ServerEntitlementStatus {
         let (data, response) = try await session.data(for: request)
         guard let http = response as? HTTPURLResponse else {
             throw RecipeProviderError.invalidResponse("non-HTTP response")

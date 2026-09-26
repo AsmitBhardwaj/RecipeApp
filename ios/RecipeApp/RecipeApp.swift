@@ -41,7 +41,8 @@ struct RecipeApp: App {
             accountUUID: { [weak auth] in
                 guard let id = auth?.session?.user.id else { return nil }
                 return AccountUUID.from(id)
-            }
+            },
+            accountID: { [weak auth] in auth?.session?.user.id }
         )
         _subscriptions = StateObject(wrappedValue: subscriptions)
         // Wipe entitlement caches whenever the session is torn down, so a prior
@@ -100,17 +101,17 @@ struct RecipeApp: App {
         }
     }
 
-    /// Renders a single Pro-gated screen with a forced cached entitlement, so the
+    /// Renders a single Pro-gated screen with a forced server-Pro state, so the
     /// free and Pro states can be screenshotted without signing in or seeding
     /// data. Launch with `-gatePreview nutritionFree|nutritionPro|pantryFree|pantryPro`.
-    /// Sets only the App-Group cache (which drives `isProUnlocked`) — no StoreKit
-    /// or purchase state is touched.
+    /// Forces the account's server-Pro flag (which drives `isProUnlocked`) — no
+    /// StoreKit or purchase state is touched.
     private func debugGateView() -> AnyView? {
         let args = ProcessInfo.processInfo.arguments
         guard let i = args.firstIndex(of: "-gatePreview"), i + 1 < args.count else { return nil }
         let mode = args[i + 1]
         // "…Free" → locked; anything else (…Pro, budgetResults) → entitled.
-        ProEntitlementCache.set(!mode.hasSuffix("Free"))
+        subscriptions._debugSetServerPro(!mode.hasSuffix("Free"))
         let inner: AnyView
         switch mode {
         case "nutritionFree", "nutritionPro":
