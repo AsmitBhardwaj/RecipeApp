@@ -5,8 +5,9 @@ Apple's SDK, so these run with no Apple keys and no network. Covers: a valid
 transaction grants Pro; expired falls back to free; billing grace stays Pro; an
 invalid/forged transaction is rejected and grants nothing; wrong bundle/product
 id rejected; a Sandbox transaction is accepted by a Production-configured server
-(prod-first-then-sandbox); and account binding (appAccountToken must match; one
-subscription maps to at most one account, newest wins).
+(prod-first-then-sandbox); and account binding (on automatic sync a present
+appAccountToken must match; an explicit Restore transfers the subscription to the
+requesting account even across a token boundary, newest wins).
 """
 from __future__ import annotations
 
@@ -206,18 +207,35 @@ class AccountBindingTests(_DBBase):
         self.assertEqual(db.get_entitlement_by_original_txn("shared-otid")["user_id"], other.id)
         self.assertIsNone(db.get_entitlement(self.user.id))
 
-    def test_restore_cannot_steal_a_token_bound_subscription(self):
-        # A token-bound sub (appAccountToken=A) cannot be restored onto B, even
-        # with transfer=True — the token is the strong binding.
+    def test_explicit_restore_transfers_token_bound_and_revokes_old(self):
+        # The reported bug: A bought Pro (appAccountToken=A). On a NEW account B on
+        # the same device, "Restore to this account" (transfer=True) must MOVE the
+        # subscription to B and revoke it from A — the Apple-signed JWS proves B
+        # controls the owning Apple ID. Previously this 403'd on the token mismatch.
         other = self.service.create_email_user("second@example.com", "pw-123456", "Second")
         with mock.patch.object(appstore, "verify_transaction",
                                return_value=_vtx(original_transaction_id="shared-otid",
                                                  app_account_token=str(uuid.UUID(self.user.id)))), \
              mock.patch.object(appstore, "fetch_grace_expiry", return_value=None):
-            entitlements.verify_and_store(self.user, "jws", transfer=False)
-            with self.assertRaises(entitlements.AccountMismatchError):
-                entitlements.verify_and_store(other, "jws", transfer=True)
-        self.assertTrue(entitlements.is_pro_user(self.user.id))
+            entitlements.verify_and_store(self.user, "jws", transfer=False)   # A purchases
+            status = entitlements.verify_and_store(other, "jws", transfer=True)  # B restores
+        self.assertTrue(status.is_pro)
+        self.assertTrue(entitlements.is_pro_user(other.id))
+        self.assertFalse(entitlements.is_pro_user(self.user.id))  # A revoked
+        self.assertEqual(db.get_entitlement_by_original_txn("shared-otid")["user_id"], other.id)
+        self.assertIsNone(db.get_entitlement(self.user.id))
+
+    def test_restore_onto_brand_new_account_grants_pro(self):
+        # New account, device sub purchased by A but never verified server-side
+        # (no existing row). B taps Restore (transfer=True) → B gets Pro.
+        other = self.service.create_email_user("second@example.com", "pw-123456", "Second")
+        with mock.patch.object(appstore, "verify_transaction",
+                               return_value=_vtx(original_transaction_id="shared-otid",
+                                                 app_account_token=str(uuid.UUID(self.user.id)))), \
+             mock.patch.object(appstore, "fetch_grace_expiry", return_value=None):
+            status = entitlements.verify_and_store(other, "jws", transfer=True)
+        self.assertTrue(status.is_pro)
+        self.assertTrue(entitlements.is_pro_user(other.id))
 
     def test_new_account_tokenless_auto_sync_stays_free(self):
         # Brand-new account, device has a tokenless subscription no one owns yet.
