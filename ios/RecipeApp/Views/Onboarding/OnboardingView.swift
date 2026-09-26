@@ -176,6 +176,10 @@ struct OnboardingView: View {
         if subscriptions.isProUnlocked {
             completeOnboarding()
         } else {
+            // Final onboarding step: present the paywall once (trigger .onboarding),
+            // dismissible immediately. Mark it so the periodic app-open paywall is
+            // not also shown in this same session.
+            subscriptions.markOnboardingPaywallShown()
             showingPaywall = true
         }
     }

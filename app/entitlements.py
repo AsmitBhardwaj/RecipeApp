@@ -134,11 +134,25 @@ def status_for_user(user_id: str, now: Optional[datetime] = None) -> Entitlement
 
 
 def verify_and_store(
-    user: User, signed_transaction: str, now: Optional[datetime] = None
+    user: User,
+    signed_transaction: str,
+    now: Optional[datetime] = None,
+    transfer: bool = False,
 ) -> EntitlementStatus:
     """Verify a StoreKit 2 signed transaction against Apple and persist the
     resulting entitlement for `user`. Raises an `EntitlementError` subclass on any
-    failure; grants nothing unless verification fully succeeds."""
+    failure; grants nothing unless verification fully succeeds.
+
+    `transfer` controls cross-account movement of a subscription:
+      * transfer=False (automatic launch / sign-in / Transaction.updates sync):
+        REFRESH ONLY — never move a subscription owned by another account. Grants
+        only when the transaction's appAccountToken matches this account, or this
+        account already owns the subscription. A tokenless transaction never
+        auto-grants to a new account. This is what stops any account on a device
+        whose Apple ID has a subscription from silently becoming Pro.
+      * transfer=True (explicit "Restore Purchases" tap): newest-account-wins —
+        move the subscription to this account and revoke it from the previous one.
+    In both cases a PRESENT appAccountToken must match the requesting account."""
     moment = _now(now)
 
     try:
@@ -156,19 +170,31 @@ def verify_and_store(
     if verified.product_id not in config.APPSTORE_PRODUCT_IDS:
         raise UnknownProductError(f"unrecognized product id: {verified.product_id}")
 
-    # A present appAccountToken must belong to the requesting account.
-    if verified.app_account_token and _uuid_norm(verified.app_account_token) != _uuid_norm(user.id):
+    # A present appAccountToken must belong to the requesting account (both paths).
+    has_token = bool(verified.app_account_token)
+    if has_token and _uuid_norm(verified.app_account_token) != _uuid_norm(user.id):
         raise AccountMismatchError("transaction belongs to a different account")
+
+    existing = db.get_entitlement_by_original_txn(verified.original_transaction_id)
+    owned_by_other = bool(existing) and existing["user_id"] != user.id
+
+    if transfer:
+        # Explicit Restore: newest account wins — revoke from the previous owner.
+        if owned_by_other:
+            db.delete_entitlement(existing["user_id"])
+    else:
+        # Automatic sync: refresh only, never move a subscription across accounts.
+        if owned_by_other:
+            # Owned by a different account: do not transfer. No-op for this account.
+            return status_for_user(user.id, moment)
+        already_mine = bool(existing) and existing["user_id"] == user.id
+        if not (has_token or already_mine):
+            # Tokenless and not already this account's subscription: never auto-grant.
+            return status_for_user(user.id, moment)
 
     # Billing-grace expiry (best-effort; None when the API key isn't configured or
     # the subscription isn't in grace).
     grace_dt = appstore.fetch_grace_expiry(verified.original_transaction_id, verified.environment)
-
-    # Binding: one subscription -> at most one account. If another account already
-    # owns this subscription, revoke it there (newest verifier wins).
-    existing = db.get_entitlement_by_original_txn(verified.original_transaction_id)
-    if existing and existing["user_id"] != user.id:
-        db.delete_entitlement(existing["user_id"])
 
     # A revoked (refunded) transaction expires access immediately.
     pro_dt = None if verified.revocation_date else verified.expires_at

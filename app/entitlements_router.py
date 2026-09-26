@@ -30,6 +30,10 @@ router = APIRouter(prefix="/v1", tags=["entitlements"])
 class VerifyRequest(BaseModel):
     # StoreKit 2 `Transaction.jwsRepresentation`.
     signed_transaction: str
+    # True only for an explicit "Restore Purchases" tap: allows moving the
+    # subscription to this account (newest-wins). Automatic launch/sign-in/updates
+    # sync sends false (refresh only, never transfer).
+    transfer: bool = False
 
 
 class EntitlementStatusResponse(BaseModel):
@@ -45,7 +49,7 @@ def verify_entitlement(
     req: VerifyRequest, user: User = Depends(current_user)
 ) -> EntitlementStatusResponse:
     try:
-        status = entitlements.verify_and_store(user, req.signed_transaction)
+        status = entitlements.verify_and_store(user, req.signed_transaction, transfer=req.transfer)
     except EntitlementError as exc:
         raise HTTPException(
             status_code=exc.status,

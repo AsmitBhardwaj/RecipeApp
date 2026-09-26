@@ -82,14 +82,14 @@ class PolicyTests(_DBBase):
         self.assertFalse(entitlements.is_pro_user(None))
 
     def test_active_is_pro(self):
-        with mock.patch.object(appstore, "verify_transaction", return_value=_vtx(expires_at=_dt(30))), \
+        with mock.patch.object(appstore, "verify_transaction", return_value=_vtx(expires_at=_dt(30), app_account_token=self.user.id)), \
              mock.patch.object(appstore, "fetch_grace_expiry", return_value=None):
             status = entitlements.verify_and_store(self.user, "jws")
         self.assertTrue(status.is_pro)
         self.assertTrue(entitlements.is_pro_user(self.user.id))
 
     def test_expired_falls_back_to_free(self):
-        with mock.patch.object(appstore, "verify_transaction", return_value=_vtx(expires_at=_dt(-1))), \
+        with mock.patch.object(appstore, "verify_transaction", return_value=_vtx(expires_at=_dt(-1), app_account_token=self.user.id)), \
              mock.patch.object(appstore, "fetch_grace_expiry", return_value=None):
             status = entitlements.verify_and_store(self.user, "jws")
         self.assertFalse(status.is_pro)
@@ -97,14 +97,14 @@ class PolicyTests(_DBBase):
 
     def test_billing_grace_is_still_pro(self):
         # Subscription itself lapsed, but a 16-day billing grace is still open.
-        with mock.patch.object(appstore, "verify_transaction", return_value=_vtx(expires_at=_dt(-1))), \
+        with mock.patch.object(appstore, "verify_transaction", return_value=_vtx(expires_at=_dt(-1), app_account_token=self.user.id)), \
              mock.patch.object(appstore, "fetch_grace_expiry", return_value=_dt(10)):
             status = entitlements.verify_and_store(self.user, "jws")
         self.assertTrue(status.is_pro)
         self.assertTrue(entitlements.is_pro_user(self.user.id))
 
     def test_grace_expired_is_free(self):
-        with mock.patch.object(appstore, "verify_transaction", return_value=_vtx(expires_at=_dt(-5))), \
+        with mock.patch.object(appstore, "verify_transaction", return_value=_vtx(expires_at=_dt(-5), app_account_token=self.user.id)), \
              mock.patch.object(appstore, "fetch_grace_expiry", return_value=_dt(-1)):
             status = entitlements.verify_and_store(self.user, "jws")
         self.assertFalse(status.is_pro)
@@ -112,7 +112,7 @@ class PolicyTests(_DBBase):
     def test_revoked_transaction_grants_nothing(self):
         # A refunded (revoked) transaction expires access immediately.
         with mock.patch.object(appstore, "verify_transaction",
-                               return_value=_vtx(expires_at=_dt(30), revocation_date=_dt(-1))), \
+                               return_value=_vtx(expires_at=_dt(30), app_account_token=self.user.id, revocation_date=_dt(-1))), \
              mock.patch.object(appstore, "fetch_grace_expiry", return_value=None):
             status = entitlements.verify_and_store(self.user, "jws")
         self.assertFalse(status.is_pro)
@@ -160,21 +160,74 @@ class AccountBindingTests(_DBBase):
             status = entitlements.verify_and_store(self.user, "jws")
         self.assertTrue(status.is_pro)
 
-    def test_subscription_moves_to_newest_account_and_revokes_old(self):
-        other = self.service.create_email_user("second@example.com", "pw-123456", "Second")
-        vtx = _vtx(original_transaction_id="shared-otid")
-        with mock.patch.object(appstore, "verify_transaction", return_value=vtx), \
+    def _seed_owned_by(self, owner, otid="shared-otid", days=30):
+        # Account acquires a TOKENLESS subscription (explicit restore path).
+        with mock.patch.object(appstore, "verify_transaction",
+                               return_value=_vtx(original_transaction_id=otid, expires_at=_dt(days))), \
              mock.patch.object(appstore, "fetch_grace_expiry", return_value=None):
-            entitlements.verify_and_store(self.user, "jws")     # account A owns it
-            entitlements.verify_and_store(other, "jws")          # account B verifies same sub
+            entitlements.verify_and_store(owner, "jws", transfer=True)
 
-        # Newest wins: B is Pro, A is revoked, and the subscription maps to exactly
-        # one account.
-        self.assertFalse(entitlements.is_pro_user(self.user.id))
+    def test_auto_sync_tokenless_does_not_transfer(self):
+        # A owns a tokenless sub. B signs in on the same device; the app auto-syncs
+        # (transfer=False) the device's tokenless transaction. It must NOT move.
+        other = self.service.create_email_user("second@example.com", "pw-123456", "Second")
+        self._seed_owned_by(self.user)
+        with mock.patch.object(appstore, "verify_transaction",
+                               return_value=_vtx(original_transaction_id="shared-otid", expires_at=_dt(30))), \
+             mock.patch.object(appstore, "fetch_grace_expiry", return_value=None):
+            status = entitlements.verify_and_store(other, "jws", transfer=False)
+        self.assertFalse(status.is_pro)
+        self.assertFalse(entitlements.is_pro_user(other.id))
+        self.assertTrue(entitlements.is_pro_user(self.user.id))  # A keeps it
+        self.assertEqual(db.get_entitlement_by_original_txn("shared-otid")["user_id"], self.user.id)
+
+    def test_auto_sync_token_mismatch_does_not_transfer(self):
+        # Device Apple ID sub was purchased by A (appAccountToken=A). B auto-syncs.
+        other = self.service.create_email_user("second@example.com", "pw-123456", "Second")
+        with mock.patch.object(appstore, "verify_transaction",
+                               return_value=_vtx(original_transaction_id="shared-otid",
+                                                 app_account_token=str(uuid.UUID(self.user.id)))), \
+             mock.patch.object(appstore, "fetch_grace_expiry", return_value=None):
+            entitlements.verify_and_store(self.user, "jws", transfer=False)   # A purchases
+            with self.assertRaises(entitlements.AccountMismatchError):
+                entitlements.verify_and_store(other, "jws", transfer=False)   # B auto-sync rejected
+        self.assertFalse(entitlements.is_pro_user(other.id))
+        self.assertTrue(entitlements.is_pro_user(self.user.id))
+
+    def test_explicit_restore_transfers_tokenless_and_revokes_old(self):
+        other = self.service.create_email_user("second@example.com", "pw-123456", "Second")
+        self._seed_owned_by(self.user)
+        with mock.patch.object(appstore, "verify_transaction",
+                               return_value=_vtx(original_transaction_id="shared-otid", expires_at=_dt(30))), \
+             mock.patch.object(appstore, "fetch_grace_expiry", return_value=None):
+            entitlements.verify_and_store(other, "jws", transfer=True)  # B taps Restore
         self.assertTrue(entitlements.is_pro_user(other.id))
-        owner = db.get_entitlement_by_original_txn("shared-otid")
-        self.assertEqual(owner["user_id"], other.id)
+        self.assertFalse(entitlements.is_pro_user(self.user.id))  # A revoked
+        self.assertEqual(db.get_entitlement_by_original_txn("shared-otid")["user_id"], other.id)
         self.assertIsNone(db.get_entitlement(self.user.id))
+
+    def test_restore_cannot_steal_a_token_bound_subscription(self):
+        # A token-bound sub (appAccountToken=A) cannot be restored onto B, even
+        # with transfer=True — the token is the strong binding.
+        other = self.service.create_email_user("second@example.com", "pw-123456", "Second")
+        with mock.patch.object(appstore, "verify_transaction",
+                               return_value=_vtx(original_transaction_id="shared-otid",
+                                                 app_account_token=str(uuid.UUID(self.user.id)))), \
+             mock.patch.object(appstore, "fetch_grace_expiry", return_value=None):
+            entitlements.verify_and_store(self.user, "jws", transfer=False)
+            with self.assertRaises(entitlements.AccountMismatchError):
+                entitlements.verify_and_store(other, "jws", transfer=True)
+        self.assertTrue(entitlements.is_pro_user(self.user.id))
+
+    def test_new_account_tokenless_auto_sync_stays_free(self):
+        # Brand-new account, device has a tokenless subscription no one owns yet.
+        # Auto-sync must not grant (the "new account on a subscribed device" case).
+        with mock.patch.object(appstore, "verify_transaction",
+                               return_value=_vtx(original_transaction_id="orphan-otid", expires_at=_dt(30))), \
+             mock.patch.object(appstore, "fetch_grace_expiry", return_value=None):
+            status = entitlements.verify_and_store(self.user, "jws", transfer=False)
+        self.assertFalse(status.is_pro)
+        self.assertIsNone(db.get_entitlement_by_original_txn("orphan-otid"))
 
 
 class EnvironmentFallbackTests(unittest.TestCase):
@@ -257,7 +310,7 @@ class EndpointTests(_DBBase):
         return {"Authorization": f"Bearer {self.token}"}
 
     def test_verify_endpoint_grants_pro(self):
-        with mock.patch.object(appstore, "verify_transaction", return_value=_vtx(expires_at=_dt(30))), \
+        with mock.patch.object(appstore, "verify_transaction", return_value=_vtx(expires_at=_dt(30), app_account_token=self.user.id)), \
              mock.patch.object(appstore, "fetch_grace_expiry", return_value=None):
             r = self.client.post(
                 "/v1/entitlements/verify",
@@ -318,7 +371,7 @@ class EndpointTests(_DBBase):
 
     def test_nutrition_present_for_pro_user(self):
         self._seed_recipe_and_job()
-        with mock.patch.object(appstore, "verify_transaction", return_value=_vtx(expires_at=_dt(30))), \
+        with mock.patch.object(appstore, "verify_transaction", return_value=_vtx(expires_at=_dt(30), app_account_token=self.user.id)), \
              mock.patch.object(appstore, "fetch_grace_expiry", return_value=None):
             entitlements.verify_and_store(self.user, "jws")
         r = self.client.get("/v1/jobs/j1", headers=self._auth())

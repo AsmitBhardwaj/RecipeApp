@@ -22,31 +22,39 @@
 import Foundation
 
 public enum ProEntitlementCache {
-    private static let key = "pro_entitled_v1"
+    // Per-account keys ("pro_entitled_v2.<accountId>"). The value is the SERVER's
+    // entitlement answer for that specific account — NOT device StoreKit state — so
+    // it never leaks Pro from a device's Apple ID to an unrelated account.
+    private static let prefix = "pro_entitled_v2."
 
     private static var defaults: UserDefaults? {
         UserDefaults(suiteName: AppGroup.identifier)
     }
 
-    /// The last entitlement the app cached. Defaults to `false` (not entitled)
-    /// when unset or the App Group is unavailable, so a free user never
-    /// accidentally sends a Pro claim.
-    public static var isEntitled: Bool {
-        defaults?.bool(forKey: key) ?? false
+    /// The last server entitlement cached for `accountId`. Defaults to `false`
+    /// (not entitled) when unset, the account is nil, or the App Group is
+    /// unavailable, so a free/unknown account never reads as Pro.
+    public static func isEntitled(accountId: String?) -> Bool {
+        guard let accountId, !accountId.isEmpty, let defaults else { return false }
+        return defaults.bool(forKey: prefix + accountId)
     }
 
-    /// Called by the app whenever verified entitlement changes, so the extension
-    /// sees the current value on its next run.
-    public static func set(_ entitled: Bool) {
-        defaults?.set(entitled, forKey: key)
+    /// Persist the server's entitlement answer for one account, so the UI (and the
+    /// Share Extension) can read this account's Pro state synchronously at first
+    /// render without a flash of a locked state.
+    public static func set(_ entitled: Bool, accountId: String?) {
+        guard let accountId, !accountId.isEmpty, let defaults else { return }
+        defaults.set(entitled, forKey: prefix + accountId)
     }
 
-    /// Removes the cached claim entirely (`isEntitled` reverts to `false`). Called
-    /// on sign-out / account deletion so a prior account's Pro claim can't leak to
-    /// the next account on this device. The app re-derives verified StoreKit state
-    /// (Apple-ID-scoped) immediately afterwards, which restores the claim if that
-    /// Apple ID still owns an active subscription.
+    /// Removes ALL per-account cached entitlements. Called on sign-out / account
+    /// deletion so a prior account's Pro state can't leak to the next account on
+    /// this device. A new sign-in starts from free until the server confirms Pro
+    /// for that account.
     public static func clear() {
-        defaults?.removeObject(forKey: key)
+        guard let defaults else { return }
+        for key in defaults.dictionaryRepresentation().keys where key.hasPrefix(prefix) {
+            defaults.removeObject(forKey: key)
+        }
     }
 }
