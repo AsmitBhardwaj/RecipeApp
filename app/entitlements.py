@@ -13,10 +13,15 @@ Policy (matches the 16-day Billing Grace Period enabled in App Store Connect):
 
 Account binding:
   * One Apple subscription (`original_transaction_id`) maps to at most one Platter
-    account. Verifying it from a different account MOVES it to the newest account
+    account. An explicit Restore (transfer=True) MOVES it to the newest account
     and revokes it from the old one (never grants both).
-  * When the transaction carries an `appAccountToken` (set by the client at
-    purchase to the user's account id), it MUST match the requesting user.
+  * appAccountToken (set by the client at purchase to the user's account id):
+      - On automatic sync (transfer=False) a PRESENT token MUST match the
+        requesting user, and a subscription is never moved across accounts.
+      - On an explicit Restore (transfer=True) the Apple-signed JWS — obtained via
+        AppStore.sync(), which authenticates the Apple ID — proves the requester
+        controls the owning Apple ID, so the subscription moves here even if the
+        token belongs to another Platter account (newest-account-wins).
 """
 from __future__ import annotations
 
@@ -151,8 +156,12 @@ def verify_and_store(
         auto-grants to a new account. This is what stops any account on a device
         whose Apple ID has a subscription from silently becoming Pro.
       * transfer=True (explicit "Restore Purchases" tap): newest-account-wins —
-        move the subscription to this account and revoke it from the previous one.
-    In both cases a PRESENT appAccountToken must match the requesting account."""
+        move the subscription to this account and revoke it from the previous one,
+        even if the transaction's appAccountToken belongs to another account. The
+        Apple-signed JWS (from AppStore.sync(), which authenticates the Apple ID)
+        proves the requester controls the owning Apple ID.
+    A PRESENT appAccountToken must match the requester only on automatic sync
+    (transfer=False)."""
     moment = _now(now)
 
     try:
@@ -170,20 +179,25 @@ def verify_and_store(
     if verified.product_id not in config.APPSTORE_PRODUCT_IDS:
         raise UnknownProductError(f"unrecognized product id: {verified.product_id}")
 
-    # A present appAccountToken must belong to the requesting account (both paths).
     has_token = bool(verified.app_account_token)
-    if has_token and _uuid_norm(verified.app_account_token) != _uuid_norm(user.id):
-        raise AccountMismatchError("transaction belongs to a different account")
+    token_matches = has_token and _uuid_norm(verified.app_account_token) == _uuid_norm(user.id)
 
     existing = db.get_entitlement_by_original_txn(verified.original_transaction_id)
     owned_by_other = bool(existing) and existing["user_id"] != user.id
 
     if transfer:
-        # Explicit Restore: newest account wins — revoke from the previous owner.
+        # Explicit Restore: newest account wins. The Apple-signed JWS proves the
+        # requester controls the owning Apple ID, so move the subscription here even
+        # when its appAccountToken belongs to another account, and revoke it from the
+        # previous owner. (No appAccountToken gate on this path — that is what makes
+        # "Restore to this account" work for a new account.)
         if owned_by_other:
             db.delete_entitlement(existing["user_id"])
     else:
-        # Automatic sync: refresh only, never move a subscription across accounts.
+        # Automatic sync: a PRESENT appAccountToken must match the requester, and a
+        # subscription is never moved across accounts (refresh only).
+        if has_token and not token_matches:
+            raise AccountMismatchError("transaction belongs to a different account")
         if owned_by_other:
             # Owned by a different account: do not transfer. No-op for this account.
             return status_for_user(user.id, moment)

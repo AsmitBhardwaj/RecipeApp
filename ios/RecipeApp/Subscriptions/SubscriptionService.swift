@@ -242,8 +242,20 @@ final class SubscriptionService: ObservableObject {
                     // server grants this account.
                     purchaseState = .activating
                     _ = await readDeviceEntitlement()
-                    let status = await syncTransaction(verification.jwsRepresentation, false)
+                    // A fresh purchase carries this account's appAccountToken and
+                    // activates on transfer=false. If it doesn't, StoreKit returned an
+                    // ALREADY-OWNED subscription bound to another Platter account (the
+                    // "You're currently subscribed to this" case). Don't dead-end:
+                    // treat it as an explicit restore to THIS account — the user just
+                    // tapped to get Pro here, and the Apple-signed JWS proves Apple-ID
+                    // ownership. This is the transfer=true (newest-wins) path.
+                    var status = await syncTransaction(verification.jwsRepresentation, false)
                     applyServerStatus(status)
+                    if !serverIsPro {
+                        let restored = await syncTransaction(verification.jwsRepresentation, true)
+                        if restored != nil { status = restored }
+                        applyServerStatus(restored)
+                    }
                     if serverIsPro {
                         purchaseState = .succeeded
                     } else if status == nil {
