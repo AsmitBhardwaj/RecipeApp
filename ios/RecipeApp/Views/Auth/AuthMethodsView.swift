@@ -239,8 +239,8 @@ struct AuthMethodsView: View {
     private func signInWithGoogle() {
         Task {
             do {
-                let idToken = try await google.controller.idToken()
-                try await auth.signInWithGoogle(idToken: idToken, fullName: nil)
+                let tokens = try await google.controller.authenticate()
+                try await auth.signInWithGoogle(idToken: tokens.idToken, accessToken: tokens.accessToken, fullName: nil)
             } catch AuthError.cancelled {
                 // user dismissed — no error
             } catch {

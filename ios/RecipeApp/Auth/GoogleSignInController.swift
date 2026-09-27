@@ -4,8 +4,9 @@
 //
 //  Google sign-in WITHOUT the GoogleSignIn SDK — a standard OAuth 2.0 + PKCE
 //  flow over ASWebAuthenticationSession. It returns the Google `id_token`, which
-//  the backend verifies (POST /auth/google). No client secret is used (iOS is a
-//  public client; PKCE is the protection).
+//  the backend verifies (POST /auth/google), and the `access_token`, kept only
+//  so account deletion can revoke the grant later (see `disconnect`). No client
+//  secret is used (iOS is a public client; PKCE is the protection).
 //
 //  Config comes from Secrets.xcconfig → Info.plist:
 //    GOOGLE_CLIENT_ID           the iOS OAuth client id
@@ -17,16 +18,29 @@
 import AuthenticationServices
 import CryptoKit
 import Foundation
+import os
 import RecipeKit
+
+private let googleAuthLog = Logger(subsystem: "com.recipeapp", category: "GoogleAuth")
+
+/// The tokens Google's authorization-code exchange returns that this app cares
+/// about: the `id_token` the backend verifies, and the `access_token` kept
+/// around only so account deletion can revoke this app's Google grant (see
+/// `GoogleSignInController.disconnect`).
+struct GoogleAuthTokens {
+    let idToken: String
+    let accessToken: String?
+}
 
 @MainActor
 final class GoogleSignInController: NSObject, ASWebAuthenticationPresentationContextProviding {
 
     private var session: ASWebAuthenticationSession?
 
-    /// Runs the interactive flow and returns a Google `id_token`. Throws
-    /// `AuthError.notConfigured` / `.cancelled` / `.invalidResponse`.
-    func idToken() async throws -> String {
+    /// Runs the interactive flow and returns Google's `id_token` (+ `access_token`
+    /// when Google includes one). Throws `AuthError.notConfigured` / `.cancelled` /
+    /// `.invalidResponse`.
+    func authenticate() async throws -> GoogleAuthTokens {
         guard AppConfig.isGoogleConfigured else { throw AuthError.notConfigured("Google") }
 
         let clientID = AppConfig.googleClientID
@@ -86,7 +100,7 @@ final class GoogleSignInController: NSObject, ASWebAuthenticationPresentationCon
         }
     }
 
-    private func exchange(code: String, verifier: String, clientID: String, redirectURI: String) async throws -> String {
+    private func exchange(code: String, verifier: String, clientID: String, redirectURI: String) async throws -> GoogleAuthTokens {
         var request = URLRequest(url: URL(string: "https://oauth2.googleapis.com/token")!)
         request.httpMethod = "POST"
         request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
@@ -104,11 +118,38 @@ final class GoogleSignInController: NSObject, ASWebAuthenticationPresentationCon
         guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
             throw AuthError.invalidResponse("Google token exchange failed")
         }
-        struct TokenResponse: Decodable { let id_token: String }
+        struct TokenResponse: Decodable { let id_token: String; let access_token: String? }
         guard let token = try? JSONDecoder().decode(TokenResponse.self, from: data) else {
             throw AuthError.invalidResponse("Google token response had no id_token")
         }
-        return token.id_token
+        return GoogleAuthTokens(idToken: token.id_token, accessToken: token.access_token)
+    }
+
+    // MARK: - Disconnect (account deletion)
+
+    /// Revokes this app's Google grant via Google's REST revoke endpoint — the
+    /// equivalent of `GIDSignIn.sharedInstance.disconnect()`, which isn't
+    /// available here since this flow doesn't use the GoogleSignIn SDK (see the
+    /// file header). Best-effort: logs and swallows any failure, since a failed
+    /// revoke must never block account deletion or surface an error to the user
+    /// — the account is already gone server-side by the time this runs.
+    static func disconnect(accessToken: String) async {
+        var request = URLRequest(url: URL(string: "https://oauth2.googleapis.com/revoke")!)
+        request.httpMethod = "POST"
+        request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+        var form = URLComponents()
+        form.queryItems = [.init(name: "token", value: accessToken)]
+        request.httpBody = form.percentEncodedQuery?.data(using: .utf8)
+
+        do {
+            let (_, response) = try await URLSession.shared.data(for: request)
+            guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+                googleAuthLog.error("Google token revoke returned a non-2xx response")
+                return
+            }
+        } catch {
+            googleAuthLog.error("Google token revoke failed: \(String(describing: error), privacy: .public)")
+        }
     }
 
     // MARK: - PKCE helpers

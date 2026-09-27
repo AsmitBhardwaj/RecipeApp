@@ -59,8 +59,15 @@ final class AuthModel: ObservableObject {
         }
     }
 
-    func signInWithGoogle(idToken: String, fullName: String?) async throws {
+    /// `accessToken` is Google's OAuth access token from the client-side
+    /// exchange (never sent to our backend) — stashed on the session purely so
+    /// `deleteAccount()` can revoke this app's Google grant later.
+    func signInWithGoogle(idToken: String, accessToken: String?, fullName: String?) async throws {
         try await apply { try await self.api.google(idToken: idToken, fullName: fullName) }
+        guard var session = self.session else { return }
+        session.googleAccessToken = accessToken
+        self.session = session
+        store.save(session)
     }
 
     private func apply(_ op: @escaping () async throws -> AuthSession) async throws {
@@ -105,6 +112,14 @@ final class AuthModel: ObservableObject {
         defer { isWorking = false }
         let token = try await validAccessToken()      // refresh first if near expiry
         try await api.deleteAccount(accessToken: token)
+        // Google-linked account (signaled by a stashed Google access token —
+        // see `signInWithGoogle`): revoke this app's Google grant now that the
+        // account is gone server-side. Best-effort — GoogleSignInController
+        // logs and swallows any failure itself, so it never blocks deletion or
+        // surfaces an error here.
+        if let googleAccessToken = self.session?.googleAccessToken {
+            await GoogleSignInController.disconnect(accessToken: googleAccessToken)
+        }
         AccountDataEraser.erase(userId: session.user.id)
         clearLocalSession()
     }
@@ -117,8 +132,12 @@ final class AuthModel: ObservableObject {
     func validAccessToken() async throws -> String {
         guard var session = session else { throw AuthError.invalidCredentials }
         guard session.accessTokenExpiring() else { return session.accessToken }
+        let googleAccessToken = session.googleAccessToken
         do {
             session = try await api.refresh(refreshToken: session.refreshToken)
+            // `/auth/refresh` returns a fresh session with no notion of Google —
+            // carry the stashed grant forward so it survives a refresh.
+            session.googleAccessToken = googleAccessToken
             self.session = session
             store.save(session)
             return session.accessToken

@@ -32,12 +32,26 @@ public struct AuthSession: Codable, Equatable, Sendable {
     public var refreshToken: String
     public var accessExpiresAt: Date
     public var user: AuthUser
+    /// Set only for a session created via Google sign-in — Google's OAuth
+    /// `access_token`, kept around solely so account deletion can revoke this
+    /// app's Google grant. Its presence is also how the client tells a
+    /// Google-linked account apart from Apple/email (no separate provider
+    /// field exists on `AuthUser`). Never sent to our backend; decodes to nil
+    /// for sessions persisted before this field existed.
+    public var googleAccessToken: String?
 
-    public init(accessToken: String, refreshToken: String, accessExpiresAt: Date, user: AuthUser) {
+    public init(
+        accessToken: String,
+        refreshToken: String,
+        accessExpiresAt: Date,
+        user: AuthUser,
+        googleAccessToken: String? = nil
+    ) {
         self.accessToken = accessToken
         self.refreshToken = refreshToken
         self.accessExpiresAt = accessExpiresAt
         self.user = user
+        self.googleAccessToken = googleAccessToken
     }
 
     /// True when the access token is within `leeway` seconds of expiring (or has),

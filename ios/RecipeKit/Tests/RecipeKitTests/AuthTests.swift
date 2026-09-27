@@ -80,6 +80,40 @@ final class AuthTests: XCTestCase {
         XCTAssertNil(store.load())
     }
 
+    /// `googleAccessToken` is a later addition to `AuthSession` (kept only so
+    /// account deletion can revoke a Google-linked account's grant) — round
+    /// trips through the Keychain-backed store like every other field.
+    func testSessionStoreRoundTripsGoogleAccessToken() {
+        let store = AuthSessionStore(backend: InMemorySecretStore())
+        let session = AuthSession(
+            accessToken: "a", refreshToken: "r",
+            accessExpiresAt: Date(timeIntervalSince1970: 1_000_000),
+            user: AuthUser(id: "u1", email: "a@b.com", emailVerified: true, fullName: "Ada"),
+            googleAccessToken: "ya29.google-access-token"
+        )
+        store.save(session)
+        let loaded = store.load()
+        XCTAssertEqual(loaded, session)
+        XCTAssertEqual(loaded?.googleAccessToken, "ya29.google-access-token")
+    }
+
+    /// A session persisted by an older build (before `googleAccessToken`
+    /// existed) has no such key in its JSON — must still decode, with the new
+    /// field defaulting to nil, not fail to load the whole session.
+    func testSessionPersistedBeforeGoogleAccessTokenFieldStillDecodes() {
+        let legacyJSON = """
+        {"accessToken":"a","refreshToken":"r","accessExpiresAt":"2026-01-01T00:00:00Z",
+         "user":{"id":"u1","email":"a@b.com","emailVerified":true,"fullName":"Ada"}}
+        """
+        let backend = InMemorySecretStore()
+        backend.write(legacyJSON, account: "auth_session_v1")
+        let store = AuthSessionStore(backend: backend)
+
+        let loaded = store.load()
+        XCTAssertNotNil(loaded, "a pre-existing session missing the new key must still decode")
+        XCTAssertNil(loaded?.googleAccessToken)
+    }
+
     func testAccessTokenExpiryDetection() {
         let soon = AuthSession(accessToken: "a", refreshToken: "r",
                                accessExpiresAt: Date().addingTimeInterval(30),
