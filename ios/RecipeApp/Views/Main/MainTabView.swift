@@ -151,15 +151,22 @@ struct MainTabView: View {
                     title: "Couldn’t add recipe",
                     message: alert.message,
                     onPasteText: alert.canPasteText ? {
+                        // Pending is already empty by the time any failure alert
+                        // can appear (handleFailed clears it unconditionally) —
+                        // no need to remove anything pending here. The failed
+                        // card itself must survive this tap (PasteRecipeTextView
+                        // needs it, and a failed paste should leave it for
+                        // another try), so this only routes to the paste sheet.
                         let failedJob = jobs.failed.first(where: { $0.id == alert.id })
-                        if let url = failedJob?.url { jobs.removePendingMatching(url: url) }
                         jobs.clearFailureAlert()
                         pasteTarget = failedJob
                     } : nil,
                     onDismiss: {
-                        if let url = jobs.failed.first(where: { $0.id == alert.id })?.url {
-                            jobs.removePendingMatching(url: url)
-                        }
+                        // Cancel means "I don't want to deal with this" — unlike
+                        // Paste Recipe Text, it also clears the persistent failed
+                        // card, not just the one-time alert, so nothing related
+                        // to this import stays on screen.
+                        jobs.dismissFailed(jobId: alert.id)
                         jobs.clearFailureAlert()
                     }
                 )

@@ -345,6 +345,40 @@ final class PendingJobsModelTests: XCTestCase {
         XCTAssertTrue(store.all().isEmpty)
     }
 
+    /// The persistent `FailedJobCardView` intentionally survives until the user
+    /// explicitly dismisses it (see `dismissFailed`'s doc comment) — a job that
+    /// failed and was never dismissed is exactly the kind of "still on screen"
+    /// state a user reaching for Remove is trying to clear, even though it is
+    /// not a `PendingJob`. Remove must wipe it too, not just `pending`.
+    func testRemoveAllPendingAlsoClearsFailedCardsAndAlert() async throws {
+        let model = makeModel(failureCode: "site_blocked")
+
+        try await model.submit(url: "https://www.gimmesomeoven.com/authentic-gazpacho-recipe/")
+        await waitUntil { model.failureAlert != nil }
+        XCTAssertEqual(model.failed.count, 1, "the failure produced its persistent card, as designed")
+
+        model.removeAllPending()
+
+        XCTAssertTrue(model.pending.isEmpty)
+        XCTAssertTrue(model.failed.isEmpty, "Remove must also clear the persistent failed card")
+        XCTAssertNil(model.failureAlert)
+    }
+
+    /// Cancel on the failure alert clears the alert's own persistent failed
+    /// card via `dismissFailed` (wired in `MainTabView`) — this is the
+    /// underlying primitive that makes "Cancel disappears the card" true.
+    func testDismissFailedClearsTheFailedCard() async throws {
+        let model = makeModel(failureCode: "site_blocked")
+
+        try await model.submit(url: "https://www.gimmesomeoven.com/authentic-gazpacho-recipe/")
+        await waitUntil { model.failureAlert != nil }
+        let jobId = model.failed[0].jobId
+
+        model.dismissFailed(jobId: jobId)
+
+        XCTAssertTrue(model.failed.isEmpty)
+    }
+
     // MARK: 5 — poll budget expiry always resolves the card (never leaves it pending)
 
     /// A job still `.processing` when the poll budget runs out (e.g. a slow

@@ -316,6 +316,7 @@ final class PendingJobsModel: ObservableObject, SyncRefreshable {
     /// Dismiss a failed card (removes the in-memory entry; the store no longer
     /// holds it).
     func dismissFailed(jobId: String) {
+        pollLog.log("dismissFailed(\(jobId, privacy: .public))")
         failed.removeAll { $0.jobId == jobId }
     }
 
@@ -356,7 +357,18 @@ final class PendingJobsModel: ObservableObject, SyncRefreshable {
     /// the whole pending list rather than trying to identify which entries are
     /// "the same" one. In-flight polls for every cleared job are discarded the
     /// same way `removePending` already discards one.
+    ///
+    /// Also clears every *failed* card and the one-time alert: `pending`
+    /// clearing correctly and immediately on every failure was verified by
+    /// direct trace (`handleFailed` calls this unconditionally the instant a
+    /// job goes `.failed`) — the persistent card a user taps "Remove" on when
+    /// something still looks stuck is at least as likely to be a
+    /// `FailedJobCardView` that's intentionally waiting for an explicit
+    /// dismiss (see `dismissFailed`) as a genuine leftover `PendingJob`.
+    /// "Remove" is the user's escape hatch for "get rid of whatever import
+    /// junk is on screen," so it clears both.
     func removeAllPending() {
+        pollLog.log("removeAllPending(): clearing \(self.pending.count, privacy: .public) pending, \(self.failed.count, privacy: .public) failed")
         for job in pending {
             removedJobIds.insert(job.jobId)
         }
@@ -364,6 +376,8 @@ final class PendingJobsModel: ObservableObject, SyncRefreshable {
             store.remove(jobId: job.jobId)
         }
         pending = store.all()
+        failed = []
+        failureAlert = nil
     }
 
     /// Delete a finished recipe from the user's library. Mirrors the inverse of
@@ -580,17 +594,21 @@ final class PendingJobsModel: ObservableObject, SyncRefreshable {
     }
 
     private func handleFailed(jobId: String, message: String, url: String? = nil, code: String? = nil) {
-        guard !removedJobIds.contains(jobId) else { return }
+        guard !removedJobIds.contains(jobId) else {
+            pollLog.log("handleFailed(\(jobId, privacy: .public)): already in removedJobIds — ignoring late result")
+            return
+        }
+        pollLog.log("handleFailed(\(jobId, privacy: .public)): code=\(code ?? "nil", privacy: .public)")
         let jobURL = url ?? pending.first(where: { $0.jobId == jobId })?.url ?? ""
         // Stop-gap: a failure wipes every pending entry, not just this jobId —
         // matching by URL/canonical key still wasn't reliably clearing the
         // stuck "Extracting recipe…" card, so this no longer tries to identify
         // which other entries are "the same" import as the one that failed.
+        // This also clears `failed`/`failureAlert` (see `removeAllPending`),
+        // so the FailedJob appended right below is the only one left.
         removeAllPending()
 
-        if !failed.contains(where: { $0.jobId == jobId }) {
-            failed.append(FailedJob(jobId: jobId, url: jobURL, message: message, errorCode: code))
-        }
+        failed.append(FailedJob(jobId: jobId, url: jobURL, message: message, errorCode: code))
         // Surface a one-time alert on the transition to failed. Once per jobId
         // per session; a second concurrent failure keeps its card but doesn't
         // stomp an unacknowledged alert.
