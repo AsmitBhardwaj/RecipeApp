@@ -26,6 +26,10 @@ final class PendingJobsModelTests: XCTestCase {
         let provider = FakeRecipeProvider()
         provider.failureCode = failureCode
         provider.failureMessage = message
+        return makeModel(provider: provider)
+    }
+
+    private func makeModel(provider: FakeRecipeProvider) -> PendingJobsModel {
         let defaults = UserDefaults(suiteName: "pendingjobsmodeltests-\(UUID().uuidString)")!
         return PendingJobsModel(
             provider: provider,
@@ -111,5 +115,48 @@ final class PendingJobsModelTests: XCTestCase {
         await waitUntil { model.failureAlert != nil }
 
         XCTAssertEqual(model.failureAlert?.canPasteText, false)
+    }
+
+    // MARK: 4 — removePending (the stuck-forever escape hatch)
+
+    /// A job stuck showing "Extracting recipe…" (e.g. one whose poll ran past
+    /// its budget with no automatic re-arm) must be removable with no server
+    /// call — purely local, immediate.
+    func testRemovePendingClearsImmediatelyWithNoServerCall() async throws {
+        let provider = FakeRecipeProvider()
+        let defaults = UserDefaults(suiteName: "pendingjobsmodeltests-\(UUID().uuidString)")!
+        let store = PendingJobStore(defaults: defaults)
+        let model = PendingJobsModel(provider: provider, userScope: "test-\(UUID().uuidString)", store: store)
+
+        try await model.submit(url: "https://www.gimmesomeoven.com/authentic-gazpacho-recipe/")
+        XCTAssertEqual(model.pending.count, 1)
+        let jobId = model.pending[0].jobId
+
+        model.removePending(jobId: jobId)
+
+        XCTAssertTrue(model.pending.isEmpty)
+        XCTAssertTrue(store.all().isEmpty, "removal must be reflected in the durable store, not just the in-memory list")
+    }
+
+    /// If a poll is still in flight when the user removes the card, its
+    /// eventual terminal result must not resurrect a failed card or alert for
+    /// a job the user already dismissed.
+    func testRemovePendingDiscardsInFlightPollResult() async throws {
+        let provider = FakeRecipeProvider()
+        provider.failureCode = "no_recipe_found"
+        provider.fetchJobDelay = .milliseconds(150)
+        let model = makeModel(provider: provider)
+
+        try await model.submit(url: "https://www.gimmesomeoven.com/authentic-gazpacho-recipe/")
+        XCTAssertEqual(model.pending.count, 1)
+        model.removePending(jobId: model.pending[0].jobId)
+        XCTAssertTrue(model.pending.isEmpty)
+
+        // Let the delayed poll resolve (it would otherwise reach handleFailed).
+        try? await Task.sleep(for: .milliseconds(300))
+
+        XCTAssertTrue(model.pending.isEmpty)
+        XCTAssertTrue(model.failed.isEmpty, "a removed job's late poll result must not resurrect a failed card")
+        XCTAssertNil(model.failureAlert)
     }
 }

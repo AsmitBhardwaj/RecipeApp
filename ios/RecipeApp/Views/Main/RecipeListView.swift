@@ -76,6 +76,16 @@ struct RecipeListView: View {
                     ForEach(pendingJobs) { pendingJob in
                         ProcessingCardView(job: pendingJob)
                             .cardRow(bordered: false)
+                            .swipeActions(edge: .trailing) {
+                                Button(role: .destructive) { jobs.removePending(jobId: pendingJob.jobId) } label: {
+                                    Label("Remove", systemImage: "xmark.circle")
+                                }
+                            }
+                            .contextMenu {
+                                Button(role: .destructive) { jobs.removePending(jobId: pendingJob.jobId) } label: {
+                                    Label("Remove", systemImage: "xmark.circle")
+                                }
+                            }
                     }
                     ForEach(displayedRecipes) { recipe in
                         NavigationLink(value: recipe) {

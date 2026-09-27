@@ -84,6 +84,13 @@ final class PendingJobsModel: ObservableObject, SyncRefreshable {
     /// Job ids we've already surfaced the failure alert for this session, so the
     /// same failure never pops the alert twice. Not persisted (resets each launch).
     private var alertedJobIds: Set<String> = []
+    /// Job ids the user manually removed from the pending list via
+    /// `removePending` while a poll for them may still be in flight (e.g. one
+    /// stuck past `maxWait` with no automatic re-arm — see `poll()`). Checked by
+    /// `handleComplete`/`handleFailed` so that poll's eventual result can't
+    /// resurrect a failed/complete card for a job the user already dismissed.
+    /// Not persisted — a relaunch has no in-flight poll to guard against.
+    private var removedJobIds: Set<String> = []
     /// Whether the one-time recipe seed has succeeded. Guards `load()` so a
     /// re-fired `.task` can never re-run it and clobber recipes resolved this
     /// session (see `load()`).
@@ -203,6 +210,20 @@ final class PendingJobsModel: ObservableObject, SyncRefreshable {
         failed.removeAll { $0.jobId == jobId }
     }
 
+    /// Remove a still-pending (processing) job the user wants gone — no server
+    /// call, purely local. The intended escape hatch for a job stuck showing
+    /// "Extracting recipe…" (e.g. one whose poll ran past `maxWait` with the
+    /// backend never reaching a terminal status in time, or that only resolves
+    /// on the next foreground `reconcile()`, which may be a while off) with no
+    /// other way to clear it. If a poll is still in flight for this job, its
+    /// eventual result is discarded (see `removedJobIds`) rather than
+    /// resurrecting a failed/complete card for a job already dismissed here.
+    func removePending(jobId: String) {
+        removedJobIds.insert(jobId)
+        store.remove(jobId: jobId)
+        pending = store.all()
+    }
+
     /// Delete a finished recipe from the user's library. Mirrors the inverse of
     /// `handleComplete`: drop it from the in-memory list, remove the on-device
     /// body cache, and record a `.library` tombstone so the deletion propagates
@@ -292,6 +313,7 @@ final class PendingJobsModel: ObservableObject, SyncRefreshable {
     }
 
     private func handleComplete(jobId: String, envelope: JobEnvelope) {
+        guard !removedJobIds.contains(jobId) else { return }
         if let recipe = envelope.recipe {
             recipes.removeAll { $0.recipeId == recipe.recipeId }
             recipes.insert(recipe, at: 0)
@@ -308,6 +330,7 @@ final class PendingJobsModel: ObservableObject, SyncRefreshable {
     }
 
     private func handleFailed(jobId: String, message: String, url: String? = nil, code: String? = nil) {
+        guard !removedJobIds.contains(jobId) else { return }
         let jobURL = url ?? pending.first(where: { $0.jobId == jobId })?.url ?? ""
         // Clear the processing card the instant a job reaches `.failed` — this
         // does not depend on the alert below, or on the user ever seeing or

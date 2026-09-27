@@ -316,6 +316,15 @@ struct CookbooksGridView: View {
         ForEach(jobs.pending) { pendingJob in
             ProcessingCardView(job: pendingJob)
                 .card()
+                // Not inside a List here (ScrollView + LazyVStack), so
+                // .swipeActions has no effect — long-press is this surface's
+                // only affordance for the same "Remove" action RecipeListView
+                // also offers via swipe.
+                .contextMenu {
+                    Button(role: .destructive) { jobs.removePending(jobId: pendingJob.jobId) } label: {
+                        Label("Remove", systemImage: "xmark.circle")
+                    }
+                }
         }
     }
 

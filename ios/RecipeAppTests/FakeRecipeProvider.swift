@@ -17,6 +17,10 @@ final class FakeRecipeProvider: RecipeProvider {
     /// tests, but keeps the double honest about every terminal outcome).
     var failureCode: String?
     var failureMessage: String = "We couldn't read a recipe from that link."
+    /// Artificial delay before `fetchJob` resolves — lets a test act (e.g. call
+    /// `removePending`) while the poll is still in flight, before its result
+    /// comes back.
+    var fetchJobDelay: Duration = .zero
 
     private static func iso(_ date: Date = Date()) -> String {
         ISO8601DateFormatter().string(from: date)
@@ -33,6 +37,9 @@ final class FakeRecipeProvider: RecipeProvider {
     }
 
     func fetchJob(jobId: String) async throws -> JobEnvelope {
+        if fetchJobDelay > .zero {
+            try? await Task.sleep(for: fetchJobDelay)
+        }
         let job = Job(
             jobId: jobId,
             userId: "test-user",
