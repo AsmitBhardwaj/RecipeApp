@@ -305,6 +305,46 @@ final class PendingJobsModelTests: XCTestCase {
         XCTAssertEqual(provider.callCount, 0, "there is nothing left to poll — reconcile() must not invent a job to check")
     }
 
+    // MARK: 4d — removeAllPending (stop-gap: Remove and any failure wipe the
+    // whole pending list, no attempt to identify "the same" entry by id/URL)
+
+    /// Remove must clear every pending entry, including ones for completely
+    /// unrelated URLs — not just the card the user tapped.
+    func testRemoveAllPendingClearsEverythingRegardlessOfURL() async throws {
+        let defaults = UserDefaults(suiteName: "pendingjobsmodeltests-\(UUID().uuidString)")!
+        let store = PendingJobStore(defaults: defaults)
+        store.upsert(PendingJob(jobId: "job-1", url: "https://www.gimmesomeoven.com/authentic-gazpacho-recipe/"))
+        store.upsert(PendingJob(jobId: "job-2", url: "https://www.allrecipes.com/recipe/1"))
+        let model = PendingJobsModel(provider: FakeRecipeProvider(), userScope: "test-\(UUID().uuidString)", store: store)
+        XCTAssertEqual(model.pending.count, 2)
+
+        model.removeAllPending()
+
+        XCTAssertTrue(model.pending.isEmpty)
+        XCTAssertTrue(store.all().isEmpty, "removal must be reflected in the durable store, not just the in-memory list")
+    }
+
+    /// A job reaching `.failed` must wipe every pending entry the moment the
+    /// alert fires — including one for a completely different URL that was
+    /// never itself polled — not just the job that actually failed.
+    func testFailedJobClearsAllPendingEntriesRegardlessOfURL() async throws {
+        let defaults = UserDefaults(suiteName: "pendingjobsmodeltests-\(UUID().uuidString)")!
+        let store = PendingJobStore(defaults: defaults)
+        // A second, unrelated pending entry — never submitted or polled by
+        // this test — sitting in the store alongside the one about to fail.
+        store.upsert(PendingJob(jobId: "job-other", url: "https://www.allrecipes.com/recipe/1"))
+        let provider = FakeRecipeProvider()
+        provider.failureCode = "site_blocked"
+        let model = PendingJobsModel(provider: provider, userScope: "test-\(UUID().uuidString)", store: store)
+        XCTAssertEqual(model.pending.count, 1, "the unrelated entry is visible before the new submission fails")
+
+        try await model.submit(url: "https://www.gimmesomeoven.com/authentic-gazpacho-recipe/")
+        await waitUntil { model.failureAlert != nil }
+
+        XCTAssertTrue(model.pending.isEmpty, "the unrelated entry must be wiped too, not just the job that failed")
+        XCTAssertTrue(store.all().isEmpty)
+    }
+
     // MARK: 5 — poll budget expiry always resolves the card (never leaves it pending)
 
     /// A job still `.processing` when the poll budget runs out (e.g. a slow

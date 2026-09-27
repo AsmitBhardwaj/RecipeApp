@@ -350,6 +350,22 @@ final class PendingJobsModel: ObservableObject, SyncRefreshable {
         pending = store.all()
     }
 
+    /// Stop-gap: clear every pending entry, not just ones matching a job id or
+    /// URL. `removePendingMatching` still wasn't reliably clearing the stuck
+    /// "Extracting recipe…" card, so Remove and a failure alert both now wipe
+    /// the whole pending list rather than trying to identify which entries are
+    /// "the same" one. In-flight polls for every cleared job are discarded the
+    /// same way `removePending` already discards one.
+    func removeAllPending() {
+        for job in pending {
+            removedJobIds.insert(job.jobId)
+        }
+        for job in store.all() {
+            store.remove(jobId: job.jobId)
+        }
+        pending = store.all()
+    }
+
     /// Delete a finished recipe from the user's library. Mirrors the inverse of
     /// `handleComplete`: drop it from the in-memory list, remove the on-device
     /// body cache, and record a `.library` tombstone so the deletion propagates
@@ -566,12 +582,11 @@ final class PendingJobsModel: ObservableObject, SyncRefreshable {
     private func handleFailed(jobId: String, message: String, url: String? = nil, code: String? = nil) {
         guard !removedJobIds.contains(jobId) else { return }
         let jobURL = url ?? pending.first(where: { $0.jobId == jobId })?.url ?? ""
-        // Clear the processing card the instant a job reaches `.failed` — this
-        // does not depend on the alert below, or on the user ever seeing or
-        // dismissing it. Every error code takes this same path, so a job never
-        // stays a "processing" card once the backend has terminally failed it.
-        store.remove(jobId: jobId)
-        pending = store.all()
+        // Stop-gap: a failure wipes every pending entry, not just this jobId —
+        // matching by URL/canonical key still wasn't reliably clearing the
+        // stuck "Extracting recipe…" card, so this no longer tries to identify
+        // which other entries are "the same" import as the one that failed.
+        removeAllPending()
 
         if !failed.contains(where: { $0.jobId == jobId }) {
             failed.append(FailedJob(jobId: jobId, url: jobURL, message: message, errorCode: code))
