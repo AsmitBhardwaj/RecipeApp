@@ -259,6 +259,22 @@ final class PendingJobsModel: ObservableObject, SyncRefreshable {
         pending = store.all()
     }
 
+    /// Remove every still-pending job for `url` — the same escape hatch as
+    /// `removePending(jobId:)`, but for a whole URL at once. A single failure
+    /// alert only carries the one job id that actually failed; if a stale or
+    /// duplicate entry for the same URL is also sitting in `PendingJobStore`
+    /// (e.g. left over from an older build, or a second submission of the same
+    /// link), dismissing the alert — Cancel or Paste Recipe Text — clears all
+    /// of them, not just the one the alert was for, so the user never taps
+    /// past a failure only to find a card for the same URL still spinning.
+    func removePendingMatching(url: String) {
+        for job in pending where job.url == url {
+            removedJobIds.insert(job.jobId)
+            store.remove(jobId: job.jobId)
+        }
+        pending = store.all()
+    }
+
     /// Delete a finished recipe from the user's library. Mirrors the inverse of
     /// `handleComplete`: drop it from the in-memory list, remove the on-device
     /// body cache, and record a `.library` tombstone so the deletion propagates

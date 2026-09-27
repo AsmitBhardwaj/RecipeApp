@@ -152,10 +152,16 @@ struct MainTabView: View {
                     message: alert.message,
                     onPasteText: alert.canPasteText ? {
                         let failedJob = jobs.failed.first(where: { $0.id == alert.id })
+                        if let url = failedJob?.url { jobs.removePendingMatching(url: url) }
                         jobs.clearFailureAlert()
                         pasteTarget = failedJob
                     } : nil,
-                    onDismiss: { jobs.clearFailureAlert() }
+                    onDismiss: {
+                        if let url = jobs.failed.first(where: { $0.id == alert.id })?.url {
+                            jobs.removePendingMatching(url: url)
+                        }
+                        jobs.clearFailureAlert()
+                    }
                 )
                 .transition(.opacity.combined(with: .scale(scale: 0.96)))
             }

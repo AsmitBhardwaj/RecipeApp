@@ -170,6 +170,45 @@ final class PendingJobsModelTests: XCTestCase {
         XCTAssertNil(model.failureAlert)
     }
 
+    // MARK: 4b — removePendingMatching (clears every pending card for a URL,
+    // not just the one job id a failure alert happens to carry)
+
+    /// Two pending entries for the same URL (e.g. a stale one left over from an
+    /// older build plus a fresh resubmission) must both clear when the user
+    /// dismisses the failure alert for that URL — not just the one job id the
+    /// alert was keyed to.
+    func testRemovePendingMatchingRemovesAllEntriesForTheSameURL() async throws {
+        let defaults = UserDefaults(suiteName: "pendingjobsmodeltests-\(UUID().uuidString)")!
+        let store = PendingJobStore(defaults: defaults)
+        let url = "https://www.gimmesomeoven.com/authentic-gazpacho-recipe/"
+        store.upsert(PendingJob(jobId: "job-1", url: url))
+        store.upsert(PendingJob(jobId: "job-2", url: url))
+        let model = PendingJobsModel(provider: FakeRecipeProvider(), userScope: "test-\(UUID().uuidString)", store: store)
+        XCTAssertEqual(model.pending.count, 2)
+
+        model.removePendingMatching(url: url)
+
+        XCTAssertTrue(model.pending.isEmpty)
+        XCTAssertTrue(store.all().isEmpty, "removal must be reflected in the durable store, not just the in-memory list")
+    }
+
+    /// A pending entry for a different URL must survive — only the failed URL's
+    /// entries are cleared.
+    func testRemovePendingMatchingLeavesOtherURLsAlone() async throws {
+        let defaults = UserDefaults(suiteName: "pendingjobsmodeltests-\(UUID().uuidString)")!
+        let store = PendingJobStore(defaults: defaults)
+        let target = "https://www.gimmesomeoven.com/authentic-gazpacho-recipe/"
+        let other = "https://www.allrecipes.com/recipe/1"
+        store.upsert(PendingJob(jobId: "job-1", url: target))
+        store.upsert(PendingJob(jobId: "job-2", url: other))
+        let model = PendingJobsModel(provider: FakeRecipeProvider(), userScope: "test-\(UUID().uuidString)", store: store)
+
+        model.removePendingMatching(url: target)
+
+        XCTAssertEqual(model.pending.map(\.jobId), ["job-2"])
+        XCTAssertEqual(store.all().map(\.jobId), ["job-2"])
+    }
+
     // MARK: 5 — poll budget expiry always resolves the card (never leaves it pending)
 
     /// A job still `.processing` when the poll budget runs out (e.g. a slow

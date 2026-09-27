@@ -314,17 +314,21 @@ struct CookbooksGridView: View {
         }
 
         ForEach(jobs.pending) { pendingJob in
-            ProcessingCardView(job: pendingJob)
-                .card()
-                // Not inside a List here (ScrollView + LazyVStack), so
-                // .swipeActions has no effect — long-press is this surface's
-                // only affordance for the same "Remove" action RecipeListView
-                // also offers via swipe.
-                .contextMenu {
-                    Button(role: .destructive) { jobs.removePending(jobId: pendingJob.jobId) } label: {
-                        Label("Remove", systemImage: "xmark.circle")
-                    }
+            // Not inside a List here (ScrollView + LazyVStack), so native
+            // .swipeActions has no effect. SwipeToRemoveCard reproduces the
+            // same gesture manually as a second affordance alongside the
+            // long-press context menu — a backup for a stuck "Extracting
+            // recipe…" card, in case the context menu's long-press isn't
+            // discovered.
+            SwipeToRemoveCard(action: { jobs.removePending(jobId: pendingJob.jobId) }) {
+                ProcessingCardView(job: pendingJob)
+                    .card()
+            }
+            .contextMenu {
+                Button(role: .destructive) { jobs.removePending(jobId: pendingJob.jobId) } label: {
+                    Label("Remove", systemImage: "xmark.circle")
                 }
+            }
         }
     }
 
@@ -670,6 +674,65 @@ private struct RecipePhotoCard: View {
     private var ingredientCountText: String {
         let count = recipe.ingredients.count
         return "\(count) ingredient\(count == 1 ? "" : "s")"
+    }
+}
+
+// MARK: - Swipe to remove
+
+/// Manual swipe-to-delete, for content that sits in a `ScrollView`/`LazyVStack`
+/// rather than a `List` — SwiftUI's `.swipeActions` only works inside a `List`.
+/// Dragging left reveals a "Remove" button behind the content; tapping it or
+/// dragging past `revealWidth` and releasing triggers `action`.
+private struct SwipeToRemoveCard<Content: View>: View {
+    let action: () -> Void
+    @ViewBuilder let content: () -> Content
+
+    @State private var offset: CGFloat = 0
+    @GestureState private var dragTranslation: CGFloat = 0
+
+    private let revealWidth: CGFloat = 84
+
+    var body: some View {
+        ZStack(alignment: .trailing) {
+            Button(role: .destructive, action: remove) {
+                Label("Remove", systemImage: "xmark.circle.fill")
+                    .labelStyle(.iconOnly)
+                    .font(.title2)
+                    .foregroundStyle(.white)
+                    .frame(width: revealWidth)
+                    .frame(maxHeight: .infinity)
+            }
+            .background(Color.red, in: RoundedRectangle(cornerRadius: Theme.cornerRadius, style: .continuous))
+            .opacity(currentOffset < -8 ? 1 : 0)
+            .accessibilityHidden(currentOffset >= -8)
+
+            content()
+                .offset(x: currentOffset)
+                .gesture(
+                    DragGesture(minimumDistance: 12)
+                        .updating($dragTranslation) { value, state, _ in
+                            state = value.translation.width
+                        }
+                        .onEnded { value in
+                            let projected = offset + value.translation.width
+                            withAnimation(.easeOut(duration: 0.2)) {
+                                offset = projected < -revealWidth / 2 ? -revealWidth : 0
+                            }
+                        }
+                )
+                .animation(.interactiveSpring(), value: dragTranslation)
+        }
+        .clipShape(RoundedRectangle(cornerRadius: Theme.cornerRadius, style: .continuous))
+        .accessibilityAction(named: "Remove", remove)
+    }
+
+    private var currentOffset: CGFloat {
+        min(0, max(offset + dragTranslation, -revealWidth))
+    }
+
+    private func remove() {
+        withAnimation(.easeOut(duration: 0.2)) { offset = 0 }
+        action()
     }
 }
 
