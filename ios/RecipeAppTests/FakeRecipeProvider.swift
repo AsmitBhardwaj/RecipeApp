@@ -21,6 +21,11 @@ final class FakeRecipeProvider: RecipeProvider {
     /// `removePending`) while the poll is still in flight, before its result
     /// comes back.
     var fetchJobDelay: Duration = .zero
+    /// When true, `fetchJob` always resolves `.processing` regardless of
+    /// `failureCode` — simulates a job that never reaches a terminal status
+    /// within the client's poll budget (see `PendingJobsModel.poll`'s
+    /// post-`maxWait` final check).
+    var alwaysProcessing = false
 
     private static func iso(_ date: Date = Date()) -> String {
         ISO8601DateFormatter().string(from: date)
@@ -39,6 +44,13 @@ final class FakeRecipeProvider: RecipeProvider {
     func fetchJob(jobId: String) async throws -> JobEnvelope {
         if fetchJobDelay > .zero {
             try? await Task.sleep(for: fetchJobDelay)
+        }
+        if alwaysProcessing {
+            let job = Job(
+                jobId: jobId, userId: "test-user", url: "https://example.com",
+                status: .processing, createdAt: Self.iso()
+            )
+            return JobEnvelope(job: job, recipe: nil)
         }
         let job = Job(
             jobId: jobId,

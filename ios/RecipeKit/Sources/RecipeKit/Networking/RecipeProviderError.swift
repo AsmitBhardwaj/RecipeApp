@@ -69,6 +69,13 @@ public enum RecipeProviderError: Error, Equatable {
         }
     }
 
+    /// A local, client-synthesized code for a job whose poll budget
+    /// (`PendingJobsModel.maxWait`) expired without the backend ever reaching a
+    /// terminal status — never sent by the backend itself. Paste-eligible: the
+    /// user can still supply the recipe text manually while the import is (or
+    /// was) taking unusually long. See `PendingJobsModel.poll`.
+    public static let clientTimeoutCode = "client_timeout"
+
     /// Backend failure codes where the fix is for the user to paste the recipe
     /// text themselves — we either couldn't obtain the source (a site blocked us,
     /// a fetch failed) or couldn't read the caption. The failed-job UI offers a
@@ -83,6 +90,7 @@ public enum RecipeProviderError: Error, Equatable {
         "too_large",
         "dns_error",
         "caption_not_found",   // Instagram/TikTok caption couldn't be read
+        clientTimeoutCode,
     ]
 
     /// Whether a failed job's `error_code` should offer the paste-text remedy.
@@ -128,6 +136,8 @@ public enum RecipeProviderError: Error, Equatable {
             return "Something went wrong on our end. Please try again."
         case "llm_refusal":
             return "We couldn't read a recipe from this one."
+        case clientTimeoutCode:
+            return "This import is taking too long. Try again or paste the recipe text."
         default:
             return backendMessage ?? "We couldn't read a recipe from that link."
         }

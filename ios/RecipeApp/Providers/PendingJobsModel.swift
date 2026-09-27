@@ -85,8 +85,7 @@ final class PendingJobsModel: ObservableObject, SyncRefreshable {
     /// same failure never pops the alert twice. Not persisted (resets each launch).
     private var alertedJobIds: Set<String> = []
     /// Job ids the user manually removed from the pending list via
-    /// `removePending` while a poll for them may still be in flight (e.g. one
-    /// stuck past `maxWait` with no automatic re-arm — see `poll()`). Checked by
+    /// `removePending` while a poll for them may still be in flight. Checked by
     /// `handleComplete`/`handleFailed` so that poll's eventual result can't
     /// resurrect a failed/complete card for a job the user already dismissed.
     /// Not persisted — a relaunch has no in-flight poll to guard against.
@@ -97,8 +96,10 @@ final class PendingJobsModel: ObservableObject, SyncRefreshable {
     private var hasLoaded = false
 
     /// Poll cadence/budget — mirrors `APIRecipeProvider.pollUntilRecipe`.
-    private let pollInterval: Duration = .seconds(1.5)
-    private let maxWait: Duration = .seconds(120)
+    /// Injectable so tests can drive `poll()`'s budget-expiry path (see
+    /// `poll()`) without a real 120-second wait.
+    private let pollInterval: Duration
+    private let maxWait: Duration
 
     /// Sync hub (nil in previews/unscoped builds → no sync recording).
     private let sync: SyncCoordinator?
@@ -107,11 +108,15 @@ final class PendingJobsModel: ObservableObject, SyncRefreshable {
         provider: RecipeProvider,
         userScope: String? = nil,
         sync: SyncCoordinator? = nil,
-        store: PendingJobStore = PendingJobStore()
+        store: PendingJobStore = PendingJobStore(),
+        pollInterval: Duration = .seconds(1.5),
+        maxWait: Duration = .seconds(120)
     ) {
         self.provider = provider
         self.sync = sync
         self.store = store
+        self.pollInterval = pollInterval
+        self.maxWait = maxWait
         // The recipe cache is account-scoped; the pending-jobs queue stays
         // device-local (transient, reconciled per Stage 6).
         self.recipeStore = RecipeStore(userScope: userScope)
@@ -283,21 +288,11 @@ final class PendingJobsModel: ObservableObject, SyncRefreshable {
         while clock.now < deadline {
             do {
                 let envelope = try await provider.fetchJob(jobId: jobId)
-                switch envelope.job.status {
-                case .queued, .processing:
+                if envelope.job.status == .queued || envelope.job.status == .processing {
                     store.updateStatus(jobId: jobId, envelope.job.status)
                     pending = store.all()
-                case .complete:
-                    handleComplete(jobId: jobId, envelope: envelope)
-                    return
-                case .failed:
-                    let message = RecipeProviderError
-                        .jobFailed(code: envelope.job.errorCode, message: envelope.job.error)
-                        .userMessage
-                    handleFailed(jobId: jobId, message: message, url: envelope.job.url,
-                                 code: envelope.job.errorCode)
-                    return
                 }
+                if handleIfTerminal(jobId: jobId, envelope: envelope) { return }
             } catch RecipeProviderError.httpStatus(404) {
                 // Job genuinely not on the server — terminal; clean it up.
                 handleFailed(jobId: jobId, message: RecipeProviderError.httpStatus(404).userMessage)
@@ -308,8 +303,52 @@ final class PendingJobsModel: ObservableObject, SyncRefreshable {
             }
             try? await Task.sleep(for: pollInterval)
         }
-        // Budget exhausted while the app stayed open: leave the entry persisted so
-        // the next foreground reconcile resumes it. The card stays "processing".
+
+        // Budget exhausted. No path out of this function may leave the job
+        // still pending: do one final check rather than silently giving up —
+        // a job that only reaches a terminal status on the server *after*
+        // `maxWait` (or an app that was suspended through most of the budget,
+        // per `ContinuousClock` — suspension doesn't pause it) would otherwise
+        // leave an "Extracting recipe…" card stuck forever, since nothing but
+        // a fresh foreground `reconcile()` used to re-arm it.
+        do {
+            let envelope = try await provider.fetchJob(jobId: jobId)
+            if handleIfTerminal(jobId: jobId, envelope: envelope) { return }
+        } catch {
+            // Whatever the reason (offline, 5xx, decode error, ...) — the user
+            // has already waited the full budget either way; fall through to
+            // the same local timeout below.
+        }
+        // Still not terminal (or the final check itself failed): convert to a
+        // local, paste-eligible failure so the card always clears and the user
+        // always gets a way forward, never an indefinite spinner.
+        handleFailed(
+            jobId: jobId,
+            message: RecipeProviderError.jobFailed(code: RecipeProviderError.clientTimeoutCode, message: nil).userMessage,
+            code: RecipeProviderError.clientTimeoutCode
+        )
+    }
+
+    /// Handles a terminal envelope exactly like the poll loop's inline switch
+    /// used to (factored out so the post-budget final check in `poll()` can
+    /// share it). Returns `true` when `status` was terminal (caller should
+    /// stop polling), `false` when still queued/processing.
+    @discardableResult
+    private func handleIfTerminal(jobId: String, envelope: JobEnvelope) -> Bool {
+        switch envelope.job.status {
+        case .queued, .processing:
+            return false
+        case .complete:
+            handleComplete(jobId: jobId, envelope: envelope)
+            return true
+        case .failed:
+            let message = RecipeProviderError
+                .jobFailed(code: envelope.job.errorCode, message: envelope.job.error)
+                .userMessage
+            handleFailed(jobId: jobId, message: message, url: envelope.job.url,
+                         code: envelope.job.errorCode)
+            return true
+        }
     }
 
     private func handleComplete(jobId: String, envelope: JobEnvelope) {

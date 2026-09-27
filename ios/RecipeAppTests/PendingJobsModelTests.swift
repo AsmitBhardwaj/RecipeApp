@@ -29,12 +29,18 @@ final class PendingJobsModelTests: XCTestCase {
         return makeModel(provider: provider)
     }
 
-    private func makeModel(provider: FakeRecipeProvider) -> PendingJobsModel {
+    private func makeModel(
+        provider: FakeRecipeProvider,
+        pollInterval: Duration = .seconds(1.5),
+        maxWait: Duration = .seconds(120)
+    ) -> PendingJobsModel {
         let defaults = UserDefaults(suiteName: "pendingjobsmodeltests-\(UUID().uuidString)")!
         return PendingJobsModel(
             provider: provider,
             userScope: "test-\(UUID().uuidString)",
-            store: PendingJobStore(defaults: defaults)
+            store: PendingJobStore(defaults: defaults),
+            pollInterval: pollInterval,
+            maxWait: maxWait
         )
     }
 
@@ -158,5 +164,44 @@ final class PendingJobsModelTests: XCTestCase {
         XCTAssertTrue(model.pending.isEmpty)
         XCTAssertTrue(model.failed.isEmpty, "a removed job's late poll result must not resurrect a failed card")
         XCTAssertNil(model.failureAlert)
+    }
+
+    // MARK: 5 — poll budget expiry always resolves the card (never leaves it pending)
+
+    /// A job still `.processing` when the poll budget runs out (e.g. a slow
+    /// fetch, or an app that was suspended through most of the budget) must
+    /// still clear its card — converted to a local, paste-eligible failure —
+    /// rather than being left stuck showing "Extracting recipe…" forever.
+    func testBudgetExpiryWithStillProcessingJobProducesPasteEligibleFailure() async throws {
+        let provider = FakeRecipeProvider()
+        provider.alwaysProcessing = true
+        // Zero budget: the poll loop runs zero iterations and goes straight to
+        // the post-budget final check, which this provider also answers
+        // `.processing` — exercising "still not terminal after the final check".
+        let model = makeModel(provider: provider, maxWait: .zero)
+
+        try await model.submit(url: "https://www.gimmesomeoven.com/authentic-gazpacho-recipe/")
+        await waitUntil { model.failureAlert != nil }
+
+        XCTAssertTrue(model.pending.isEmpty, "the card must clear even though the job never went terminal")
+        XCTAssertEqual(model.failed.first?.errorCode, RecipeProviderError.clientTimeoutCode)
+        XCTAssertEqual(model.failureAlert?.canPasteText, true, "the synthesized timeout must offer Paste Recipe Text")
+    }
+
+    /// If the post-budget final check finds the job already terminal, it must
+    /// be handled exactly like a normal in-loop terminal result — the
+    /// server's own code/message, not the synthesized client timeout.
+    func testBudgetExpiryWhereFinalCheckFindsJobTerminalHandlesNormally() async throws {
+        let provider = FakeRecipeProvider()
+        provider.failureCode = "no_recipe_found"  // a real, non-eligible server code
+        let model = makeModel(provider: provider, maxWait: .zero)
+
+        try await model.submit(url: "https://example.com/recipe")
+        await waitUntil { model.failureAlert != nil }
+
+        XCTAssertTrue(model.pending.isEmpty)
+        XCTAssertEqual(model.failed.first?.errorCode, "no_recipe_found",
+                       "a job the final check finds terminal keeps its own server code, not client_timeout")
+        XCTAssertEqual(model.failureAlert?.canPasteText, false)
     }
 }
