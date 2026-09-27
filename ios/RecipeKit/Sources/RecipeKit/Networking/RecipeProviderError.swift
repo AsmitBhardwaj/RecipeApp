@@ -85,6 +85,7 @@ public enum RecipeProviderError: Error, Equatable {
     public static let pasteEligibleCodes: Set<String> = [
         "site_blocked",        // publisher bot-protection blocked the fetch
         "fetch_failed",        // couldn't reach the page at all
+        "fetch_timeout",       // the whole fetch (connect/read/redirects) ran past the server's total deadline
         "too_many_redirects",
         "not_html",            // link didn't serve readable HTML
         "too_large",
@@ -110,6 +111,8 @@ public enum RecipeProviderError: Error, Equatable {
             return "We couldn't find a recipe on this page."
         case "fetch_failed", "too_many_redirects":
             return "We couldn't reach that page. Paste the recipe text and we'll do the rest."
+        case "fetch_timeout":
+            return "That page took too long to load. Paste the recipe text and we'll do the rest."
         case "not_html":
             return "That link doesn't point to a readable web page."
         case "too_large":
