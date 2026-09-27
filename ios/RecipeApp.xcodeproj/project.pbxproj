@@ -9,7 +9,9 @@
 /* Begin PBXBuildFile section */
 		3DBD10CE3033BC8000AE8028 /* ShareExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 3DBD10C43033BC7F00AE8028 /* ShareExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		3DBD10D93033C56600AE8028 /* RecipeKit in Frameworks */ = {isa = PBXBuildFile; productRef = 3DBD10D83033C56600AE8028 /* RecipeKit */; };
+		668CC49F3F813393213EB72A /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 0407119895404F48F88D6C21 /* Foundation.framework */; };
 		AA0000000000000000000012 /* RecipeKit in Frameworks */ = {isa = PBXBuildFile; productRef = AA0000000000000000000011 /* RecipeKit */; };
+		F45036538F37F5D96E2FC792 /* RecipeKit in Frameworks */ = {isa = PBXBuildFile; productRef = 6E18A8B61B2D74435DEC73E9 /* RecipeKit */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -19,6 +21,13 @@
 			proxyType = 1;
 			remoteGlobalIDString = 3DBD10C33033BC7F00AE8028;
 			remoteInfo = ShareExtension;
+		};
+		E28542D72D09175D2E86E2E0 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = AA0000000000000000000001 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = AA0000000000000000000004;
+			remoteInfo = RecipeApp;
 		};
 /* End PBXContainerItemProxy section */
 
@@ -37,6 +46,8 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		0407119895404F48F88D6C21 /* Foundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Foundation.framework; path = Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS26.0.sdk/System/Library/Frameworks/Foundation.framework; sourceTree = DEVELOPER_DIR; };
+		0AEE9084DA5CD6432E30E5ED /* RecipeAppTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = RecipeAppTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		3DBD10C43033BC7F00AE8028 /* ShareExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = ShareExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		AA000000000000000000000E /* RecipeApp.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = RecipeApp.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		AA00000000000000000000F0 /* Secrets.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Secrets.xcconfig; sourceTree = "<group>"; };
@@ -61,6 +72,7 @@
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		3DBD10C53033BC7F00AE8028 /* ShareExtension */ = {isa = PBXFileSystemSynchronizedRootGroup; exceptions = (3DBD10CF3033BC8000AE8028 /* PBXFileSystemSynchronizedBuildFileExceptionSet */, ); explicitFileTypes = {}; explicitFolders = (); path = ShareExtension; sourceTree = "<group>"; };
+		83210559E2ED15C9ACB85B91 /* RecipeAppTests */ = {isa = PBXFileSystemSynchronizedRootGroup; explicitFileTypes = {}; explicitFolders = (); path = RecipeAppTests; sourceTree = "<group>"; };
 		AA000000000000000000000F /* RecipeApp */ = {isa = PBXFileSystemSynchronizedRootGroup; exceptions = (AA00000000000000000000F1 /* PBXFileSystemSynchronizedBuildFileExceptionSet */, ); explicitFileTypes = {}; explicitFolders = (); path = RecipeApp; sourceTree = "<group>"; };
 /* End PBXFileSystemSynchronizedRootGroup section */
 
@@ -70,6 +82,15 @@
 			buildActionMask = 2147483647;
 			files = (
 				3DBD10D93033C56600AE8028 /* RecipeKit in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		6BDBA4CA3F7948B1F1FC6BC8 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				668CC49F3F813393213EB72A /* Foundation.framework in Frameworks */,
+				F45036538F37F5D96E2FC792 /* RecipeKit in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -84,9 +105,18 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
+		33806E5E5392D54673F56043 /* iOS */ = {
+			isa = PBXGroup;
+			children = (
+				0407119895404F48F88D6C21 /* Foundation.framework */,
+			);
+			name = iOS;
+			sourceTree = "<group>";
+		};
 		3DBD10D73033C56600AE8028 /* Frameworks */ = {
 			isa = PBXGroup;
 			children = (
+				33806E5E5392D54673F56043 /* iOS */,
 			);
 			name = Frameworks;
 			sourceTree = "<group>";
@@ -99,6 +129,7 @@
 				3DBD10C53033BC7F00AE8028 /* ShareExtension */,
 				3DBD10D73033C56600AE8028 /* Frameworks */,
 				AA0000000000000000000003 /* Products */,
+				83210559E2ED15C9ACB85B91 /* RecipeAppTests */,
 			);
 			sourceTree = "<group>";
 		};
@@ -107,6 +138,7 @@
 			children = (
 				AA000000000000000000000E /* RecipeApp.app */,
 				3DBD10C43033BC7F00AE8028 /* ShareExtension.appex */,
+				0AEE9084DA5CD6432E30E5ED /* RecipeAppTests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -162,6 +194,30 @@
 			productReference = AA000000000000000000000E /* RecipeApp.app */;
 			productType = "com.apple.product-type.application";
 		};
+		DF7B60E866FD100F6A6BA63C /* RecipeAppTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = C57283CC1BF571DD65ABE098 /* Build configuration list for PBXNativeTarget "RecipeAppTests" */;
+			buildPhases = (
+				C539E561B4D5459BA883DB0F /* Sources */,
+				6BDBA4CA3F7948B1F1FC6BC8 /* Frameworks */,
+				4C1C119F0E8B28634257BE6A /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				A202B4911B92000CBBD32493 /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				83210559E2ED15C9ACB85B91 /* RecipeAppTests */,
+			);
+			name = RecipeAppTests;
+			packageProductDependencies = (
+				6E18A8B61B2D74435DEC73E9 /* RecipeKit */,
+			);
+			productName = RecipeAppTests;
+			productReference = 0AEE9084DA5CD6432E30E5ED /* RecipeAppTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -199,12 +255,20 @@
 			targets = (
 				AA0000000000000000000004 /* RecipeApp */,
 				3DBD10C33033BC7F00AE8028 /* ShareExtension */,
+				DF7B60E866FD100F6A6BA63C /* RecipeAppTests */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
 		3DBD10C23033BC7F00AE8028 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		4C1C119F0E8B28634257BE6A /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -235,6 +299,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		C539E561B4D5459BA883DB0F /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
@@ -242,6 +313,12 @@
 			isa = PBXTargetDependency;
 			target = 3DBD10C33033BC7F00AE8028 /* ShareExtension */;
 			targetProxy = 3DBD10CC3033BC8000AE8028 /* PBXContainerItemProxy */;
+		};
+		A202B4911B92000CBBD32493 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			name = RecipeApp;
+			target = AA0000000000000000000004 /* RecipeApp */;
+			targetProxy = E28542D72D09175D2E86E2E0 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -313,6 +390,59 @@
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Release;
+		};
+		58DCFF15A15D5BFA69AE8E2B /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CLANG_ENABLE_OBJC_WEAK = NO;
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = 3X4GVUTA76;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.recipeapp.RecipeApp2.RecipeAppTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/RecipeApp.app/RecipeApp";
+			};
+			name = Debug;
+		};
+		9D92B2BF3BECBCF3BD4B9BA0 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CLANG_ENABLE_OBJC_WEAK = NO;
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = 3X4GVUTA76;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.recipeapp.RecipeApp2.RecipeAppTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/RecipeApp.app/RecipeApp";
+				VALIDATE_PRODUCT = YES;
 			};
 			name = Release;
 		};
@@ -539,6 +669,15 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
+		C57283CC1BF571DD65ABE098 /* Build configuration list for PBXNativeTarget "RecipeAppTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				9D92B2BF3BECBCF3BD4B9BA0 /* Release */,
+				58DCFF15A15D5BFA69AE8E2B /* Debug */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
 /* End XCConfigurationList section */
 
 /* Begin XCLocalSwiftPackageReference section */
@@ -550,6 +689,11 @@
 
 /* Begin XCSwiftPackageProductDependency section */
 		3DBD10D83033C56600AE8028 /* RecipeKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = AA0000000000000000000010 /* XCLocalSwiftPackageReference "RecipeKit" */;
+			productName = RecipeKit;
+		};
+		6E18A8B61B2D74435DEC73E9 /* RecipeKit */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = AA0000000000000000000010 /* XCLocalSwiftPackageReference "RecipeKit" */;
 			productName = RecipeKit;
