@@ -92,9 +92,13 @@ struct AddRecipeView: View {
 
     private func submit() {
         phase = .submitting
+        // Trim before persisting: a paste from Notes/clipboard often carries a
+        // trailing newline, which — left untrimmed — made two submissions of
+        // the visibly same link produce two distinct-looking pending entries.
+        let trimmedURL = urlText.trimmingCharacters(in: .whitespacesAndNewlines)
         Task {
             do {
-                try await jobs.submit(url: urlText)
+                try await jobs.submit(url: trimmedURL)
                 // Job enqueued and now tracked as a processing card — close.
                 dismiss()
             } catch RecipeProviderError.freeLimitReached {

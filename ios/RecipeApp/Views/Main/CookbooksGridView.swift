@@ -320,12 +320,17 @@ struct CookbooksGridView: View {
             // long-press context menu — a backup for a stuck "Extracting
             // recipe…" card, in case the context menu's long-press isn't
             // discovered.
-            SwipeToRemoveCard(action: { jobs.removePending(jobId: pendingJob.jobId) }) {
+            //
+            // Removes by URL, not just this one job id: a duplicate pending
+            // entry for the same link (two visually-identical cards) would
+            // otherwise survive removing just the one the user acted on,
+            // making Remove look like it did nothing.
+            SwipeToRemoveCard(action: { jobs.removePendingMatching(url: pendingJob.url) }) {
                 ProcessingCardView(job: pendingJob)
                     .card()
             }
             .contextMenu {
-                Button(role: .destructive) { jobs.removePending(jobId: pendingJob.jobId) } label: {
+                Button(role: .destructive) { jobs.removePendingMatching(url: pendingJob.url) } label: {
                     Label("Remove", systemImage: "xmark.circle")
                 }
             }

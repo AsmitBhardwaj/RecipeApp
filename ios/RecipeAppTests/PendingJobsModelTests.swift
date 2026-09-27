@@ -209,6 +209,102 @@ final class PendingJobsModelTests: XCTestCase {
         XCTAssertEqual(store.all().map(\.jobId), ["job-2"])
     }
 
+    /// `removePendingMatching` must match on the same canonical URL, not exact
+    /// string equality — a paste with a trailing newline (unTrimmed by
+    /// `AddRecipeView` at submit time) previously produced a pending entry
+    /// that looked identical on screen but wouldn't match the failed job's
+    /// exact `url` string.
+    func testRemovePendingMatchingMatchesCanonicalURLNotExactString() async throws {
+        let defaults = UserDefaults(suiteName: "pendingjobsmodeltests-\(UUID().uuidString)")!
+        let store = PendingJobStore(defaults: defaults)
+        store.upsert(PendingJob(jobId: "job-1", url: "https://www.gimmesomeoven.com/authentic-gazpacho-recipe/"))
+        store.upsert(PendingJob(jobId: "job-2", url: "  https://www.gimmesomeoven.com/authentic-gazpacho-recipe/\n"))
+        let model = PendingJobsModel(provider: FakeRecipeProvider(), userScope: "test-\(UUID().uuidString)", store: store)
+        XCTAssertEqual(model.pending.count, 2)
+
+        model.removePendingMatching(url: "https://www.gimmesomeoven.com/authentic-gazpacho-recipe/")
+
+        XCTAssertTrue(model.pending.isEmpty, "a whitespace-only difference must not let a duplicate survive")
+        XCTAssertTrue(store.all().isEmpty)
+    }
+
+    // MARK: 4c — reconcile() self-heals: dedupes duplicates and resolves
+    // already-stale entries immediately, so a removal (or a job left behind
+    // by an older/cut-short launch) can never come back or stick around.
+
+    /// Two pending entries that canonicalize to the same URL must collapse to
+    /// the newest one the moment `reconcile()` runs (launch or foreground) —
+    /// not only when the user notices and manually removes one.
+    func testReconcileDedupesEntriesForTheSameCanonicalURL() async throws {
+        let defaults = UserDefaults(suiteName: "pendingjobsmodeltests-\(UUID().uuidString)")!
+        let store = PendingJobStore(defaults: defaults)
+        let older = PendingJob(jobId: "job-old", url: "https://www.gimmesomeoven.com/authentic-gazpacho-recipe/",
+                                submittedAt: Date().addingTimeInterval(-10))
+        let newer = PendingJob(jobId: "job-new", url: "  https://www.gimmesomeoven.com/authentic-gazpacho-recipe/  ",
+                                submittedAt: Date())
+        store.upsert(older)
+        store.upsert(newer)
+        let model = PendingJobsModel(provider: FakeRecipeProvider(), userScope: "test-\(UUID().uuidString)", store: store)
+
+        model.reconcile()
+
+        XCTAssertEqual(model.pending.map(\.jobId), ["job-new"], "the newer entry survives, the canonical duplicate is dropped")
+        XCTAssertEqual(store.all().map(\.jobId), ["job-new"])
+    }
+
+    /// A pending entry already older than `maxWait` (e.g. left over from a
+    /// launch that got backgrounded/killed before its own poll could finish)
+    /// must resolve via exactly one `fetchJob` call on this `reconcile()` —
+    /// not a fresh `pollInterval`-spaced loop that hands it another full
+    /// `maxWait` budget it may again not get to finish.
+    func testReconcileResolvesAlreadyStaleJobViaSingleFinalCheck() async throws {
+        let provider = FakeRecipeProvider()
+        provider.failureCode = "site_blocked"
+        let defaults = UserDefaults(suiteName: "pendingjobsmodeltests-\(UUID().uuidString)")!
+        let store = PendingJobStore(defaults: defaults)
+        store.upsert(PendingJob(
+            jobId: "job-under-test",
+            url: "https://www.gimmesomeoven.com/authentic-gazpacho-recipe/",
+            submittedAt: Date().addingTimeInterval(-500)   // well past the 120s default maxWait
+        ))
+        let model = PendingJobsModel(provider: provider, userScope: "test-\(UUID().uuidString)", store: store)
+
+        model.reconcile()
+        await waitUntil { model.failureAlert != nil }
+
+        XCTAssertTrue(model.pending.isEmpty)
+        XCTAssertEqual(model.failed.first?.errorCode, "site_blocked")
+        XCTAssertEqual(provider.callCount, 1, "an already-stale job must resolve via one call, not a fresh poll loop")
+    }
+
+    /// The core regression this bug report asked for: remove a pending card,
+    /// then simulate the next launch/foreground (`reconcile()`, against a
+    /// *fresh* model instance sharing the same durable store) — the card must
+    /// not come back.
+    func testRemovedJobStaysRemovedAcrossReconcileOnAFreshModelInstance() async throws {
+        let defaults = UserDefaults(suiteName: "pendingjobsmodeltests-\(UUID().uuidString)")!
+        let store = PendingJobStore(defaults: defaults)
+        let url = "https://www.gimmesomeoven.com/authentic-gazpacho-recipe/"
+        store.upsert(PendingJob(jobId: "job-1", url: url))
+
+        let firstLaunch = PendingJobsModel(provider: FakeRecipeProvider(), userScope: "test-\(UUID().uuidString)", store: store)
+        firstLaunch.removePendingMatching(url: url)
+        XCTAssertTrue(store.all().isEmpty)
+
+        // A relaunch constructs a brand-new PendingJobsModel against the same
+        // durable store — `removedJobIds`/`activePolls` reset, so only the
+        // store's own contents (or lack thereof) can matter here.
+        let provider = FakeRecipeProvider()
+        let secondLaunch = PendingJobsModel(provider: provider, userScope: "test-\(UUID().uuidString)", store: store)
+        XCTAssertTrue(secondLaunch.pending.isEmpty, "the store must not have resurrected the removed job on init")
+
+        secondLaunch.reconcile()
+        try? await Task.sleep(for: .milliseconds(100))
+
+        XCTAssertTrue(secondLaunch.pending.isEmpty, "reconcile() on a fresh instance must not bring the removed job back")
+        XCTAssertEqual(provider.callCount, 0, "there is nothing left to poll — reconcile() must not invent a job to check")
+    }
+
     // MARK: 5 — poll budget expiry always resolves the card (never leaves it pending)
 
     /// A job still `.processing` when the poll budget runs out (e.g. a slow

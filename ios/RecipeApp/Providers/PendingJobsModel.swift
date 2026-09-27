@@ -129,6 +129,27 @@ final class PendingJobsModel: ObservableObject, SyncRefreshable {
     /// Sync hub (nil in previews/unscoped builds → no sync recording).
     private let sync: SyncCoordinator?
 
+    /// `maxWait` as a `TimeInterval`, for comparing against a `PendingJob`'s
+    /// `submittedAt` (a `Date`) — `Duration` and `Date` don't arithmetic
+    /// against each other directly.
+    private var maxWaitSeconds: TimeInterval {
+        let c = maxWait.components
+        return TimeInterval(c.seconds) + TimeInterval(c.attoseconds) / 1_000_000_000_000_000_000
+    }
+
+    /// Canonical form of a submitted URL, used only to decide "is this the
+    /// same link" for de-duplication/removal — never sent to the server.
+    /// Deliberately conservative (trim + lowercase only, no query/scheme
+    /// surgery): `AddRecipeView` doesn't trim pasted text before calling
+    /// `submit(url:)`, so a paste with a trailing newline (common from Notes/
+    /// clipboard) previously created a *second*, distinct-looking pending
+    /// entry for what is visibly the same link — one `removePendingMatching`
+    /// (exact string match) couldn't catch. This key is what makes such a
+    /// pair collapse into one.
+    private static func canonicalURLKey(_ url: String) -> String {
+        url.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    }
+
     init(
         provider: RecipeProvider,
         userScope: String? = nil,
@@ -231,11 +252,64 @@ final class PendingJobsModel: ObservableObject, SyncRefreshable {
     /// every persisted job so anything that finished, failed, or made progress
     /// while we were backgrounded or killed gets resolved — not just jobs
     /// submitted this session.
+    ///
+    /// Two self-healing steps run first, so a job left behind by an older
+    /// build (or a duplicate submission) can never stick around forever
+    /// waiting for the user to notice and manually remove it:
+    ///  1. `dedupeStoreByCanonicalURL()` collapses multiple pending entries
+    ///     for the same link down to the newest one.
+    ///  2. Any entry already older than `maxWait` skips a fresh `startPolling`
+    ///     — which would otherwise hand it a brand-new `maxWait` budget on
+    ///     *every* launch, via `poll()`'s deadline being computed relative to
+    ///     when that particular call starts, not the job's original
+    ///     `submittedAt`. A device that gets backgrounded/killed by iOS more
+    ///     often than once per `maxWait` would never let any single poll
+    ///     attempt reach its own final check, so the card could persist
+    ///     indefinitely across restarts even though `poll()` itself always
+    ///     terminates within one run. Going straight to the single final
+    ///     check (`resolveAlreadyStaleJob`) instead resolves it on this
+    ///     launch no matter how many previous launches were cut short.
     func reconcile() {
+        dedupeStoreByCanonicalURL()
         pending = store.all()
         pollLog.log("reconcile(): \(self.pending.count, privacy: .public) pending job(s): \(self.pending.map(\.jobId).joined(separator: ","), privacy: .public)")
         for job in pending {
-            startPolling(jobId: job.jobId)
+            if activePolls[job.jobId] == nil, Date().timeIntervalSince(job.submittedAt) >= maxWaitSeconds {
+                pollLog.warning("reconcile(\(job.jobId, privacy: .public)): already past budget (submitted \(Int(Date().timeIntervalSince(job.submittedAt)), privacy: .public)s ago) — single final check, no fresh poll loop")
+                activePolls[job.jobId] = Date()
+                Task { await resolveAlreadyStaleJob(jobId: job.jobId) }
+            } else {
+                startPolling(jobId: job.jobId)
+            }
+        }
+    }
+
+    /// Collapses multiple pending entries that resolve to the same
+    /// `canonicalURLKey` down to the single newest one (`store.all()` returns
+    /// newest-first). A duplicate can arise two ways: a URL resubmitted before
+    /// the first attempt resolved, or the exact same paste producing a
+    /// whitespace/case variant the two attempts didn't share verbatim (see
+    /// `canonicalURLKey`). Either way, two visually-identical "Extracting
+    /// recipe…" cards for what the user perceives as one import is confusing
+    /// on its own, and previously meant `removePendingMatching`'s exact-string
+    /// match — or the user tapping Remove on just one of them — could leave a
+    /// sibling behind that looked exactly like the one just dismissed.
+    private func dedupeStoreByCanonicalURL() {
+        var seenKeys = Set<String>()
+        var duplicateIds: [String] = []
+        for job in store.all() {   // newest-first
+            let key = Self.canonicalURLKey(job.url)
+            if seenKeys.contains(key) {
+                duplicateIds.append(job.jobId)
+            } else {
+                seenKeys.insert(key)
+            }
+        }
+        guard !duplicateIds.isEmpty else { return }
+        pollLog.warning("dedupeStoreByCanonicalURL(): clearing \(duplicateIds.count, privacy: .public) duplicate pending job(s): \(duplicateIds.joined(separator: ","), privacy: .public)")
+        for jobId in duplicateIds {
+            removedJobIds.insert(jobId)
+            store.remove(jobId: jobId)
         }
     }
 
@@ -268,7 +342,8 @@ final class PendingJobsModel: ObservableObject, SyncRefreshable {
     /// of them, not just the one the alert was for, so the user never taps
     /// past a failure only to find a card for the same URL still spinning.
     func removePendingMatching(url: String) {
-        for job in pending where job.url == url {
+        let key = Self.canonicalURLKey(url)
+        for job in pending where Self.canonicalURLKey(job.url) == key {
             removedJobIds.insert(job.jobId)
             store.remove(jobId: job.jobId)
         }
@@ -401,27 +476,52 @@ final class PendingJobsModel: ObservableObject, SyncRefreshable {
         // forever, since nothing but a fresh foreground `reconcile()` used to
         // re-arm it.
         pollLog.warning("poll(\(jobId, privacy: .public)): budget exhausted — final check")
+        await performFinalCheckAndResolve(jobId: jobId)
+    }
+
+    /// One `fetchJob` call, terminal or not: a terminal result is handled
+    /// normally; anything else (still processing, offline, the call itself
+    /// timing out) is converted to a local `client_timeout` failure. Shared by
+    /// `poll()`'s post-budget tail and `resolveAlreadyStaleJob` (a job whose
+    /// budget was already spent across a previous, cut-short launch) so both
+    /// resolve a stuck job the exact same way.
+    private func performFinalCheckAndResolve(jobId: String) async {
         do {
             let envelope = try await fetchJobWithTimeout(jobId: jobId)
             if handleIfTerminal(jobId: jobId, envelope: envelope) {
-                pollLog.log("poll(\(jobId, privacy: .public)): final check found a terminal status")
+                pollLog.log("finalCheck(\(jobId, privacy: .public)): found a terminal status")
                 return
             }
         } catch {
             // Whatever the reason (offline, 5xx, the final call itself timing
             // out, decode error, ...) — the user has already waited the full
             // budget either way; fall through to the same local timeout below.
-            pollLog.warning("poll(\(jobId, privacy: .public)): final check failed — \(String(describing: error), privacy: .public)")
+            pollLog.warning("finalCheck(\(jobId, privacy: .public)): failed — \(String(describing: error), privacy: .public)")
         }
         // Still not terminal (or the final check itself failed): convert to a
         // local, paste-eligible failure so the card always clears and the user
         // always gets a way forward, never an indefinite spinner.
-        pollLog.warning("poll(\(jobId, privacy: .public)): converting to local client_timeout failure")
+        pollLog.warning("finalCheck(\(jobId, privacy: .public)): converting to local client_timeout failure")
         handleFailed(
             jobId: jobId,
             message: RecipeProviderError.jobFailed(code: RecipeProviderError.clientTimeoutCode, message: nil).userMessage,
             code: RecipeProviderError.clientTimeoutCode
         )
+    }
+
+    /// `reconcile()`'s path for a pending entry whose `maxWait` budget is
+    /// already spent (it was submitted long enough ago, across a previous
+    /// launch, that a fresh poll loop would just be re-granting it a budget it
+    /// already used). Does exactly one `fetchJob` call via
+    /// `performFinalCheckAndResolve` instead of `poll()`'s full
+    /// `pollInterval`-spaced loop, so this launch resolves it immediately
+    /// rather than needing another full `maxWait` of uptime it may never get.
+    private func resolveAlreadyStaleJob(jobId: String) async {
+        defer {
+            activePolls.removeValue(forKey: jobId)
+            pollLog.log("resolveAlreadyStaleJob(\(jobId, privacy: .public)): exited, activePolls cleared")
+        }
+        await performFinalCheckAndResolve(jobId: jobId)
     }
 
     /// Handles a terminal envelope exactly like the poll loop's inline switch

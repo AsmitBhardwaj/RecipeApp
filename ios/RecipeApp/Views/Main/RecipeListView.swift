@@ -76,13 +76,18 @@ struct RecipeListView: View {
                     ForEach(pendingJobs) { pendingJob in
                         ProcessingCardView(job: pendingJob)
                             .cardRow(bordered: false)
+                            // Removes by URL, not just this one job id: a
+                            // duplicate pending entry for the same link would
+                            // otherwise survive removing just the card the
+                            // user acted on, making Remove look like it did
+                            // nothing.
                             .swipeActions(edge: .trailing) {
-                                Button(role: .destructive) { jobs.removePending(jobId: pendingJob.jobId) } label: {
+                                Button(role: .destructive) { jobs.removePendingMatching(url: pendingJob.url) } label: {
                                     Label("Remove", systemImage: "xmark.circle")
                                 }
                             }
                             .contextMenu {
-                                Button(role: .destructive) { jobs.removePending(jobId: pendingJob.jobId) } label: {
+                                Button(role: .destructive) { jobs.removePendingMatching(url: pendingJob.url) } label: {
                                     Label("Remove", systemImage: "xmark.circle")
                                 }
                             }
