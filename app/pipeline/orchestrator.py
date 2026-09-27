@@ -8,12 +8,15 @@ request/response cycle. Background queue/workers are a later optimization.
 """
 from __future__ import annotations
 
+import logging
 import uuid
 from datetime import datetime, timezone
 
 from .. import config, db, importlimit, llm_cost
 from ..models import Confidence, DishIdentification, Job, LLMRecipe, Recipe, UserRecipe
 from . import fetch, images, jsonld, llm, netguard, signal, urls, web
+
+logger = logging.getLogger("uvicorn.error")
 
 
 def _now() -> str:
@@ -113,9 +116,31 @@ def process_job(job: Job) -> Job:
     every model call it makes (extraction, dish-ID, generic generation, web
     article) is attributed to this job's account under call_type "import"; a cache
     hit makes no LLM call and records nothing.
+
+    Terminal-status guarantee: this ALWAYS drives the job to a terminal status
+    (`complete` or `failed`) and persists it, even on an unexpected error.
+    `_process_job` already converts every *known* failure mode (FetchError /
+    LLMError / UrlError) into a clean `_fail`, but anything else — a bug, a DB
+    hiccup, an un-wrapped error from image resolution — would otherwise escape
+    the BackgroundTask this runs under and strand the row in `processing`
+    forever, which leaves the client's "Extracting recipe…" card polling (and
+    showing) indefinitely, since it only clears on a terminal status. Catching
+    here closes that hole at the single seam every extraction funnels through.
     """
     with llm_cost.track(job.account_id, "import"):
-        return _process_job(job)
+        try:
+            return _process_job(job)
+        except Exception:  # noqa: BLE001 - last-resort guard; see docstring
+            logger.exception(
+                "process_job crashed for job_id=%s url=%s — marking failed",
+                job.job_id,
+                job.url,
+            )
+            return _fail(
+                job,
+                "unknown_error",
+                "Something went wrong while extracting this recipe.",
+            )
 
 
 def _process_job(job: Job) -> Job:
