@@ -11,9 +11,11 @@
 //  It is presentation only — the trigger/tracking still lives in
 //  `PendingJobsModel` (fires once per newly-failed job) and the differentiated
 //  per-code copy still comes from `RecipeProviderError`. This view just renders
-//  the strings it's handed and calls `onDismiss` on OK.
+//  the strings it's handed and calls `onDismiss` on OK/Cancel, or `onPasteText`
+//  when the failure is paste-eligible (see
+//  `PendingJobsModel.FailureAlert.canPasteText`).
 //
-//  Dismiss matches the native alert it replaces: the OK button only. The scrim
+//  Dismiss matches the native alert it replaces: button taps only. The scrim
 //  blocks touches to the content behind but does not itself dismiss.
 //
 
@@ -22,6 +24,9 @@ import SwiftUI
 struct FailureAlertView: View {
     let title: String
     let message: String
+    /// Non-nil when the failure is paste-eligible: renders "Paste Recipe Text"
+    /// (primary) + "Cancel" instead of the single OK button.
+    var onPasteText: (() -> Void)? = nil
     let onDismiss: () -> Void
 
     var body: some View {
@@ -45,16 +50,38 @@ struct FailureAlertView: View {
                     .multilineTextAlignment(.center)
                     .fixedSize(horizontal: false, vertical: true)
 
-                Button(action: onDismiss) {
-                    Text("OK")
-                        .font(.headline)
-                        .foregroundStyle(.white)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 12)
-                        .background(Color.accentColor, in: RoundedRectangle(cornerRadius: 12))
+                if let onPasteText {
+                    Button(action: onPasteText) {
+                        Text("Paste Recipe Text")
+                            .font(.headline)
+                            .foregroundStyle(.white)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 12)
+                            .background(Color.accentColor, in: RoundedRectangle(cornerRadius: 12))
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.top, 4)
+
+                    Button(action: onDismiss) {
+                        Text("Cancel")
+                            .font(.headline)
+                            .foregroundStyle(Color.textPrimary)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 12)
+                    }
+                    .buttonStyle(.plain)
+                } else {
+                    Button(action: onDismiss) {
+                        Text("OK")
+                            .font(.headline)
+                            .foregroundStyle(.white)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 12)
+                            .background(Color.accentColor, in: RoundedRectangle(cornerRadius: 12))
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.top, 4)
                 }
-                .buttonStyle(.plain)
-                .padding(.top, 4)
             }
             .padding(24)
             .frame(maxWidth: 300)
@@ -71,10 +98,19 @@ struct FailureAlertView: View {
     }
 }
 
-#Preview {
+#Preview("OK only") {
     FailureAlertView(
         title: "Couldn’t add recipe",
         message: "We couldn't find a recipe on this page.",
+        onDismiss: {}
+    )
+}
+
+#Preview("Paste-eligible") {
+    FailureAlertView(
+        title: "Couldn’t add recipe",
+        message: "This site blocks automatic import. Paste the recipe text and we'll do the rest.",
+        onPasteText: {},
         onDismiss: {}
     )
 }

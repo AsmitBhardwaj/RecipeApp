@@ -47,6 +47,16 @@ struct PasteRecipeTextView: View {
         NavigationStack {
             Form {
                 Section {
+                    Text("Open the recipe page, copy the ingredients and steps, and paste them here.")
+                        .foregroundStyle(Color.textSecondary)
+                    if let pageURL = URL(string: failedJob.url) {
+                        Link(destination: pageURL) {
+                            Label("Open page in Safari", systemImage: "safari")
+                        }
+                    }
+                }
+
+                Section {
                     ZStack(alignment: .topLeading) {
                         // TextEditor has no native placeholder — overlay one.
                         if text.isEmpty {

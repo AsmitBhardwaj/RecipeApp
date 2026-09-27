@@ -38,6 +38,11 @@ struct MainTabView: View {
     /// `recipeapp://` share/import deep link — suppresses the app-open paywall.
     @State private var launchedFromShareThisActivation = false
     private let appOpenPaywallStore = PaywallPresentationStore()
+    /// The failed job the user is pasting recipe text for, set from the
+    /// one-time failure alert's "Paste Recipe Text" action. Independent of the
+    /// per-list-screen `pasteTarget` (CookbooksGridView/RecipeListView) that
+    /// backs the persistent failed card's own paste action.
+    @State private var pasteTarget: PendingJobsModel.FailedJob?
     /// Which tab is showing. Bound so `onOpenURL` (launch via `recipeapp://`
     /// from the Share Extension) can force the Recipes tab, where the new
     /// processing card lives.
@@ -145,12 +150,23 @@ struct MainTabView: View {
                 FailureAlertView(
                     title: "Couldn’t add recipe",
                     message: alert.message,
+                    onPasteText: alert.canPasteText ? {
+                        let failedJob = jobs.failed.first(where: { $0.id == alert.id })
+                        jobs.clearFailureAlert()
+                        pasteTarget = failedJob
+                    } : nil,
                     onDismiss: { jobs.clearFailureAlert() }
                 )
                 .transition(.opacity.combined(with: .scale(scale: 0.96)))
             }
         }
         .animation(.easeOut(duration: 0.2), value: jobs.failureAlert)
+        // Reached from the failure alert's "Paste Recipe Text" action (the
+        // persistent failed card in the Recipes list has its own equivalent
+        // sheet at the list-screen level for review-later pastes).
+        .sheet(item: $pasteTarget) { failedJob in
+            PasteRecipeTextView(jobs: jobs, failedJob: failedJob, onLimitReached: { showingAppOpenPaywall = true })
+        }
         // Stage 4 "claim your data" confirmation — top, non-blocking, self-dismissing.
         .overlay(alignment: .top) {
             if let summary = claimSummary {
@@ -182,7 +198,7 @@ struct MainTabView: View {
             launchedFromShareOrImport: launchedFromShareThisActivation,
             importInProgress: !jobs.pending.isEmpty,
             purchaseInProgress: subscriptions.purchaseInProgress,
-            anotherSheetPresented: showingAppOpenPaywall || jobs.failureAlert != nil || claimSummary != nil
+            anotherSheetPresented: showingAppOpenPaywall || jobs.failureAlert != nil || claimSummary != nil || pasteTarget != nil
         ) else { return }
 
         appOpenPaywallStore.recordShown(accountId: userScope, at: Date())

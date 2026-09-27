@@ -64,6 +64,13 @@ final class PendingJobsModel: ObservableObject, SyncRefreshable {
     struct FailureAlert: Identifiable, Equatable {
         let id: String   // jobId
         let message: String
+        /// Backend `error_code`, carried through so the alert can decide whether
+        /// to offer "Paste Recipe Text" (see `canPasteText`) — mirrors
+        /// `FailedJob.errorCode`/`canPasteText` for the persistent list card.
+        let errorCode: String?
+
+        /// Whether this failure can be recovered by pasting the recipe text.
+        var canPasteText: Bool { RecipeProviderError.canPasteText(code: errorCode) }
     }
 
     private let provider: RecipeProvider
@@ -302,6 +309,13 @@ final class PendingJobsModel: ObservableObject, SyncRefreshable {
 
     private func handleFailed(jobId: String, message: String, url: String? = nil, code: String? = nil) {
         let jobURL = url ?? pending.first(where: { $0.jobId == jobId })?.url ?? ""
+        // Clear the processing card the instant a job reaches `.failed` — this
+        // does not depend on the alert below, or on the user ever seeing or
+        // dismissing it. Every error code takes this same path, so a job never
+        // stays a "processing" card once the backend has terminally failed it.
+        store.remove(jobId: jobId)
+        pending = store.all()
+
         if !failed.contains(where: { $0.jobId == jobId }) {
             failed.append(FailedJob(jobId: jobId, url: jobURL, message: message, errorCode: code))
         }
@@ -311,10 +325,8 @@ final class PendingJobsModel: ObservableObject, SyncRefreshable {
         if !alertedJobIds.contains(jobId) {
             alertedJobIds.insert(jobId)
             if failureAlert == nil {
-                failureAlert = FailureAlert(id: jobId, message: message)
+                failureAlert = FailureAlert(id: jobId, message: message, errorCode: code)
             }
         }
-        store.remove(jobId: jobId)
-        pending = store.all()
     }
 }
