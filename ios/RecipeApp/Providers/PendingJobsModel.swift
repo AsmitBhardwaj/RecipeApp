@@ -19,7 +19,10 @@
 //
 
 import Foundation
+import os
 import RecipeKit
+
+private let pollLog = Logger(subsystem: "com.recipeapp", category: "PendingJobs")
 
 @MainActor
 final class PendingJobsModel: ObservableObject, SyncRefreshable {
@@ -78,9 +81,20 @@ final class PendingJobsModel: ObservableObject, SyncRefreshable {
     /// On-device cache of completed recipes so the list survives full relaunches
     /// (the backend has no vault endpoint). Written in `handleComplete`.
     private let recipeStore: RecipeStore
-    /// Job ids with an in-flight poll task, so `reconcile()` and `submit()` never
-    /// start a second poll for the same job.
-    private var activePolls: Set<String> = []
+    /// Job ids with an in-flight poll task, keyed to when that poll started —
+    /// so `reconcile()`/`submit()` never start a second poll for a job whose
+    /// poll is genuinely still running. `poll()`'s per-call timeout (see
+    /// `fetchJobWithTimeout`) plus its `defer` should always clear an entry on
+    /// its own; `startPolling`'s `activePollStaleAfter` check is a defensive
+    /// backstop so a single wedged Task can never block every future
+    /// `reconcile()` for that job forever, even if that guarantee somehow
+    /// doesn't hold.
+    private var activePolls: [String: Date] = [:]
+    /// How long an entry may sit in `activePolls` before `startPolling` treats
+    /// it as stale and starts a fresh poll anyway — comfortably longer than
+    /// `maxWait + perPollTimeout` could ever legitimately take. Injectable so
+    /// tests can exercise this backstop without a real multi-minute wait.
+    private let activePollStaleAfter: TimeInterval
     /// Job ids we've already surfaced the failure alert for this session, so the
     /// same failure never pops the alert twice. Not persisted (resets each launch).
     private var alertedJobIds: Set<String> = []
@@ -100,6 +114,17 @@ final class PendingJobsModel: ObservableObject, SyncRefreshable {
     /// `poll()`) without a real 120-second wait.
     private let pollInterval: Duration
     private let maxWait: Duration
+    /// Hard per-call bound on a single `fetchJob`, independent of whatever
+    /// timeout (if any) the transport enforces. Without this, one hung network
+    /// call blocks the await forever, so `poll()`'s own `while clock.now <
+    /// deadline` check never gets a chance to re-run — the loop doesn't just
+    /// miss the budget, it never even reaches the check. This is what actually
+    /// happened with a stuck gimmesomeoven.com import: server logs showed
+    /// exactly one poll request ever reaching the backend, then nothing for
+    /// 14+ minutes despite the app demonstrably being alive and making other
+    /// requests in that window — the second `fetchJob` call itself never
+    /// returned, it wasn't that the app was suspended.
+    private let perPollTimeout: Duration
 
     /// Sync hub (nil in previews/unscoped builds → no sync recording).
     private let sync: SyncCoordinator?
@@ -110,13 +135,17 @@ final class PendingJobsModel: ObservableObject, SyncRefreshable {
         sync: SyncCoordinator? = nil,
         store: PendingJobStore = PendingJobStore(),
         pollInterval: Duration = .seconds(1.5),
-        maxWait: Duration = .seconds(120)
+        maxWait: Duration = .seconds(120),
+        perPollTimeout: Duration = .seconds(20),
+        activePollStaleAfter: TimeInterval = 300
     ) {
         self.provider = provider
         self.sync = sync
         self.store = store
         self.pollInterval = pollInterval
         self.maxWait = maxWait
+        self.perPollTimeout = perPollTimeout
+        self.activePollStaleAfter = activePollStaleAfter
         // The recipe cache is account-scoped; the pending-jobs queue stays
         // device-local (transient, reconciled per Stage 6).
         self.recipeStore = RecipeStore(userScope: userScope)
@@ -204,6 +233,7 @@ final class PendingJobsModel: ObservableObject, SyncRefreshable {
     /// submitted this session.
     func reconcile() {
         pending = store.all()
+        pollLog.log("reconcile(): \(self.pending.count, privacy: .public) pending job(s): \(self.pending.map(\.jobId).joined(separator: ","), privacy: .public)")
         for job in pending {
             startPolling(jobId: job.jobId)
         }
@@ -275,19 +305,58 @@ final class PendingJobsModel: ObservableObject, SyncRefreshable {
     // MARK: - Polling
 
     private func startPolling(jobId: String) {
-        guard !activePolls.contains(jobId) else { return }
-        activePolls.insert(jobId)
+        if let startedAt = activePolls[jobId] {
+            let age = Date().timeIntervalSince(startedAt)
+            guard age > activePollStaleAfter else {
+                pollLog.log("startPolling(\(jobId, privacy: .public)): already active (\(Int(age), privacy: .public)s) — skipping")
+                return
+            }
+            pollLog.warning("startPolling(\(jobId, privacy: .public)): existing poll stale after \(Int(age), privacy: .public)s — starting a fresh one")
+        } else {
+            pollLog.log("startPolling(\(jobId, privacy: .public)): starting")
+        }
+        activePolls[jobId] = Date()
         Task { await poll(jobId: jobId) }
     }
 
+    /// Wraps a single `provider.fetchJob` call with `perPollTimeout`, so a hung
+    /// network call can never block `poll()`'s loop from re-checking its own
+    /// budget (see `perPollTimeout`'s doc comment). Races the real call against
+    /// a timer; whichever finishes first wins, and the loser is cancelled.
+    private func fetchJobWithTimeout(jobId: String) async throws -> JobEnvelope {
+        let provider = self.provider   // snapshot: child tasks below are non-isolated
+        let timeout = perPollTimeout
+        return try await withThrowingTaskGroup(of: JobEnvelope.self) { group in
+            group.addTask { try await provider.fetchJob(jobId: jobId) }
+            group.addTask {
+                try await Task.sleep(for: timeout)
+                throw RecipeProviderError.timedOut
+            }
+            guard let first = try await group.next() else {
+                throw RecipeProviderError.timedOut
+            }
+            group.cancelAll()
+            return first
+        }
+    }
+
     private func poll(jobId: String) async {
-        defer { activePolls.remove(jobId) }
+        defer {
+            activePolls.removeValue(forKey: jobId)
+            pollLog.log("poll(\(jobId, privacy: .public)): exited, activePolls cleared")
+        }
+        pollLog.log("poll(\(jobId, privacy: .public)): started")
         let clock = ContinuousClock()
         let deadline = clock.now.advanced(by: maxWait)
 
         while clock.now < deadline {
+            if Task.isCancelled {
+                pollLog.warning("poll(\(jobId, privacy: .public)): task cancelled — stopping early")
+                break
+            }
             do {
-                let envelope = try await provider.fetchJob(jobId: jobId)
+                let envelope = try await fetchJobWithTimeout(jobId: jobId)
+                pollLog.log("poll(\(jobId, privacy: .public)): status=\(envelope.job.status.rawValue, privacy: .public)")
                 if envelope.job.status == .queued || envelope.job.status == .processing {
                     store.updateStatus(jobId: jobId, envelope.job.status)
                     pending = store.all()
@@ -295,11 +364,16 @@ final class PendingJobsModel: ObservableObject, SyncRefreshable {
                 if handleIfTerminal(jobId: jobId, envelope: envelope) { return }
             } catch RecipeProviderError.httpStatus(404) {
                 // Job genuinely not on the server — terminal; clean it up.
+                pollLog.warning("poll(\(jobId, privacy: .public)): 404 — job gone server-side")
                 handleFailed(jobId: jobId, message: RecipeProviderError.httpStatus(404).userMessage)
                 return
             } catch {
-                // Transient (offline / timeout / 5xx): keep the card and retry on
-                // the next tick — or the next foreground reconcile if we're killed.
+                // Transient (offline / a single call timing out per
+                // `fetchJobWithTimeout` / 5xx): keep the card and retry on the
+                // next tick — the outer `deadline` check above (now always
+                // reachable within `perPollTimeout`, never blocked on a single
+                // hung call) is what ultimately bounds this.
+                pollLog.log("poll(\(jobId, privacy: .public)): transient error, retrying — \(String(describing: error), privacy: .public)")
             }
             try? await Task.sleep(for: pollInterval)
         }
@@ -307,21 +381,26 @@ final class PendingJobsModel: ObservableObject, SyncRefreshable {
         // Budget exhausted. No path out of this function may leave the job
         // still pending: do one final check rather than silently giving up —
         // a job that only reaches a terminal status on the server *after*
-        // `maxWait` (or an app that was suspended through most of the budget,
-        // per `ContinuousClock` — suspension doesn't pause it) would otherwise
-        // leave an "Extracting recipe…" card stuck forever, since nothing but
-        // a fresh foreground `reconcile()` used to re-arm it.
+        // `maxWait` would otherwise leave an "Extracting recipe…" card stuck
+        // forever, since nothing but a fresh foreground `reconcile()` used to
+        // re-arm it.
+        pollLog.warning("poll(\(jobId, privacy: .public)): budget exhausted — final check")
         do {
-            let envelope = try await provider.fetchJob(jobId: jobId)
-            if handleIfTerminal(jobId: jobId, envelope: envelope) { return }
+            let envelope = try await fetchJobWithTimeout(jobId: jobId)
+            if handleIfTerminal(jobId: jobId, envelope: envelope) {
+                pollLog.log("poll(\(jobId, privacy: .public)): final check found a terminal status")
+                return
+            }
         } catch {
-            // Whatever the reason (offline, 5xx, decode error, ...) — the user
-            // has already waited the full budget either way; fall through to
-            // the same local timeout below.
+            // Whatever the reason (offline, 5xx, the final call itself timing
+            // out, decode error, ...) — the user has already waited the full
+            // budget either way; fall through to the same local timeout below.
+            pollLog.warning("poll(\(jobId, privacy: .public)): final check failed — \(String(describing: error), privacy: .public)")
         }
         // Still not terminal (or the final check itself failed): convert to a
         // local, paste-eligible failure so the card always clears and the user
         // always gets a way forward, never an indefinite spinner.
+        pollLog.warning("poll(\(jobId, privacy: .public)): converting to local client_timeout failure")
         handleFailed(
             jobId: jobId,
             message: RecipeProviderError.jobFailed(code: RecipeProviderError.clientTimeoutCode, message: nil).userMessage,

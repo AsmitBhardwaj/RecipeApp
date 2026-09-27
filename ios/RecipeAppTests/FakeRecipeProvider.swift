@@ -26,6 +26,23 @@ final class FakeRecipeProvider: RecipeProvider {
     /// within the client's poll budget (see `PendingJobsModel.poll`'s
     /// post-`maxWait` final check).
     var alwaysProcessing = false
+    /// Leading calls (1-based) that resolve `.processing` before the
+    /// configured terminal result kicks in on the next call. 0 (default) means
+    /// terminal from the very first call.
+    var processingCallsBeforeTerminal = 0
+    /// When set, `fetchJob` hangs (never returns) on this call number and
+    /// every call after it — a network call that never completes, distinct
+    /// from one that's merely slow (`fetchJobDelay`). Reproduces the actual
+    /// gimmesomeoven.com incident: exactly one poll ever completed, then
+    /// silence, even while the app kept making other requests.
+    var hangOnOrAfterCall: Int?
+    /// Like `hangOnOrAfterCall`, but hangs on ONLY this one call number — the
+    /// network path recovers afterward. Models a single transient stall
+    /// (rather than a permanently dead one) so a test can confirm the loop
+    /// keeps going past it instead of getting stuck.
+    var hangOnExactlyCall: Int?
+
+    private(set) var callCount = 0
 
     private static func iso(_ date: Date = Date()) -> String {
         ISO8601DateFormatter().string(from: date)
@@ -42,10 +59,18 @@ final class FakeRecipeProvider: RecipeProvider {
     }
 
     func fetchJob(jobId: String) async throws -> JobEnvelope {
+        callCount += 1
+        let thisCall = callCount
+        if let hangOnOrAfterCall, thisCall >= hangOnOrAfterCall {
+            try await Task.sleep(for: .seconds(999))  // never returns within any real test's lifetime
+        }
+        if hangOnExactlyCall == thisCall {
+            try await Task.sleep(for: .seconds(999))
+        }
         if fetchJobDelay > .zero {
             try? await Task.sleep(for: fetchJobDelay)
         }
-        if alwaysProcessing {
+        if alwaysProcessing || thisCall <= processingCallsBeforeTerminal {
             let job = Job(
                 jobId: jobId, userId: "test-user", url: "https://example.com",
                 status: .processing, createdAt: Self.iso()

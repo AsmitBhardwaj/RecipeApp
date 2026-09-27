@@ -32,7 +32,9 @@ final class PendingJobsModelTests: XCTestCase {
     private func makeModel(
         provider: FakeRecipeProvider,
         pollInterval: Duration = .seconds(1.5),
-        maxWait: Duration = .seconds(120)
+        maxWait: Duration = .seconds(120),
+        perPollTimeout: Duration = .seconds(20),
+        activePollStaleAfter: TimeInterval = 300
     ) -> PendingJobsModel {
         let defaults = UserDefaults(suiteName: "pendingjobsmodeltests-\(UUID().uuidString)")!
         return PendingJobsModel(
@@ -40,7 +42,9 @@ final class PendingJobsModelTests: XCTestCase {
             userScope: "test-\(UUID().uuidString)",
             store: PendingJobStore(defaults: defaults),
             pollInterval: pollInterval,
-            maxWait: maxWait
+            maxWait: maxWait,
+            perPollTimeout: perPollTimeout,
+            activePollStaleAfter: activePollStaleAfter
         )
     }
 
@@ -203,5 +207,108 @@ final class PendingJobsModelTests: XCTestCase {
         XCTAssertEqual(model.failed.first?.errorCode, "no_recipe_found",
                        "a job the final check finds terminal keeps its own server code, not client_timeout")
         XCTAssertEqual(model.failureAlert?.canPasteText, false)
+    }
+
+    // MARK: 6 — the poll loop must survive a single hung call, and must never
+    // be permanently blocked by one that never recovers (the actual root
+    // cause behind the gimmesomeoven.com incident: server logs showed exactly
+    // one poll ever reach the backend, then silence, even while the app kept
+    // making other requests — the SECOND `fetchJob` call itself never
+    // returned, so `poll()`'s own budget check was never reached again).
+
+    /// The most direct sanity check that multi-iteration polling actually
+    /// works at all: first call processing, second call terminal.
+    func testSecondPollIsMadeAndHandledAfterAFirstNonTerminalResponse() async throws {
+        let provider = FakeRecipeProvider()
+        provider.processingCallsBeforeTerminal = 1
+        provider.failureCode = "site_blocked"
+        let model = makeModel(provider: provider, pollInterval: .milliseconds(10), maxWait: .seconds(120))
+
+        try await model.submit(url: "https://www.gimmesomeoven.com/authentic-gazpacho-recipe/")
+        await waitUntil { model.failureAlert != nil }
+
+        XCTAssertTrue(model.pending.isEmpty)
+        XCTAssertEqual(model.failed.first?.errorCode, "site_blocked")
+    }
+
+    /// If a single poll call hangs (never returns) but a later one recovers,
+    /// the loop must not be stuck on the hung call forever — `perPollTimeout`
+    /// times it out, the loop retries, and the next call is handled normally.
+    /// Without the per-call timeout, this test itself would hang rather than
+    /// merely fail — the strongest possible demonstration of the bug.
+    func testASingleHungPollTimesOutAndTheLoopRecovers() async throws {
+        let provider = FakeRecipeProvider()
+        provider.processingCallsBeforeTerminal = 1  // call 1: processing
+        provider.hangOnExactlyCall = 2                // call 2: hangs, then recovers
+        provider.failureCode = "site_blocked"        // call 3 (after the timeout): failed
+        let model = makeModel(
+            provider: provider,
+            pollInterval: .milliseconds(10),
+            maxWait: .seconds(120),
+            perPollTimeout: .milliseconds(50)
+        )
+
+        try await model.submit(url: "https://www.gimmesomeoven.com/authentic-gazpacho-recipe/")
+        await waitUntil(timeout: 5) { model.failureAlert != nil }
+
+        XCTAssertTrue(model.pending.isEmpty, "a single hung call must not leave the card stuck")
+        XCTAssertEqual(model.failed.first?.errorCode, "site_blocked",
+                       "recovers to the server's own terminal result once the hang is timed out")
+    }
+
+    /// If EVERY call from the second one on hangs forever (the network path
+    /// never recovers), `poll()` must still resolve — via the budget's final
+    /// check, itself also time-bounded — rather than hang indefinitely. This
+    /// is the structural guarantee: no path through `poll()` can silently
+    /// never finish.
+    func testPermanentlyHungPollsStillResolveViaBudgetExpiry() async throws {
+        let provider = FakeRecipeProvider()
+        provider.processingCallsBeforeTerminal = 1
+        provider.hangOnOrAfterCall = 2   // every call from here on hangs, permanently
+        let model = makeModel(
+            provider: provider,
+            pollInterval: .milliseconds(10),
+            maxWait: .milliseconds(100),
+            perPollTimeout: .milliseconds(30)
+        )
+
+        try await model.submit(url: "https://www.gimmesomeoven.com/authentic-gazpacho-recipe/")
+        await waitUntil(timeout: 5) { model.failureAlert != nil }
+
+        XCTAssertTrue(model.pending.isEmpty)
+        XCTAssertEqual(model.failureAlert?.errorCode, RecipeProviderError.clientTimeoutCode)
+        XCTAssertEqual(model.failureAlert?.canPasteText, true)
+    }
+
+    /// `reconcile()`/`startPolling` must not be permanently blocked from
+    /// re-polling a job just because `activePolls` still thinks a poll for it
+    /// is live — the defensive backstop for the case where something
+    /// upstream of `poll()`'s own guarantees somehow still leaves an entry
+    /// wedged (answers "does reconcile() skip jobs it thinks already have a
+    /// live loop?" — yes, but only until `activePollStaleAfter`).
+    func testStaleActivePollEntryLetsReconcileTryAgain() async throws {
+        let provider = FakeRecipeProvider()
+        provider.processingCallsBeforeTerminal = 999  // never terminal on its own
+        provider.fetchJobDelay = .seconds(2)           // each call is slow, not hung
+        let model = makeModel(
+            provider: provider,
+            maxWait: .seconds(30),
+            activePollStaleAfter: 0.2  // 200ms — far shorter than fetchJobDelay
+        )
+
+        try await model.submit(url: "https://www.gimmesomeoven.com/authentic-gazpacho-recipe/")
+        // The first poll is still in flight (2s delay) — reconcile() right
+        // away must NOT start a second one; its entry isn't stale yet.
+        model.reconcile()
+        try? await Task.sleep(for: .milliseconds(50))
+        XCTAssertEqual(provider.callCount, 1, "not yet stale — reconcile() must not start a redundant poll")
+
+        // Once the entry is older than activePollStaleAfter, reconcile() must
+        // try again even though the original poll (still 2s from resolving)
+        // hasn't cleared activePolls yet.
+        try? await Task.sleep(for: .milliseconds(250))
+        model.reconcile()
+        try? await Task.sleep(for: .milliseconds(50))
+        XCTAssertEqual(provider.callCount, 2, "stale — reconcile() must start a fresh poll rather than skip forever")
     }
 }
