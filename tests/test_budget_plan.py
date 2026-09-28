@@ -296,7 +296,7 @@ class BudgetPlanEndpointTests(unittest.TestCase):
         # US/suburb → 1.0 multiplier; budget 100 → band [85, 100]. A $90 plan is
         # inside the band, so it ships as-is with NO corrective retry.
         with mock.patch(
-            "app.mealplan.llm.generate_budget_plan", return_value=self._plan(90.0)
+            "app.mealplan.llm.generate_budget_plan", return_value=self._plan(*[90.0 / 7] * 7)  # a full week
         ) as gen:
             r = self.client.post(
                 "/v1/meal-plan/budget",
@@ -307,9 +307,9 @@ class BudgetPlanEndpointTests(unittest.TestCase):
         data = r.json()
         self.assertEqual(data["regional_multiplier"], 1.0)
         self.assertEqual(gen.call_count, 1)  # within band → no retry
-        self.assertEqual(len(data["recipes"]), 1)
+        self.assertEqual(len(data["recipes"]), 7)
         planned = data["recipes"][0]
-        self.assertAlmostEqual(planned["estimated_cost"]["amount"], 90.0, places=2)
+        self.assertAlmostEqual(planned["estimated_cost"]["amount"], 90.0 / 7, places=2)
         self.assertEqual(planned["health_signal"], "Veg-forward")
         # Recipe was written to the shared cache under its synthetic key.
         self.assertIsNotNone(db.get_recipe(planned["recipe"]["recipe_id"]))
@@ -331,7 +331,7 @@ class BudgetPlanEndpointTests(unittest.TestCase):
         # CH (1.45) × city (1.15) = 1.6675 → 1.67. A $85 baseline plan → 141.95,
         # inside the $150 band [127.5, 150], so no retry.
         with mock.patch(
-            "app.mealplan.llm.generate_budget_plan", return_value=self._plan(85.0)
+            "app.mealplan.llm.generate_budget_plan", return_value=self._plan(*[85.0 / 7] * 7)
         ) as gen:
             r = self.client.post(
                 "/v1/meal-plan/budget",

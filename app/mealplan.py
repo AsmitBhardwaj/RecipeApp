@@ -192,10 +192,11 @@ def _pick_plan(
 
     Budget comes first: never prefer a plan that exceeds the budget over one that
     doesn't (appliance violations can be repaired afterwards, an overspend can't).
-    Among plans within budget, fewer appliance violations wins, then the larger
+    Among plans within budget, fewer appliance violations wins, then more dinners
+    (the plan is asked for a fixed count), then the larger
     total (use as much of the budget as possible). If both exceed, fewer
     violations, then the smaller total. With no appliances (v1.0) violation counts
-    are always 0, so this is exactly the original budget-only rule."""
+    are always 0, so only the count and budget rules apply."""
     a, b = _adjusted_total(first, multiplier), _adjusted_total(second, multiplier)
     a_ok, b_ok = a <= budget_cap, b <= budget_cap
     a_bad = len(_violation_notes(first, appliances))
@@ -203,6 +204,8 @@ def _pick_plan(
     if a_ok and b_ok:
         if a_bad != b_bad:
             return first if a_bad < b_bad else second
+        if len(first) != len(second):  # closer to the requested dinner count
+            return first if len(first) > len(second) else second
         return first if a >= b else second
     if a_ok:
         return first
@@ -242,6 +245,7 @@ def _generate_replacement(
     max_cost: float,
     exclude_titles: List[str],
     attempts: int,
+    target_cost: Optional[float] = None,
 ) -> "llm.BudgetPlanRecipeLLM":
     """Generate ONE replacement dinner honoring the request's household, diet,
     appliances (hard, validated), moods and on-hand items, within `max_cost`
@@ -260,6 +264,7 @@ def _generate_replacement(
             appliances=[a.value for a in req.appliances] if req.appliances else None,
             food_moods=[m.value for m in req.food_moods] if req.food_moods else None,
             feedback=feedback,
+            target_cost=target_cost,
         )
         feedback = _replacement_problem(item, req.appliances, max_cost, exclude_titles)
         if feedback is None:
@@ -286,7 +291,8 @@ def _replace_violators(
         cap = max(baseline_budget - _baseline_total(live) + item.baseline_cost.amount, floor)
         try:
             current[i] = _generate_replacement(
-                req, max_cost=cap, exclude_titles=[m.recipe.title for m in live], attempts=1
+                req, max_cost=cap, exclude_titles=[m.recipe.title for m in live], attempts=1,
+                target_cost=item.baseline_cost.amount,
             )
         except (llm.LLMError, ReplacementRejected) as exc:
             _log.warning("dropping appliance-violating meal %r: could not replace (%s)", item.recipe.title, exc)
@@ -459,7 +465,11 @@ def plan_on_a_budget(
     appliance_values = [a.value for a in req.appliances] if req.appliances else None
     mood_values = [m.value for m in req.food_moods] if req.food_moods else None
 
-    def _generate(prior_total: Optional[float] = None, violations: Optional[List[str]] = None):
+    def _generate(
+        prior_total: Optional[float] = None,
+        violations: Optional[List[str]] = None,
+        short_by: Optional[int] = None,
+    ):
         return llm.generate_budget_plan(
             budget=baseline_budget,
             currency=req.currency,
@@ -472,10 +482,12 @@ def plan_on_a_budget(
             appliances=appliance_values,
             food_moods=mood_values,
             violations=violations,
+            short_by=short_by,
         )
 
     # 5. Generate the week's recipes. If the plan lands under the target band
-    #    (< floor) OR has dinners needing appliances the user lacks, run ONE bounded
+    #    (< floor), has fewer dinners than requested, OR has dinners needing
+    #    appliances the user lacks, run ONE bounded
     #    corrective pass (one retry total, however many things were wrong), then
     #    keep whichever fits best. Any violations left after that are repaired
     #    meal-by-meal via the single-meal path. Ship best-effort either way.
@@ -487,11 +499,15 @@ def plan_on_a_budget(
             generated = _generate()
             violation_notes = _violation_notes(generated, req.appliances)
             undershoot = _adjusted_total(generated, multiplier) < floor_amount
-            if undershoot or violation_notes:
+            # Fewer dinners than asked for counts like an undershoot: same single
+            # corrective pass. If it is still short afterwards we ship what we have.
+            short_by = recipe_count - len(generated)
+            if undershoot or violation_notes or short_by > 0:
                 try:
                     retried = _generate(
                         prior_total=round(_baseline_total(generated), 2) if undershoot else None,
                         violations=violation_notes or None,
+                        short_by=short_by if short_by > 0 else None,
                     )
                     generated = _pick_plan(generated, retried, multiplier, req.budget, req.appliances)
                 except llm.LLMError:
@@ -659,7 +675,9 @@ def swap_meal(
     #    against this plan. Rejections and failures don't consume a swap.
     try:
         with llm_cost.track(user.id, "budget_swap", plan_id):
-            item = _generate_replacement(req, max_cost=cap, exclude_titles=exclude, attempts=2)
+            item = _generate_replacement(
+                req, max_cost=cap, exclude_titles=exclude, attempts=2, target_cost=old_cost
+            )
     except llm.LLMError as exc:
         raise HTTPException(status_code=502, detail={"error_code": exc.code, "message": exc.message})
     except ReplacementRejected as exc:

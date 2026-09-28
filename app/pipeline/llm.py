@@ -513,7 +513,9 @@ RULES:
    "basis": "llm-v1".
 5. For each recipe provide a short "health_signal" string of at most ~6 words,
    e.g. "High protein, veg-forward" or "Lighter, low added sugar".
-6. Keep the recipes realistic and varied; do not repeat the same dish.
+6. Keep the recipes realistic; do not repeat the same dish. Each title must name
+   the DISH itself and never mention the appliance: write "Salmon Rice Bowls with
+   Broccoli", not "Air Fryer Salmon Rice Bowls" or "Microwave Egg Fried Rice".
 7. Split every ingredient into quantity/unit/name as in a normal recipe, and
    write clear numbered instructions.
 8. For each recipe provide "equipment_used": every appliance the recipe needs,
@@ -528,7 +530,11 @@ RULES:
    would be cheaper or better.
 9. If the user message gives FOOD MOODS, lean the dinners toward them. This is a
    soft steer only: it never overrides the budget, the dietary preferences, or
-   the appliance constraint."""
+   the appliance constraint.
+10. Make the week varied: spread the dinners across different cuisines, let no
+   more than 2 dinners share a main protein, and — when the APPLIANCES list has
+   several — use different appliances from it across the week where sensible
+   instead of cooking everything in one."""
 
 # Appended when replacing ONE dinner in an existing plan (generate_single_meal).
 # Reuses every rule above; this only re-scopes rules 1 and 6 from "the week" to
@@ -536,10 +542,11 @@ RULES:
 SINGLE_MEAL_ADDENDUM = """
 
 YOU ARE REPLACING ONE DINNER in an existing plan, not planning a week. Read rules
-1 and 6 as applying to this single dinner: its baseline_cost must NOT exceed the
-maximum cost given (using most of it is good), and it must not be any dinner
-listed as already in the plan, nor a near-variant of one. Return exactly one
-recipe."""
+1 and 6 as applying to this single dinner: its baseline_cost must land in the
+target cost band given and must NEVER exceed the hard maximum, and it must not be
+any dinner listed as already in the plan, nor a near-variant of one. Rule 10 applies
+against the listed dinners: prefer a different cuisine and main protein than they
+use. Return exactly one recipe."""
 
 _BUDGET_PLAN_SCHEMA_HINT = """\
 Respond with ONLY a JSON object of this shape:
@@ -595,6 +602,7 @@ def generate_budget_plan(
     appliances: Optional[List[str]] = None,
     food_moods: Optional[List[str]] = None,
     violations: Optional[List[str]] = None,
+    short_by: Optional[int] = None,
 ) -> List[BudgetPlanRecipeLLM]:
     """Generate up to `count` budget/On-Hand-aware recipes in ONE LLM call.
 
@@ -629,7 +637,7 @@ def generate_budget_plan(
         f"(use most of it on better, larger-portion ingredients; do not exceed {budget:.0f}).",
         f"Household size: {household_size} people",
         f"Dietary preferences: {prefs}",
-        f"Propose at most {count} dinner recipes for the week.",
+        f"Propose EXACTLY {count} dinner recipes for the week — no more, no fewer.",
     ]
     if rich:
         lines.append(
@@ -644,6 +652,10 @@ def generate_budget_plan(
             f"\nA previous plan totaled only about {prior_total:.0f} {currency} — well under the "
             f"target. Revise UPWARD with more generous or higher-quality ingredients to reach the "
             f"target range, without exceeding {budget:.0f}."
+        )
+    if short_by:
+        lines.append(
+            f"\nA previous plan had {short_by} too few dinners. Return EXACTLY {count} this time."
         )
     if violations:
         lines.append(
@@ -671,6 +683,23 @@ def _cooking_lines(appliances: Optional[List[str]], food_moods: Optional[List[st
     return out
 
 
+# A swapped-in dinner should cost about what the one it replaces did.
+SINGLE_MEAL_COST_BAND: float = 0.30
+
+
+def _band_lines(target_cost: Optional[float], max_cost: float, currency: str) -> List[str]:
+    """The target-band prompt line for a replacement: ±30% of the replaced dinner's
+    cost, clamped under the hard cap. Empty when there is no target."""
+    if not target_cost or target_cost <= 0:
+        return []
+    high = min(target_cost * (1 + SINGLE_MEAL_COST_BAND), max_cost)
+    low = min(target_cost * (1 - SINGLE_MEAL_COST_BAND), high)
+    return [
+        f"Target cost band for this dinner: {low:.2f}–{high:.2f} {currency} (the dinner it "
+        f"replaces cost about {target_cost:.2f}). Aim inside the band; the maximum above is a hard cap."
+    ]
+
+
 def generate_single_meal(
     *,
     max_cost: float,
@@ -682,19 +711,25 @@ def generate_single_meal(
     appliances: Optional[List[str]] = None,
     food_moods: Optional[List[str]] = None,
     feedback: Optional[str] = None,
+    target_cost: Optional[float] = None,
 ) -> BudgetPlanRecipeLLM:
     """Generate ONE replacement dinner, reusing the budget-plan prompt and schema.
 
     `max_cost` is in baseline (location-independent) space, like `generate_budget_plan`'s
     budget: the most this dinner may cost. `exclude_titles` are the dinners already
     in the plan. `feedback` is set on a corrective attempt and says why the previous
-    candidate was rejected. Same validate + retry-once path as every other call."""
+    candidate was rejected. Same validate + retry-once path as every other call.
+
+    `target_cost` (baseline space) is the cost of the dinner being replaced: the
+    prompt asks for a replacement within ±SINGLE_MEAL_COST_BAND of it, but never
+    above `max_cost`, which stays the hard cap (the caller only enforces the cap)."""
     prefs = ", ".join(dietary_preferences) if dietary_preferences else "none"
     on_hand_lines = "\n".join(f"- {i}" for i in on_hand) or "(nothing on hand)"
     lines = [
         _SINGLE_MEAL_SCHEMA_HINT,
         "",
         f"Maximum cost for this ONE dinner: {max_cost:.2f} {currency} (do not exceed it).",
+        *_band_lines(target_cost, max_cost, currency),
         f"Household size: {household_size} people",
         f"Dietary preferences: {prefs}",
     ]

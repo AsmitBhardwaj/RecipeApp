@@ -34,6 +34,18 @@ def meal(title: str, cost: float, equipment=()) -> BudgetPlanRecipeLLM:
     )
 
 
+def week(*special: BudgetPlanRecipeLLM, total: float = 90.0, n: int = 7, eq=OVEN):
+    """A full-count plan (the endpoint asks for exactly N dinners; a shorter plan
+    triggers the corrective retry): the given meals first, then filler meals so the
+    baseline total is `total`."""
+    filler = [meal(f"Filler {i}", 0, [eq]) for i in range(n - len(special))]
+    spent = sum(m.baseline_cost.amount for m in special)
+    each = (total - spent) / max(len(filler), 1)
+    for m in filler:
+        m.baseline_cost.amount = each
+    return list(special) + filler
+
+
 def meal_without_equipment(title: str, cost: float) -> BudgetPlanRecipeLLM:
     """A meal whose equipment_used is empty — the schema rejects this from the model,
     so build it by copy (which skips validation) to exercise the server-side check."""
@@ -209,7 +221,7 @@ class ApplianceTests(_Base):
     def test_no_appliances_skips_validation_entirely(self) -> None:
         # v1.0: equipment_used is ignored — nothing triggers a retry or replacement.
         with mock.patch(
-            "app.mealplan.llm.generate_budget_plan", return_value=[meal("A", 90, [Appliance.air_fryer])]
+            "app.mealplan.llm.generate_budget_plan", return_value=week(meal("A", 6, [Appliance.air_fryer]), eq=Appliance.air_fryer)
         ) as gen, mock.patch("app.mealplan.llm.generate_single_meal") as single:
             r = self.client.post("/v1/meal-plan/budget", json=self.body(), headers=self.headers())
         self.assertEqual(r.status_code, 200, r.text)
@@ -218,13 +230,13 @@ class ApplianceTests(_Base):
         self.assertIsNone(gen.call_args.kwargs["appliances"])
 
     def test_prompt_inputs_are_passed_through(self) -> None:
-        r, gen, _ = self.call([[meal("A", 90, [OVEN])]], food_moods=["spicy", "quick"])
+        r, gen, _ = self.call([week()], food_moods=["spicy", "quick"])
         self.assertEqual(r.status_code, 200, r.text)
         self.assertEqual(gen.call_args.kwargs["appliances"], ["oven", "stovetop"])
         self.assertEqual(gen.call_args.kwargs["food_moods"], ["spicy", "quick"])
 
     def test_compliant_plan_needs_no_retry(self) -> None:
-        r, gen, single = self.call([[meal("A", 45, [OVEN]), meal("B", 45, [STOVE, OVEN])]])
+        r, gen, single = self.call([week(meal("A", 20, [OVEN]), meal("B", 20, [STOVE, OVEN]))])
         self.assertEqual(r.status_code, 200, r.text)
         self.assertEqual(gen.call_count, 1)
         single.assert_not_called()
@@ -333,7 +345,7 @@ class EquipmentRequiredTests(_Base):
     def test_empty_equipment_ignored_without_appliances(self) -> None:
         # v1.0 path: no validation at all.
         with mock.patch(
-            "app.mealplan.llm.generate_budget_plan", return_value=[meal_without_equipment("A", 90)]
+            "app.mealplan.llm.generate_budget_plan", return_value=week(meal_without_equipment("A", 6))
         ) as gen:
             r = self.client.post("/v1/meal-plan/budget", json=self.body(), headers=self.headers())
         self.assertEqual(r.status_code, 200, r.text)
@@ -367,7 +379,7 @@ class NoCookTests(_Base):
         self.assertEqual(r.status_code, 422)
 
     def test_no_cook_meal_passes_for_a_microwave_only_user(self) -> None:
-        plan = [meal("Salad", 45, [Equipment.no_cook]), meal("Mug Cake", 45, [MICRO])]
+        plan = week(meal("Salad", 20, [Equipment.no_cook]), meal("Mug Cake", 20, [MICRO]), eq=MICRO)
         r, gen, single = self._post([plan], ["microwave"])
         self.assertEqual(r.status_code, 200, r.text)
         self.assertEqual(gen.call_count, 1)  # no violation → no retry
@@ -741,6 +753,170 @@ class DeleteAccountTests(_Base):
         import inspect
         fn = next(f for n, f in inspect.getmembers(db, inspect.isfunction) if "delete_account" in n or "delete_user" in n)
         self.assertIn("budget_plans", inspect.getsource(fn))
+
+
+class _PromptCapture:
+    """Stub the LLM chokepoint and remember the (system, user) prompts sent."""
+
+    def __init__(self, payload: str):
+        self.payload, self.calls = payload, []
+
+    def __call__(self, system, user, schema_model):
+        self.calls.append((system, user))
+        return self.payload
+
+
+def _week_json(n: int) -> str:
+    return json.dumps({"recipes": [json.loads(meal(f"M{i}", 10).model_dump_json()) for i in range(n)]})
+
+
+class PlanCountTests(_Base):
+    def _post(self, gens, **over):
+        with mock.patch("app.mealplan.llm.generate_budget_plan", side_effect=gens) as gen, \
+             mock.patch("app.mealplan.llm.generate_single_meal") as single:
+            r = self.client.post("/v1/meal-plan/budget", json=self.body(**over), headers=self.headers())
+        return r, gen, single
+
+    def test_prompt_asks_for_exactly_n(self) -> None:
+        cap = _PromptCapture(_week_json(7))
+        with mock.patch.object(llm, "_raw_call", cap):
+            llm.generate_budget_plan(
+                budget=100, currency="USD", household_size=2, dietary_preferences=[], on_hand=[], count=7
+            )
+        user = cap.calls[0][1]
+        self.assertIn("EXACTLY 7", user)
+        self.assertNotIn("at most 7", user)
+
+    def test_surplus_dinners_are_truncated_to_n(self) -> None:
+        with mock.patch.object(llm, "_raw_call", _PromptCapture(_week_json(9))):
+            out = llm.generate_budget_plan(
+                budget=100, currency="USD", household_size=2, dietary_preferences=[], on_hand=[], count=7
+            )
+        self.assertEqual(len(out), 7)
+
+    def test_short_plan_triggers_the_single_corrective_retry(self) -> None:
+        # 6 of 7, in band and compliant: only the shortfall drives the retry.
+        r, gen, single = self._post([week(n=6), week()])
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual(gen.call_count, 2)
+        kw = gen.call_args_list[1].kwargs
+        self.assertEqual(kw["short_by"], 1)
+        self.assertIsNone(kw["prior_total"])
+        self.assertIsNone(gen.call_args_list[0].kwargs["short_by"])
+        self.assertEqual(len(r.json()["recipes"]), 7)
+        single.assert_not_called()
+
+    def test_retry_prompt_names_the_shortfall(self) -> None:
+        cap = _PromptCapture(_week_json(7))
+        with mock.patch.object(llm, "_raw_call", cap):
+            llm.generate_budget_plan(
+                budget=100, currency="USD", household_size=2, dietary_preferences=[], on_hand=[],
+                count=7, short_by=2,
+            )
+        self.assertIn("2 too few dinners", cap.calls[0][1])
+
+    def test_still_short_after_the_retry_ships_what_we_have_with_no_extra_calls(self) -> None:
+        r, gen, single = self._post([week(n=5), week(n=6)])
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual(gen.call_count, 2)  # never a third
+        self.assertEqual(len(r.json()["recipes"]), 6)  # the fuller of the two
+        single.assert_not_called()
+
+    def test_full_plan_does_not_retry(self) -> None:
+        r, gen, _ = self._post([week()])
+        self.assertEqual(gen.call_count, 1)
+        self.assertEqual(len(r.json()["recipes"]), 7)
+
+    def test_short_undershoot_and_violation_together_are_still_one_retry(self) -> None:
+        bad = [meal("Wings", 5, [Appliance.air_fryer])] + [meal(f"F{i}", 5, [OVEN]) for i in range(3)]
+        r, gen, _ = self._post([bad, week(n=6)], appliances=["oven"])
+        self.assertEqual(gen.call_count, 2)
+        kw = gen.call_args_list[1].kwargs
+        self.assertTrue(kw["violations"] and kw["prior_total"] and kw["short_by"] == 3)
+
+    def test_thin_budget_target_count_is_what_must_be_met(self) -> None:
+        # $30 for 2 → 5 dinners. Five is complete: no retry.
+        r, gen, _ = self._post([week(total=28, n=5)], budget=30)
+        self.assertEqual(gen.call_args.kwargs["count"], 5)
+        self.assertEqual(gen.call_count, 1)
+
+
+class VarietyPromptTests(unittest.TestCase):
+    def test_titles_must_name_the_dish_not_the_appliance(self) -> None:
+        p = llm.BUDGET_PLAN_SYSTEM_PROMPT
+        self.assertIn("name\n   the DISH itself and never mention the appliance", p)
+        self.assertIn("Air Fryer Salmon Rice Bowls", p)  # as the bad example
+
+    def test_variety_steer(self) -> None:
+        p = llm.BUDGET_PLAN_SYSTEM_PROMPT
+        self.assertIn("different cuisines", p)
+        self.assertIn("no\n   more than 2 dinners share a main protein", p)
+        self.assertIn("use different appliances from it across the week", p)
+
+    def test_single_meal_carries_the_same_rules_and_the_variety_steer(self) -> None:
+        cap = _PromptCapture(meal("Z", 10).model_dump_json())
+        with mock.patch.object(llm, "_raw_call", cap):
+            llm.generate_single_meal(
+                max_cost=40, currency="USD", household_size=2, dietary_preferences=[], on_hand=[],
+                exclude_titles=["Salmon Bowls"],
+            )
+        system = cap.calls[0][0]
+        self.assertIn("never mention the appliance", system)
+        self.assertIn("Rule 10 applies", system)
+
+
+class SwapCostBandTests(_Base):
+    def _band_prompt(self, **kw):
+        cap = _PromptCapture(meal("Z", 10).model_dump_json())
+        args = dict(max_cost=40.0, currency="USD", household_size=2, dietary_preferences=[],
+                    on_hand=[], exclude_titles=["A"], target_cost=30.0)
+        args.update(kw)
+        with mock.patch.object(llm, "_raw_call", cap):
+            llm.generate_single_meal(**args)
+        return cap.calls[0][1]
+
+    def test_band_is_plus_minus_30_percent_of_the_replaced_cost(self) -> None:
+        self.assertIn("21.00–39.00", self._band_prompt())  # 30 × 0.7 – 30 × 1.3, under the 40 cap
+
+    def test_band_top_is_clamped_to_the_cap(self) -> None:
+        self.assertIn("21.00–32.00", self._band_prompt(max_cost=32.0))
+        self.assertIn("Maximum cost for this ONE dinner: 32.00", self._band_prompt(max_cost=32.0))
+
+    def test_band_never_inverts_when_the_cap_is_below_the_band(self) -> None:
+        self.assertIn("15.00–15.00", self._band_prompt(max_cost=15.0))  # cap < 0.7 × target
+
+    def test_no_target_no_band_line(self) -> None:
+        self.assertNotIn("Target cost band", self._band_prompt(target_cost=None))
+
+    def test_swap_passes_the_replaced_cost_as_the_target(self) -> None:
+        plan_id = self.plan().json()["plan_id"]  # meals cost 30 each, budget 100
+        with mock.patch("app.mealplan.llm.generate_single_meal", return_value=meal("Z", 30)) as single:
+            self.swap(plan_id)
+        kw = single.call_args.kwargs
+        self.assertAlmostEqual(kw["target_cost"], 30.0)
+        self.assertAlmostEqual(kw["max_cost"], 40.0)  # the per-meal cap is unchanged
+
+    def test_server_accepts_anything_under_the_cap_even_outside_the_band(self) -> None:
+        plan_id = self.plan().json()["plan_id"]
+        for cost, title in ((5.0, "Cheap"), (39.9, "Rich")):  # band is 21–39
+            with mock.patch("app.mealplan.llm.generate_single_meal", return_value=meal(title, cost)) as single:
+                r = self.swap(plan_id, index=0)
+            self.assertEqual(r.status_code, 200, r.text)
+            self.assertEqual(single.call_count, 1)  # no extra retry for the band
+
+    def test_the_cap_is_still_hard(self) -> None:
+        plan_id = self.plan().json()["plan_id"]
+        with mock.patch("app.mealplan.llm.generate_single_meal", return_value=meal("Z", 41.0)) as single:
+            r = self.swap(plan_id)
+        self.assertEqual(r.status_code, 502)
+        self.assertEqual(single.call_count, 2)
+
+    def test_violator_replacement_also_targets_the_replaced_cost(self) -> None:
+        mk = lambda: week(meal("Wings", 20, [Appliance.air_fryer]), eq=OVEN)
+        with mock.patch("app.mealplan.llm.generate_budget_plan", side_effect=[mk(), mk()]), \
+             mock.patch("app.mealplan.llm.generate_single_meal", return_value=meal("Ziti", 20, [OVEN])) as single:
+            self.client.post("/v1/meal-plan/budget", json=self.body(appliances=["oven"]), headers=self.headers())
+        self.assertAlmostEqual(single.call_args.kwargs["target_cost"], 20.0)
 
 
 class RateLimitSweepTests(_Base):
