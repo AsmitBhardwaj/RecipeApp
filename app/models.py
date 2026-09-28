@@ -11,6 +11,7 @@ identity/image/source fields to build a full `Recipe`.
 """
 from __future__ import annotations
 
+from enum import Enum
 from typing import List, Literal, Optional
 
 from pydantic import BaseModel, Field
@@ -65,6 +66,31 @@ class Confidence(BaseModel):
     # off missing_fields (e.g. a UI "incomplete recipe" prompt) must not trust it
     # blindly; reconcile it against the actual fields first.
     missing_fields: List[str] = Field(default_factory=list)
+
+
+class Appliance(str, Enum):
+    """Cooking equipment a Plan on a Budget user has. A HARD constraint on
+    generation: every dinner must be cookable with only these."""
+
+    stovetop = "stovetop"
+    oven = "oven"
+    microwave = "microwave"
+    air_fryer = "air_fryer"
+    slow_cooker = "slow_cooker"
+    rice_cooker = "rice_cooker"
+    blender = "blender"
+    kettle = "kettle"
+
+
+class FoodMood(str, Enum):
+    """A soft steer on what kind of dinners to propose."""
+
+    comfort = "comfort"
+    light_fresh = "light_fresh"
+    spicy = "spicy"
+    quick = "quick"
+    adventurous = "adventurous"
+    high_protein = "high_protein"
 
 
 class CostEstimate(BaseModel):

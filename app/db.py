@@ -171,7 +171,30 @@ llm_cost_events = Table(
     # Nullable: NULL means "no known rate for this model", distinct from $0.
     Column("estimated_cost_usd", Float),
     Column("created_at", Text, nullable=False),
+    # The budget plan this call belongs to (generation, corrective retry,
+    # replacement, or swap). Nullable: imports and pantry calls have none.
+    Column("plan_id", String),
     Index("ix_llm_cost_events_account_created", "account_id", "created_at"),
+    Index("ix_llm_cost_events_plan", "plan_id"),
+)
+
+# Plan on a Budget ledger (app/mealplan.py). One row per SUCCESSFUL plan, holding
+# what the swap endpoint needs to replace a single meal later: the original
+# request, the current meals (each with its location-independent baseline cost),
+# and the baseline-space budget. `plan_json` is rewritten on every swap.
+# `is_free` marks the plan that used the account's one free plan.
+budget_plans = Table(
+    "budget_plans",
+    metadata,
+    Column("id", String, primary_key=True),  # uuid; also the llm_cost_events.plan_id
+    Column("user_id", String, nullable=False),
+    Column("created_at", Text, nullable=False),
+    Column("is_free", Boolean, nullable=False, default=False),
+    Column("swaps_used", Integer, nullable=False, default=0),
+    Column("request_json", Text, nullable=False),
+    Column("plan_json", Text, nullable=False),
+    Column("budget_baseline", Float, nullable=False),
+    Index("ix_budget_plans_user_created", "user_id", "created_at"),
 )
 
 feedback = Table(
@@ -203,6 +226,9 @@ users = Table(
     Column("full_name", Text),
     Column("created_at", Text, nullable=False),
     Column("updated_at", Text, nullable=False),
+    # Set once, when the account's one free Plan on a Budget succeeds
+    # (app/mealplan.py). NULL = the free plan is still available.
+    Column("free_plan_used_at", Text),
 )
 
 # Links a verified provider identity (Apple/Google `sub`) to a user, so the same
@@ -373,6 +399,8 @@ def _add_missing_columns(engine: Engine) -> None:
             "source_creator": "TEXT",
         },
         "feedback": {"account_id": "VARCHAR"},
+        "users": {"free_plan_used_at": "TEXT"},
+        "llm_cost_events": {"plan_id": "VARCHAR"},
     }
     with engine.begin() as conn:
         for table_name, columns in additions.items():
@@ -386,6 +414,7 @@ def _add_missing_columns(engine: Engine) -> None:
             ("ix_jobs_account_id", "jobs", "account_id"),
             ("ix_user_recipes_account_id", "user_recipes", "account_id"),
             ("ix_feedback_account_id", "feedback", "account_id"),
+            ("ix_llm_cost_events_plan", "llm_cost_events", "plan_id"),
         ):
             if table_name in existing_tables:
                 conn.execute(
@@ -603,6 +632,7 @@ def record_llm_cost_event(
     completion_tokens: int,
     estimated_cost_usd: Optional[float],
     created_at: str,
+    plan_id: Optional[str] = None,
 ) -> None:
     """Append one LLM cost event. Fire-and-forget append (no upsert): each LLM
     API call is its own row, so a multi-call import produces several rows."""
@@ -615,9 +645,79 @@ def record_llm_cost_event(
         completion_tokens=completion_tokens,
         estimated_cost_usd=estimated_cost_usd,
         created_at=created_at,
+        plan_id=plan_id,
     )
     with _get_engine().begin() as conn:
         conn.execute(stmt)
+
+
+# --------------------------------------------------------------------------- #
+# Plan on a Budget ledger + free plan
+# --------------------------------------------------------------------------- #
+
+
+def get_free_plan_used_at(user_id: str) -> Optional[str]:
+    """ISO timestamp the account's free plan was consumed, or None if still unused."""
+    with _get_engine().begin() as conn:
+        return conn.execute(
+            select(users.c.free_plan_used_at).where(users.c.id == user_id)
+        ).scalar_one_or_none()
+
+
+def claim_free_plan(user_id: str, when_iso: str) -> bool:
+    """Mark the free plan used. Compare-and-set on NULL, so exactly one caller wins
+    a race; returns False if it was already consumed (or the user is gone)."""
+    with _get_engine().begin() as conn:
+        result = conn.execute(
+            update(users)
+            .where(users.c.id == user_id, users.c.free_plan_used_at.is_(None))
+            .values(free_plan_used_at=when_iso)
+        )
+        return result.rowcount == 1
+
+
+def save_budget_plan(
+    *,
+    plan_id: str,
+    user_id: str,
+    created_at: str,
+    is_free: bool,
+    request_json: str,
+    plan_json: str,
+    budget_baseline: float,
+) -> None:
+    with _get_engine().begin() as conn:
+        conn.execute(
+            budget_plans.insert().values(
+                id=plan_id,
+                user_id=user_id,
+                created_at=created_at,
+                is_free=is_free,
+                swaps_used=0,
+                request_json=request_json,
+                plan_json=plan_json,
+                budget_baseline=budget_baseline,
+            )
+        )
+
+
+def get_budget_plan(plan_id: str) -> Optional[dict]:
+    with _get_engine().begin() as conn:
+        row = conn.execute(select(budget_plans).where(budget_plans.c.id == plan_id)).mappings().fetchone()
+    return dict(row) if row else None
+
+
+def update_budget_plan_after_swap(plan_id: str, plan_json: str, expected_swaps_used: int) -> bool:
+    """Write the swapped plan and bump `swaps_used`, only if `swaps_used` is still
+    what the caller read (optimistic concurrency between two concurrent swaps).
+    Returns False if another swap got there first."""
+    with _get_engine().begin() as conn:
+        result = conn.execute(
+            update(budget_plans)
+            .where(budget_plans.c.id == plan_id, budget_plans.c.swaps_used == expected_swaps_used)
+            .values(plan_json=plan_json, swaps_used=expected_swaps_used + 1)
+        )
+        return result.rowcount == 1
 
 
 def sum_llm_cost_by_account(
@@ -913,7 +1013,7 @@ def get_all_feedback() -> list:
 # compromised/buggy client can't spray arbitrary collection names into the table.
 SYNC_COLLECTIONS = frozenset(
     {"library", "meal_plan", "grocery_check", "grocery_manual", "cookbook", "cookbook_membership",
-     "pantry_items"}
+     "pantry_items", "cooking_preferences"}
 )
 
 
@@ -1180,6 +1280,7 @@ def delete_account(
         conn.execute(delete(import_events).where(import_events.c.account_id == user_id))
         conn.execute(delete(entitlements).where(entitlements.c.user_id == user_id))
         conn.execute(delete(llm_cost_events).where(llm_cost_events.c.account_id == user_id))
+        conn.execute(delete(budget_plans).where(budget_plans.c.user_id == user_id))
         conn.execute(
             delete(account_device_signals).where(account_device_signals.c.account_id == user_id)
         )

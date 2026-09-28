@@ -43,6 +43,16 @@ AREA_MODIFIERS: dict[str, float] = {
     "rural": 0.85,
 }
 
+# Store price tier, an alternative to the area-type modifier: how expensive the
+# stores the user shops at are. When a request carries a store tier it REPLACES the
+# area modifier (multiplier = country baseline × tier); v1.0 clients never send it
+# and keep the area-type path unchanged.
+STORE_TIER_MODIFIERS: dict[str, float] = {
+    "budget": 0.85,
+    "standard": 1.00,
+    "premium": 1.30,
+}
+
 # Country baseline vs. the US national average (1.0), keyed on ISO 3166-1 alpha-2.
 # Curated, coarse, and round; every other country falls back to DEFAULT_BASELINE.
 COUNTRY_BASELINES: dict[str, float] = {
@@ -81,9 +91,25 @@ def area_modifier(area_type: Optional[str]) -> float:
     return AREA_MODIFIERS.get(area_type.strip().lower(), DEFAULT_AREA_MODIFIER)
 
 
-def multiplier_for(country: Optional[str], area_type: Optional[str]) -> float:
-    """The cost multiplier for a (country, area_type) pair: the country baseline
-    times the area-type modifier, rounded to two decimals. Missing/unknown parts
-    fall back to their respective defaults (both 1.0), so an entirely unset
-    location resolves to the 1.0 national average."""
+def store_tier_modifier(store_tier: Optional[str]) -> float:
+    """The modifier for a store tier (`budget`/`standard`/`premium`), or 1.0 when
+    missing or unrecognized."""
+    if not store_tier:
+        return 1.0
+    return STORE_TIER_MODIFIERS.get(store_tier.strip().lower(), 1.0)
+
+
+def multiplier_for(
+    country: Optional[str],
+    area_type: Optional[str],
+    store_tier: Optional[str] = None,
+) -> float:
+    """The cost multiplier, rounded to two decimals.
+
+    With a `store_tier`: country baseline × store-tier modifier, and `area_type`
+    is ignored. Without one (the v1.0 path): country baseline × area-type
+    modifier. Missing/unknown parts fall back to their defaults (all 1.0), so an
+    entirely unset location resolves to the 1.0 national average."""
+    if store_tier:
+        return round(country_baseline(country) * store_tier_modifier(store_tier), 2)
     return round(country_baseline(country) * area_modifier(area_type), 2)

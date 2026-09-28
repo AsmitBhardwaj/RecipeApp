@@ -85,3 +85,8 @@ def check_budget_plan(account_id: str) -> None:
 def check_pantry(account_id: str) -> None:
     """Pantry suggestions: per-day cap, independent of the import/budget caps."""
     _check("pantry", account_id, [(_DAY, config.BURST_PANTRY_PER_DAY)])
+
+
+def check_swap(account_id: str) -> None:
+    """Budget-plan meal swaps: per-day cap, independent of the plan/import caps."""
+    _check("swap", account_id, [(_DAY, config.BURST_SWAP_PER_DAY)])
