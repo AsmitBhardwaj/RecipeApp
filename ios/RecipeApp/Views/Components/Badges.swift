@@ -35,12 +35,19 @@ struct GeneratedBadge: View {
     }
 }
 
-/// Shows where a recipe's image came from ("From video" / "Stock photo").
+/// Shows where a recipe's image came from ("From video" / "Stock photo"), or
+/// "No photo available" when the bundled generic photo is showing instead.
 struct ImageSourceBadge: View {
     let source: ImageSource
+    /// Whether an actual photo (not the bundled fallback) is currently
+    /// rendered — see `RecipeImageView.onPhotoLoadedChange`. Required so the
+    /// badge never claims "No photo available" over a real loaded photo (the
+    /// static `source` metadata can drift from what's actually on screen), and
+    /// never states a provenance for a photo that isn't actually showing.
+    let isPhotoLoaded: Bool
 
     var body: some View {
-        if let label = source.badgeLabel {
+        if let label {
             Label(label, systemImage: icon)
                 .font(.caption2.weight(.medium))
                 .padding(.horizontal, 8)
@@ -48,6 +55,12 @@ struct ImageSourceBadge: View {
                 .foregroundStyle(.white)
                 .background(.black.opacity(0.55), in: Capsule())
         }
+    }
+
+    private var label: String? {
+        guard isPhotoLoaded else { return "No photo available" }
+        guard source != .none else { return nil }
+        return source.badgeLabel
     }
 
     private var icon: String {
@@ -84,8 +97,9 @@ struct MatchContextBadge: View {
             have: ["egg", "spaghetti", "bacon"], missing: ["parmesan", "black pepper"],
             haveCount: 3, totalCount: 5, coverage: 0.6, score: 0.71
         ))
-        ImageSourceBadge(source: .videoThumbnail)
-        ImageSourceBadge(source: .stockPhoto)
+        ImageSourceBadge(source: .videoThumbnail, isPhotoLoaded: true)
+        ImageSourceBadge(source: .stockPhoto, isPhotoLoaded: true)
+        ImageSourceBadge(source: .none, isPhotoLoaded: false)
     }
     .padding()
 }

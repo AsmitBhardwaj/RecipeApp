@@ -177,6 +177,14 @@ class Recipe(BaseModel):
     # per user. Null when not estimable. Stored in the `data` JSON blob, so no
     # migration: pre-nutrition cached recipes decode it as null.
     nutrition: Optional[Nutrition] = None
+    # True only when this recipe HAS nutrition but it was stripped for a
+    # non-Pro account (see main._strip_pro_fields) — tells the client to show
+    # the locked-card upsell instead of hiding nutrition entirely. Never true
+    # when nutrition was never estimable (nutrition already null) or for a
+    # generated recipe (nutrition is force-null before this ever runs).
+    # Response-only in practice; not set on write, so it never persists to the
+    # DB row it's copied from.
+    nutrition_locked: bool = False
 
     # Plan on a Budget annotations (docs/budget-meal-planning.md §3.1). Populated
     # at generation time for budget-plan recipes; null for every other recipe.

@@ -360,26 +360,34 @@ class EndpointTests(_DBBase):
         self.assertEqual(r.status_code, 200)
         self.assertFalse(r.json()["is_pro"])
 
-    def _seed_recipe_and_job(self):
+    def _seed_recipe_and_job(self, recipe_id="r1", job_id="j1", source_type="caption",
+                              nutrition="default"):
         from app.models import Job, Nutrition, Recipe
 
+        if nutrition == "default":
+            nutrition = Nutrition(calories=500, basis="per_serving", source="estimated")
         recipe = Recipe(
-            recipe_id="r1",
-            canonical_video_id="v1",
+            recipe_id=recipe_id,
+            canonical_video_id=f"v-{recipe_id}",
             title="Test",
-            source_type="caption",
-            nutrition=Nutrition(calories=500, basis="per_serving", source="estimated"),
+            source_type=source_type,
+            nutrition=nutrition,
         )
         db.save_recipe(recipe)
         job = Job(
-            job_id="j1",
+            job_id=job_id,
             user_id=self.user.id,
             url="http://x",
             status="complete",
             created_at=datetime.now(timezone.utc).isoformat(),
-            recipe_id="r1",
+            recipe_id=recipe_id,
         )
         db.save_job(job)
+
+    def _make_pro(self):
+        with mock.patch.object(appstore, "verify_transaction", return_value=_vtx(expires_at=_dt(30), app_account_token=self.user.id)), \
+             mock.patch.object(appstore, "fetch_grace_expiry", return_value=None):
+            entitlements.verify_and_store(self.user, "jws")
 
     def test_nutrition_stripped_for_free_user(self):
         self._seed_recipe_and_job()
@@ -389,13 +397,43 @@ class EndpointTests(_DBBase):
 
     def test_nutrition_present_for_pro_user(self):
         self._seed_recipe_and_job()
-        with mock.patch.object(appstore, "verify_transaction", return_value=_vtx(expires_at=_dt(30), app_account_token=self.user.id)), \
-             mock.patch.object(appstore, "fetch_grace_expiry", return_value=None):
-            entitlements.verify_and_store(self.user, "jws")
+        self._make_pro()
         r = self.client.get("/v1/jobs/j1", headers=self._auth())
         self.assertEqual(r.status_code, 200, r.text)
         self.assertIsNotNone(r.json()["recipe"]["nutrition"])
         self.assertEqual(r.json()["recipe"]["nutrition"]["calories"], 500)
+
+    def test_nutrition_locked_true_for_free_user_with_nutrition(self):
+        self._seed_recipe_and_job()
+        r = self.client.get("/v1/jobs/j1", headers=self._auth())  # no entitlement
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertIsNone(r.json()["recipe"]["nutrition"])
+        self.assertTrue(r.json()["recipe"]["nutrition_locked"])
+
+    def test_nutrition_locked_absent_for_pro_user(self):
+        self._seed_recipe_and_job()
+        self._make_pro()
+        r = self.client.get("/v1/jobs/j1", headers=self._auth())
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertIsNotNone(r.json()["recipe"]["nutrition"])
+        self.assertFalse(r.json()["recipe"]["nutrition_locked"])
+
+    def test_nutrition_locked_false_for_free_user_without_nutrition(self):
+        self._seed_recipe_and_job(nutrition=None)
+        r = self.client.get("/v1/jobs/j1", headers=self._auth())  # no entitlement
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertIsNone(r.json()["recipe"]["nutrition"])
+        self.assertFalse(r.json()["recipe"]["nutrition_locked"])
+
+    def test_nutrition_locked_false_for_generated_recipe(self):
+        # Generated recipes never carry nutrition (orchestrator forces it null
+        # before this ever runs), so the free-user lock flag must stay false —
+        # there's nothing to unlock.
+        self._seed_recipe_and_job(source_type="generated", nutrition=None)
+        r = self.client.get("/v1/jobs/j1", headers=self._auth())  # no entitlement
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertIsNone(r.json()["recipe"]["nutrition"])
+        self.assertFalse(r.json()["recipe"]["nutrition_locked"])
 
 
 if __name__ == "__main__":

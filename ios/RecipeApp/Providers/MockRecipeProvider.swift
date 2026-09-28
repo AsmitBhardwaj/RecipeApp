@@ -134,6 +134,21 @@ extension Recipe {
 
     /// All samples, in list order.
     static let samples: [Recipe] = [spicyNoodles, twoIngredientBagels, margheritaPizza]
+
+    /// Debug/preview-only: a copy with `nutrition` stripped and
+    /// `nutritionLocked` set, mirroring what the server sends a free account
+    /// (`app/main.py _strip_pro_fields`) — used by the `-gatePreview
+    /// nutritionFree` screenshot harness to render the locked nutrition card.
+    func withNutritionLocked() -> Recipe {
+        Recipe(
+            recipeId: recipeId, canonicalVideoId: canonicalVideoId, title: title,
+            servings: servings, prepTimeMinutes: prepTimeMinutes, cookTimeMinutes: cookTimeMinutes,
+            totalTimeMinutes: totalTimeMinutes, ingredients: ingredients, instructions: instructions,
+            confidence: confidence, sourceType: sourceType, imageUrl: imageUrl, imageSource: imageSource,
+            transcript: transcript, nutrition: nil, nutritionLocked: true,
+            sourceUrl: sourceUrl, sourcePlatform: sourcePlatform, sourceCreator: sourceCreator
+        )
+    }
 }
 
 // MARK: - Mock provider

@@ -51,7 +51,19 @@ public struct Recipe: Codable, Identifiable, Hashable {
     /// shipped decode as nil and existing construction sites are unaffected.
     public let nutrition: Nutrition?
 
+    /// True only when this recipe HAS nutrition but the server stripped it for
+    /// a non-Pro account (app/main.py `_strip_pro_fields`) — drives the locked
+    /// nutrition card instead of hiding the section entirely. `Bool?` (not a
+    /// plain `Bool`) for the same backward-compat reason as `nutrition`: a
+    /// response from before this field existed, or a locally cached recipe
+    /// decoded by an older build, has no key for it and must decode as nil
+    /// rather than throw. Read via `isNutritionLocked`.
+    public let nutritionLocked: Bool?
+
     public var id: String { recipeId }
+
+    /// `nutritionLocked ?? false` — the safe read for view code.
+    public var isNutritionLocked: Bool { nutritionLocked ?? false }
 
     public init(
         recipeId: String,
@@ -69,6 +81,7 @@ public struct Recipe: Codable, Identifiable, Hashable {
         imageSource: ImageSource,
         transcript: String?,
         nutrition: Nutrition? = nil,
+        nutritionLocked: Bool? = nil,
         sourceUrl: String? = nil,
         sourcePlatform: String? = nil,
         sourceCreator: String? = nil
@@ -91,6 +104,7 @@ public struct Recipe: Codable, Identifiable, Hashable {
         self.sourceCreator = sourceCreator
         self.transcript = transcript
         self.nutrition = nutrition
+        self.nutritionLocked = nutritionLocked
     }
 
     enum CodingKeys: String, CodingKey {
@@ -112,6 +126,7 @@ public struct Recipe: Codable, Identifiable, Hashable {
         case sourceCreator = "source_creator"
         case transcript
         case nutrition
+        case nutritionLocked = "nutrition_locked"
     }
 }
 
