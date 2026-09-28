@@ -141,6 +141,7 @@ class AttributionPersistenceTests(unittest.TestCase):
 
 
 class AttributionMigrationTests(unittest.TestCase):
+    @unittest.skipIf(os.getenv("TEST_DATABASE_URL"), "builds a legacy SQLite file directly")
     def test_legacy_rows_backfill_from_completed_job_without_inventing_creator(self):
         original = config.DB_PATH
         fd, path = tempfile.mkstemp(suffix=".db")
