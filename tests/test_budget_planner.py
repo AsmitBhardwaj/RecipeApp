@@ -17,7 +17,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import select
 
 from app import budget, config, db
-from app.models import Appliance, CostEstimate, LLMRecipe
+from app.models import Appliance, CostEstimate, Equipment, LLMRecipe
 from app.pipeline import llm, regional_cost
 from app.pipeline.llm import BudgetPlanRecipeLLM
 from tests.entitlement_utils import grant_pro, revoke_pro
@@ -347,6 +347,50 @@ class EquipmentRequiredTests(_Base):
             s = self.swap(plan_id)
         self.assertEqual(s.status_code, 200, s.text)
         self.assertIn("at least one", single.call_args_list[1].kwargs["feedback"])
+
+
+class NoCookTests(_Base):
+    def _post(self, plan, appliances, single=None):
+        with mock.patch("app.mealplan.llm.generate_budget_plan", side_effect=plan) as gen, \
+             mock.patch("app.mealplan.llm.generate_single_meal", side_effect=single or []) as one:
+            r = self.client.post(
+                "/v1/meal-plan/budget", json=self.body(appliances=appliances), headers=self.headers()
+            )
+        return r, gen, one
+
+    def test_no_cook_is_a_schema_value_but_not_a_user_appliance(self) -> None:
+        self.assertIn("no_cook", {e.value for e in Equipment})
+        self.assertNotIn("no_cook", {a.value for a in Appliance})
+        r = self.client.post(
+            "/v1/meal-plan/budget", json=self.body(appliances=["no_cook"]), headers=self.headers()
+        )
+        self.assertEqual(r.status_code, 422)
+
+    def test_no_cook_meal_passes_for_a_microwave_only_user(self) -> None:
+        plan = [meal("Salad", 45, [Equipment.no_cook]), meal("Mug Cake", 45, [MICRO])]
+        r, gen, single = self._post([plan], ["microwave"])
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual(gen.call_count, 1)  # no violation → no retry
+        single.assert_not_called()
+        self.assertEqual(r.json()["recipes"][0]["equipment_used"], ["no_cook"])
+
+    def test_no_cook_plus_an_unowned_appliance_still_violates(self) -> None:
+        mk = lambda: [meal("Bake", 45, [Equipment.no_cook, OVEN]), meal("Salad", 45, [Equipment.no_cook])]
+        fixed = meal("Wrap", 45, [Equipment.no_cook])
+        r, gen, single = self._post([mk(), mk()], ["microwave"], single=[fixed])
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual(gen.call_args_list[1].kwargs["violations"], ["Bake (needs oven)"])
+        self.assertEqual([x["recipe"]["title"] for x in r.json()["recipes"]], ["Wrap", "Salad"])
+
+    def test_no_cook_replacement_is_accepted_in_a_swap(self) -> None:
+        plan_id = self.plan(self.body(appliances=["microwave"]),
+                            gen_return=[meal(t, 30, [MICRO]) for t in "ABC"]).json()["plan_id"]
+        with mock.patch("app.mealplan.llm.generate_single_meal", return_value=meal("Z", 30, [Equipment.no_cook])):
+            self.assertEqual(self.swap(plan_id).status_code, 200)
+
+    def test_schema_enum_includes_no_cook(self) -> None:
+        schema = BudgetPlanRecipeLLM.model_json_schema()
+        self.assertIn("no_cook", schema["$defs"]["Equipment"]["enum"])
 
 
 class SwapsRemainingTests(_Base):

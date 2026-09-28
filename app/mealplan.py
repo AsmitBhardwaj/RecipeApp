@@ -47,7 +47,7 @@ from pydantic import BaseModel, Field
 from . import budget, burstlimit, config, db, entitlements, llm_cost, ratelimit, spendcap
 from .auth.router import current_user
 from .auth.service import User
-from .models import Appliance, CostEstimate, FoodMood, Recipe
+from .models import Appliance, CostEstimate, Equipment, FoodMood, Recipe
 from .pipeline import llm, regional_cost
 
 router = APIRouter(prefix="/v1/meal-plan", tags=["meal-plan"])
@@ -88,7 +88,7 @@ class PlannedRecipe(BaseModel):
     recipe: Recipe
     estimated_cost: CostEstimate  # baseline × multiplier (per-user)
     health_signal: str = ""
-    equipment_used: List[Appliance] = Field(default_factory=list)
+    equipment_used: List[Equipment] = Field(default_factory=list)
 
 
 class BudgetPlanResponse(BaseModel):
@@ -163,8 +163,9 @@ def _violations(item: "llm.BudgetPlanRecipeLLM", appliances: Optional[List[Appli
         return []
     if not item.equipment_used:
         return [NO_EQUIPMENT_LISTED]
-    allowed = set(appliances)
-    return sorted({a.value for a in item.equipment_used if a not in allowed})
+    # `no_cook` needs no appliance, so it can never be a violation.
+    allowed = {a.value for a in appliances} | {Equipment.no_cook.value}
+    return sorted({e.value for e in item.equipment_used if e.value not in allowed})
 
 
 def _describe_violation(bad: List[str]) -> str:

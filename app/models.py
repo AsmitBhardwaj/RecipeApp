@@ -82,6 +82,22 @@ class Appliance(str, Enum):
     kettle = "kettle"
 
 
+class Equipment(str, Enum):
+    """What a generated dinner needs: any `Appliance`, or `no_cook` for a dish that
+    needs no appliance at all. `no_cook` is only ever an output of the model — a
+    user can't "own" it (it's not in `Appliance`) — and is never a violation."""
+
+    stovetop = "stovetop"
+    oven = "oven"
+    microwave = "microwave"
+    air_fryer = "air_fryer"
+    slow_cooker = "slow_cooker"
+    rice_cooker = "rice_cooker"
+    blender = "blender"
+    kettle = "kettle"
+    no_cook = "no_cook"
+
+
 class FoodMood(str, Enum):
     """A soft steer on what kind of dinners to propose."""
 

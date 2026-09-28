@@ -214,7 +214,9 @@ non-Pro account now gets its one free plan instead of an unconditional 403.
   user's appliances. Each generated recipe carries `equipment_used`; a meal
   *violates* the constraint if that list contains anything outside the user's
   appliances (self-reported by the model — the server checks the report, not the
-  instructions). The existing single corrective retry now triggers on a budget
+  instructions). `equipment_used` is required (≥1) and may also contain `no_cook` (a
+  dish needing no appliance), which is always allowed and never a violation; an
+  empty list counts as a violation. The existing single corrective retry now triggers on a budget
   undershoot **or** a violation (one retry total, however many things were wrong).
   Violations that survive it are replaced one-by-one through the single-meal path;
   a meal that still can't be replaced is dropped, not shipped (all dropped → 502

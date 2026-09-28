@@ -17,7 +17,7 @@ from pydantic import BaseModel, Field, ValidationError
 
 from .. import config, llm_cost
 from ..models import (
-    Appliance,
+    Equipment,
     CostEstimate,
     DishIdentification,
     Ingredient,
@@ -518,9 +518,10 @@ RULES:
    write clear numbered instructions.
 8. For each recipe provide "equipment_used": every appliance the recipe needs,
    chosen ONLY from: stovetop, oven, microwave, air_fryer, slow_cooker,
-   rice_cooker, blender, kettle. Never leave it empty: list at least one, using
-   the appliance closest to how the dish is prepared. Do not list basic tools
-   (knife, bowl, pan lid). If the user message
+   rice_cooker, blender, kettle, or "no_cook". Use "no_cook" for a dish that needs
+   no appliance at all (e.g. a cold salad or sandwich); otherwise list every
+   appliance it needs. Never leave the list empty. Do not list basic tools
+   (knife, bowl, pan lid). "no_cook" is always allowed. If the user message
    gives an APPLIANCES list, that is a HARD constraint: every dinner must be
    cookable using only those appliances, and each recipe's "equipment_used" must
    be a subset of them. Never propose a dish needing anything else, even if it
@@ -548,7 +549,7 @@ Respond with ONLY a JSON object of this shape:
       "recipe": { ...the recipe object (title, servings, ingredients[], instructions[], confidence)... },
       "baseline_cost": { "amount": number, "currency": "USD", "basis": "llm-v1" },
       "health_signal": "short string",
-      "equipment_used": [at least one of "stovetop" | "oven" | "microwave" | "air_fryer" | "slow_cooker" | "rice_cooker" | "blender" | "kettle"]
+      "equipment_used": [at least one of "stovetop" | "oven" | "microwave" | "air_fryer" | "slow_cooker" | "rice_cooker" | "blender" | "kettle" | "no_cook"]
     }
   ]
 }"""
@@ -559,7 +560,7 @@ Respond with ONLY a JSON object of this shape (ONE recipe, not a list):
   "recipe": { ...the recipe object (title, servings, ingredients[], instructions[], confidence)... },
   "baseline_cost": { "amount": number, "currency": "USD", "basis": "llm-v1" },
   "health_signal": "short string",
-  "equipment_used": [at least one of "stovetop" | "oven" | "microwave" | "air_fryer" | "slow_cooker" | "rice_cooker" | "blender" | "kettle"]
+  "equipment_used": [at least one of "stovetop" | "oven" | "microwave" | "air_fryer" | "slow_cooker" | "rice_cooker" | "blender" | "kettle" | "no_cook"]
 }"""
 
 
@@ -572,7 +573,7 @@ class BudgetPlanRecipeLLM(BaseModel):
     # Appliances the recipe needs (self-reported by the model; the server checks
     # it against the user's appliances — see app/mealplan.py). Required, at least
     # one: an empty list is an unverifiable claim, so the schema refuses it.
-    equipment_used: List[Appliance] = Field(min_length=1)
+    equipment_used: List[Equipment] = Field(min_length=1)
 
 
 class _BudgetPlanResponse(BaseModel):
