@@ -17,6 +17,7 @@ from pydantic import BaseModel, Field, ValidationError
 
 from .. import config, llm_cost
 from ..models import (
+    Appliance,
     CostEstimate,
     DishIdentification,
     Ingredient,
@@ -514,7 +515,29 @@ RULES:
    e.g. "High protein, veg-forward" or "Lighter, low added sugar".
 6. Keep the recipes realistic and varied; do not repeat the same dish.
 7. Split every ingredient into quantity/unit/name as in a normal recipe, and
-   write clear numbered instructions."""
+   write clear numbered instructions.
+8. For each recipe provide "equipment_used": every appliance the recipe needs,
+   chosen ONLY from: stovetop, oven, microwave, air_fryer, slow_cooker,
+   rice_cooker, blender, kettle. Do not list basic tools (knife, bowl, pan lid).
+   Use an empty list if it needs none (e.g. a cold salad). If the user message
+   gives an APPLIANCES list, that is a HARD constraint: every dinner must be
+   cookable using only those appliances, and each recipe's "equipment_used" must
+   be a subset of them. Never propose a dish needing anything else, even if it
+   would be cheaper or better.
+9. If the user message gives FOOD MOODS, lean the dinners toward them. This is a
+   soft steer only: it never overrides the budget, the dietary preferences, or
+   the appliance constraint."""
+
+# Appended when replacing ONE dinner in an existing plan (generate_single_meal).
+# Reuses every rule above; this only re-scopes rules 1 and 6 from "the week" to
+# "this one dinner".
+SINGLE_MEAL_ADDENDUM = """
+
+YOU ARE REPLACING ONE DINNER in an existing plan, not planning a week. Read rules
+1 and 6 as applying to this single dinner: its baseline_cost must NOT exceed the
+maximum cost given (using most of it is good), and it must not be any dinner
+listed as already in the plan, nor a near-variant of one. Return exactly one
+recipe."""
 
 _BUDGET_PLAN_SCHEMA_HINT = """\
 Respond with ONLY a JSON object of this shape:
@@ -523,9 +546,19 @@ Respond with ONLY a JSON object of this shape:
     {
       "recipe": { ...the recipe object (title, servings, ingredients[], instructions[], confidence)... },
       "baseline_cost": { "amount": number, "currency": "USD", "basis": "llm-v1" },
-      "health_signal": "short string"
+      "health_signal": "short string",
+      "equipment_used": ["stovetop" | "oven" | "microwave" | "air_fryer" | "slow_cooker" | "rice_cooker" | "blender" | "kettle"]
     }
   ]
+}"""
+
+_SINGLE_MEAL_SCHEMA_HINT = """\
+Respond with ONLY a JSON object of this shape (ONE recipe, not a list):
+{
+  "recipe": { ...the recipe object (title, servings, ingredients[], instructions[], confidence)... },
+  "baseline_cost": { "amount": number, "currency": "USD", "basis": "llm-v1" },
+  "health_signal": "short string",
+  "equipment_used": ["stovetop" | "oven" | "microwave" | "air_fryer" | "slow_cooker" | "rice_cooker" | "blender" | "kettle"]
 }"""
 
 
@@ -535,6 +568,9 @@ class BudgetPlanRecipeLLM(BaseModel):
     recipe: LLMRecipe
     baseline_cost: CostEstimate
     health_signal: str = ""
+    # Appliances the recipe needs (self-reported by the model; the server checks
+    # it against the user's appliances — see app/mealplan.py).
+    equipment_used: List[Appliance] = Field(default_factory=list)
 
 
 class _BudgetPlanResponse(BaseModel):
@@ -553,6 +589,9 @@ def generate_budget_plan(
     count: int,
     prior_total: Optional[float] = None,
     rich: bool = False,
+    appliances: Optional[List[str]] = None,
+    food_moods: Optional[List[str]] = None,
+    violations: Optional[List[str]] = None,
 ) -> List[BudgetPlanRecipeLLM]:
     """Generate up to `count` budget/On-Hand-aware recipes in ONE LLM call.
 
@@ -571,6 +610,11 @@ def generate_budget_plan(
     `rich` steers a generous budget into recipe RICHNESS rather than more dinners
     (the count is already capped at a week): better protein cuts, an included side,
     a starter or dessert component.
+
+    `appliances` (HARD) and `food_moods` (soft) are the Plan on a Budget cooking
+    inputs; both None for a v1.0 request. `violations` drives the same bounded
+    corrective pass as `prior_total`: descriptions of dinners in the previous plan
+    that needed appliances the cook doesn't have, so the model replaces them.
     """
     prefs = ", ".join(dietary_preferences) if dietary_preferences else "none"
     on_hand_lines = "\n".join(f"- {i}" for i in on_hand) or "(nothing on hand)"
@@ -591,13 +635,74 @@ def generate_budget_plan(
             "included side, and where it fits a starter or dessert component — not padding with "
             "cheap filler. Keep the count as requested."
         )
+    lines += _cooking_lines(appliances, food_moods)
     if prior_total is not None:
         lines.append(
             f"\nA previous plan totaled only about {prior_total:.0f} {currency} — well under the "
             f"target. Revise UPWARD with more generous or higher-quality ingredients to reach the "
             f"target range, without exceeding {budget:.0f}."
         )
+    if violations:
+        lines.append(
+            "\nA previous plan broke the APPLIANCES constraint. Replace these dinners with ones "
+            "cookable using only the appliances listed above:\n"
+            + "\n".join(f"- {v}" for v in violations)
+        )
     lines += ["", f"On hand (prefer using these):\n{on_hand_lines}"]
     user = "\n".join(lines)
     resp = _call_validated(BUDGET_PLAN_SYSTEM_PROMPT, user, _BudgetPlanResponse)
     return resp.recipes[:count]
+
+
+def _cooking_lines(appliances: Optional[List[str]], food_moods: Optional[List[str]]) -> List[str]:
+    """The appliance (HARD) and food-mood (soft) prompt lines, shared by the week
+    plan and the single-meal replacement. Empty when neither is given (v1.0)."""
+    out: List[str] = []
+    if appliances:
+        out.append(
+            "APPLIANCES (HARD constraint): every dinner must be cookable using only these "
+            f"appliances: {', '.join(appliances)}."
+        )
+    if food_moods:
+        out.append(f"FOOD MOODS (soft steer): {', '.join(food_moods)}.")
+    return out
+
+
+def generate_single_meal(
+    *,
+    max_cost: float,
+    currency: str,
+    household_size: int,
+    dietary_preferences: List[str],
+    on_hand: List[str],
+    exclude_titles: List[str],
+    appliances: Optional[List[str]] = None,
+    food_moods: Optional[List[str]] = None,
+    feedback: Optional[str] = None,
+) -> BudgetPlanRecipeLLM:
+    """Generate ONE replacement dinner, reusing the budget-plan prompt and schema.
+
+    `max_cost` is in baseline (location-independent) space, like `generate_budget_plan`'s
+    budget: the most this dinner may cost. `exclude_titles` are the dinners already
+    in the plan. `feedback` is set on a corrective attempt and says why the previous
+    candidate was rejected. Same validate + retry-once path as every other call."""
+    prefs = ", ".join(dietary_preferences) if dietary_preferences else "none"
+    on_hand_lines = "\n".join(f"- {i}" for i in on_hand) or "(nothing on hand)"
+    lines = [
+        _SINGLE_MEAL_SCHEMA_HINT,
+        "",
+        f"Maximum cost for this ONE dinner: {max_cost:.2f} {currency} (do not exceed it).",
+        f"Household size: {household_size} people",
+        f"Dietary preferences: {prefs}",
+    ]
+    lines += _cooking_lines(appliances, food_moods)
+    lines.append(
+        "\nDinners already in the plan (do NOT repeat or closely vary any):\n"
+        + ("\n".join(f"- {t}" for t in exclude_titles) or "(none)")
+    )
+    if feedback:
+        lines.append(f"\nYour previous candidate was rejected: {feedback}")
+    lines += ["", f"On hand (prefer using these):\n{on_hand_lines}"]
+    return _call_validated(
+        BUDGET_PLAN_SYSTEM_PROMPT + SINGLE_MEAL_ADDENDUM, "\n".join(lines), BudgetPlanRecipeLLM
+    )
