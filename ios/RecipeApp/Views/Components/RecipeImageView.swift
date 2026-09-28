@@ -25,6 +25,12 @@ struct RecipeImageView: View {
     /// Point size for the placeholder glyph, scaled to the usage site. Only used
     /// for the icon fallback when no bundled image can be loaded.
     var placeholderSymbolSize: CGFloat = 34
+    /// Fires with `true` only when the real `imageUrl` photo is actually on
+    /// screen (`AsyncImage` `.success`), `false` for a nil/malformed URL, a
+    /// load failure, or the loading spinner. Callers key badges/overlays off
+    /// this instead of static image-provenance metadata, which can drift from
+    /// what's actually rendered (e.g. a stale cached recipe row).
+    var onPhotoLoadedChange: ((Bool) -> Void)? = nil
 
     var body: some View {
         if let imageUrl, let url = URL(string: imageUrl) {
@@ -34,19 +40,24 @@ struct RecipeImageView: View {
                     image
                         .resizable()
                         .scaledToFill()
+                        .onAppear { onPhotoLoadedChange?(true) }
                 case .failure:
                     fallback
+                        .onAppear { onPhotoLoadedChange?(false) }
                 case .empty:
                     ZStack {
                         placeholderBackground
                         ProgressView()
                     }
+                    .onAppear { onPhotoLoadedChange?(false) }
                 @unknown default:
                     fallback
+                        .onAppear { onPhotoLoadedChange?(false) }
                 }
             }
         } else {
             fallback
+                .onAppear { onPhotoLoadedChange?(false) }
         }
     }
 

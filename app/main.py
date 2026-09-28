@@ -218,10 +218,13 @@ class ImportUsageResponse(BaseModel):
 def _strip_pro_fields(recipe: Optional[Recipe], is_pro: bool) -> Optional[Recipe]:
     """Nutrition (calories/macros) is a Pro feature. It rides on the shared recipe
     payload, so strip it server-side for non-Pro accounts — a modified client can't
-    reveal it. Pro accounts get the full recipe."""
+    reveal it. Pro accounts get the full recipe. When nutrition existed but was
+    stripped, `nutrition_locked` tells the client to render the locked-card upsell
+    instead of hiding nutrition entirely (a recipe with no estimable nutrition, or
+    a generated recipe whose nutrition is already null, never sets this)."""
     if recipe is None or is_pro or recipe.nutrition is None:
         return recipe
-    return recipe.model_copy(update={"nutrition": None})
+    return recipe.model_copy(update={"nutrition": None, "nutrition_locked": True})
 
 
 def _with_recipe(job: Job, is_pro: bool) -> JobResponse:

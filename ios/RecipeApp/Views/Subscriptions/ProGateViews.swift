@@ -54,39 +54,6 @@ struct ProSuggestionsLockedCard: View {
     }
 }
 
-/// Nutrition locked state: a single row shown instead of the calories/macros.
-/// The whole row is tappable and opens the paywall.
-struct ProNutritionLockedRow: View {
-    let onUpgrade: () -> Void
-
-    var body: some View {
-        Button(action: onUpgrade) {
-            HStack(spacing: 12) {
-                Image(systemName: "lock.fill")
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(Color.accentColor)
-                    .accessibilityHidden(true)
-                Text("See calories & macros with Platter Pro")
-                    .font(.subheadline.weight(.medium))
-                    .foregroundStyle(Color.textPrimary)
-                Spacer(minLength: 8)
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(Color.textSecondary)
-                    .accessibilityHidden(true)
-            }
-            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-            .padding(.horizontal, 14)
-            .padding(.vertical, 10)
-            .background(Color.surface, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-            .overlay {
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .strokeBorder(Color.hairline, lineWidth: 1)
-            }
-            .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel("See calories and macros with Platter Pro")
-        .accessibilityHint("Opens Platter Pro")
-    }
-}
+// Nutrition's locked state (free account, recipe has nutrition) is now the
+// full-size locked card built directly in RecipeDetailView — see
+// `lockedNutritionCard` there — not this row.

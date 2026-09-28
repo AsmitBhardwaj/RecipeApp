@@ -69,6 +69,26 @@ final class ModelDecodingTests: XCTestCase {
         // A recipe cached before nutrition shipped (nutrition: null) decodes with
         // no nutrition — the no-migration guarantee.
         XCTAssertNil(recipe.nutrition)
+        // Payload predates `nutrition_locked` entirely (key absent) — must decode
+        // as nil, not throw, exactly like `nutrition` did before it shipped.
+        XCTAssertNil(recipe.nutritionLocked)
+        XCTAssertFalse(recipe.isNutritionLocked)
+    }
+
+    /// `nutrition_locked: true` (nutrition stripped server-side for a free
+    /// account) decodes to a locked recipe with no nutrition numbers.
+    func testDecodesNutritionLockedTrue() throws {
+        let json = """
+        { "recipe_id": "r", "canonical_video_id": "v", "title": "t",
+          "servings": {"amount": 2, "unit": null},
+          "prep_time_minutes": null, "cook_time_minutes": null, "total_time_minutes": null,
+          "ingredients": [], "instructions": [], "confidence": null,
+          "source_type": "caption", "image_url": null, "image_source": "none",
+          "transcript": null, "nutrition": null, "nutrition_locked": true }
+        """
+        let recipe = try JSONDecoder().decode(Recipe.self, from: Data(json.utf8))
+        XCTAssertNil(recipe.nutrition)
+        XCTAssertTrue(recipe.isNutritionLocked)
     }
 
     /// A recipe WITH nutrition decodes fully, including snake_case macro keys and

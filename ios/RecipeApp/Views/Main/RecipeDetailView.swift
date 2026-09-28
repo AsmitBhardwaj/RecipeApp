@@ -18,8 +18,13 @@ struct RecipeDetailView: View {
     @StateObject private var scaler: ServingScaler
     @State private var showingCookbookPicker = false
     @State private var showingCookMode = false
-    /// Nutrition (calories/macros) is a Platter Pro feature — free users see a
-    /// single locked row that opens the paywall.
+    /// Whether the hero's real photo (not the bundled fallback) is actually on
+    /// screen — drives `ImageSourceBadge` (RecipeDetailView 1.1 Step 3).
+    @State private var isHeroPhotoLoaded = false
+    /// Nutrition (calories/macros) is a Platter Pro feature. The server (not
+    /// this cached entitlement) decides free-vs-Pro per recipe via
+    /// `recipe.nutrition` / `recipe.nutritionLocked` — this object is only
+    /// needed to present the paywall sheet when the locked card is tapped.
     @EnvironmentObject private var subscriptions: SubscriptionService
     @State private var showPaywall = false
     /// App-wide step-timer notification scheduler, injected at the app root.
@@ -40,9 +45,9 @@ struct RecipeDetailView: View {
                 hero
                 VStack(alignment: .leading, spacing: 24) {
                     header
-                    sourceAttributionRow
                     cookAndServingsRow
                     nutritionSection
+                    sourceAttributionRow
                     if !recipe.instructions.isEmpty {
                         startCookingButton
                     }
@@ -133,12 +138,18 @@ struct RecipeDetailView: View {
     // MARK: Hero image
 
     private var hero: some View {
-        RecipeImageView(imageUrl: recipe.imageUrl, fallbackSeed: recipe.recipeId, fallbackTitle: recipe.title, placeholderSymbolSize: 52)
+        RecipeImageView(
+            imageUrl: recipe.imageUrl,
+            fallbackSeed: recipe.recipeId,
+            fallbackTitle: recipe.title,
+            placeholderSymbolSize: 52,
+            onPhotoLoadedChange: { isHeroPhotoLoaded = $0 }
+        )
             .frame(height: 240)
             .frame(maxWidth: .infinity)
             .clipped()
             .overlay(alignment: .bottomTrailing) {
-                ImageSourceBadge(source: recipe.imageSource)
+                ImageSourceBadge(source: recipe.imageSource, isPhotoLoaded: isHeroPhotoLoaded)
                     .padding(10)
             }
     }
@@ -155,6 +166,10 @@ struct RecipeDetailView: View {
         }
     }
 
+    /// Single full-width tappable row that opens the recipe's original source
+    /// URL in Safari. Hidden when the recipe has no (trustworthy, http/https)
+    /// source URL — e.g. pasted text. Replaces the old creator/title/thumbnail/
+    /// domain source UI entirely (RecipeDetailView 1.1 Step 2).
     @ViewBuilder
     private var sourceAttributionRow: some View {
         if let attribution = recipe.sourceAttribution {
@@ -162,19 +177,18 @@ struct RecipeDetailView: View {
                 HStack(spacing: 8) {
                     Image(systemName: "link")
                         .accessibilityHidden(true)
-                    Text(attribution.label)
-                        .lineLimit(2)
+                    Text("Source")
+                        .font(.system(size: 16, weight: .medium))
                     Spacer(minLength: 0)
                     Image(systemName: "arrow.up.right")
-                        .font(.caption.weight(.semibold))
+                        .font(.subheadline.weight(.semibold))
                         .accessibilityHidden(true)
                 }
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(Color.accentColor)
-                .frame(maxWidth: .infinity, alignment: .leading)
+                .foregroundStyle(Color.sageAccent)
+                .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
                 .contentShape(Rectangle())
             }
-            .accessibilityHint("Opens the original recipe source")
+            .accessibilityLabel("Open original recipe source")
         }
     }
 
@@ -218,68 +232,133 @@ struct RecipeDetailView: View {
 
     // MARK: Nutrition
 
-    /// Compact Calories / Protein / Carbs / Fat row, shown right below the meta
-    /// row so its relationship to servings is obvious. Rendered only when the
-    /// recipe actually has nutrition — nil recipes show nothing (no empty/zero
-    /// state), and only the macros that are present get a cell. A small caption
-    /// states the basis (per serving vs whole recipe) so the numbers aren't
-    /// ambiguous. No confidence styling — that's deferred.
+    /// Nutrition card, shown right below the meta row so its relationship to
+    /// servings is obvious. Three states, driven entirely by what the server
+    /// sent (never by the locally cached entitlement — see RecipeDetailView
+    /// 1.1 Step 0): nutrition present → the full ring card; nutrition absent
+    /// but `nutrition_locked` → the locked upsell card, same size; neither →
+    /// hidden entirely (no empty/zero state).
     @ViewBuilder
     private var nutritionSection: some View {
         if let nutrition = recipe.nutrition {
-            let cells = nutritionCells(nutrition)
-            if !cells.isEmpty {
-                if !subscriptions.isProUnlocked {
-                    // Free users: one locked row instead of the numbers. Cached
-                    // entitlement drives this so a Pro user never flashes it.
-                    ProNutritionLockedRow(onUpgrade: { showPaywall = true })
-                } else {
-                    nutritionNumbers(nutrition, cells: cells)
-                }
-            }
+            nutritionCard(nutrition)
+        } else if recipe.isNutritionLocked {
+            lockedNutritionCard
         }
     }
 
-    private func nutritionNumbers(_ nutrition: Nutrition, cells: [(label: String, value: String)]) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-                    Text(nutrition.basis == .perServing ? "Nutrition per serving" : "Nutrition per recipe")
-                        .font(.caption2)
-                        .foregroundStyle(Color.textSecondary)
-                    // Plain, boxless row (no fill), each stat separated by a thin,
-                    // low-contrast vertical divider — the same quiet treatment as
-                    // the cook-time row above, so the meta reads as one style.
-                    HStack(spacing: 0) {
-                        ForEach(Array(cells.enumerated()), id: \.element.label) { index, cell in
-                            if index > 0 {
-                                Rectangle()
-                                    .fill(Color.textSecondary.opacity(0.25))
-                                    .frame(width: 1, height: 28)
-                            }
-                            VStack(spacing: 4) {
-                                Text(cell.value)
-                                    .font(.subheadline.weight(.semibold))
-                                    .monospacedDigit()
-                                Text(cell.label)
-                                    .font(.caption2)
-                                    .foregroundStyle(Color.textSecondary)
-                            }
-                            .frame(maxWidth: .infinity)
-                        }
-                    }
-                    .frame(maxWidth: .infinity)
-                }
+    private func nutritionCardContainer<Content: View>(@ViewBuilder content: () -> Content) -> some View {
+        content()
+            .padding(20)
+            .background(Color.white, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 20, style: .continuous)
+                    .strokeBorder(Color.nutritionCardBorder, lineWidth: 1)
+            }
+            .contentShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
     }
 
-    /// Builds the stat cells, skipping any macro the estimate left nil. Calories
-    /// are whole; macros carry a "g" suffix. Uses the same rounding idiom as the
-    /// rest of the screen (no decimals for these rough figures).
-    private func nutritionCells(_ n: Nutrition) -> [(label: String, value: String)] {
-        var cells: [(String, String)] = []
-        if let cal = n.calories { cells.append(("Calories", "\(Int(cal.rounded()))")) }
-        if let p = n.proteinG { cells.append(("Protein", "\(Int(p.rounded()))g")) }
-        if let c = n.carbsG { cells.append(("Carbs", "\(Int(c.rounded()))g")) }
-        if let f = n.fatG { cells.append(("Fat", "\(Int(f.rounded()))g")) }
-        return cells
+    private func nutritionCardHeader(caption: String) -> some View {
+        HStack(alignment: .firstTextBaseline) {
+            Text("Nutrition")
+                .font(.system(size: 17, weight: .semibold))
+                .foregroundStyle(Color.textPrimary)
+            Spacer(minLength: 8)
+            Text(caption)
+                .font(.system(size: 13))
+                .foregroundStyle(Color.nutritionCaption)
+        }
+    }
+
+    /// One legend row: color dot, label, grams, calorie-share percent. `nil`
+    /// grams/percent render as "—" — the locked card's state, sharing this
+    /// exact layout with the unlocked card per spec.
+    private func nutritionLegendRow(color: Color, label: String, grams: Int?, percent: Int?) -> some View {
+        HStack(spacing: 8) {
+            Circle()
+                .fill(color)
+                .frame(width: 10, height: 10)
+            Text(label)
+                .font(.system(size: 15))
+                .foregroundStyle(Color.textPrimary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            Text(grams.map { "\($0)g" } ?? "—")
+                .font(.system(size: 15, weight: .bold))
+                .foregroundStyle(Color.textPrimary)
+            Text(percent.map { "\($0)%" } ?? "—")
+                .font(.system(size: 13))
+                .foregroundStyle(Color.nutritionCaption)
+                .frame(width: 34, alignment: .trailing)
+        }
+    }
+
+    private func nutritionCard(_ nutrition: Nutrition) -> some View {
+        let display = nutrition.perServingDisplay(originalServings: recipe.baseServings)
+        let share = nutrition.calorieShare
+        let caption = "\(display.captionPrefix) · \(nutrition.sourceCaption)"
+
+        return nutritionCardContainer {
+            VStack(alignment: .leading, spacing: 16) {
+                nutritionCardHeader(caption: caption)
+                HStack(spacing: 22) {
+                    NutritionRingView(nutrition: nutrition, displayCalories: display.calories)
+                    VStack(alignment: .leading, spacing: 10) {
+                        nutritionLegendRow(color: .sageAccent, label: "Protein", grams: display.proteinG, percent: share?.proteinPercent)
+                        nutritionLegendRow(color: .nutritionCarbs, label: "Carbs", grams: display.carbsG, percent: share?.carbsPercent)
+                        nutritionLegendRow(color: .nutritionFat, label: "Fat", grams: display.fatG, percent: share?.fatPercent)
+                    }
+                }
+            }
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(nutritionAccessibilityLabel(display))
+    }
+
+    /// One combined label, e.g. "373 calories per serving: 24 grams protein,
+    /// 37 grams carbs, 12 grams fat."
+    private func nutritionAccessibilityLabel(_ display: Nutrition.PerServingResult) -> String {
+        var macroParts: [String] = []
+        if let p = display.proteinG { macroParts.append("\(p) grams protein") }
+        if let c = display.carbsG { macroParts.append("\(c) grams carbs") }
+        if let f = display.fatG { macroParts.append("\(f) grams fat") }
+        let basis = display.captionPrefix.lowercased()
+
+        guard let calories = display.calories else {
+            return macroParts.isEmpty ? "Nutrition unavailable." : "Nutrition \(basis): \(macroParts.joined(separator: ", "))."
+        }
+        guard !macroParts.isEmpty else {
+            return "\(calories) calories \(basis)."
+        }
+        return "\(calories) calories \(basis): \(macroParts.joined(separator: ", "))."
+    }
+
+    /// Free-account state: same size and layout as the data card, but the ring
+    /// is a plain track + lock glyph and every legend value reads "—". Tapping
+    /// anywhere opens the existing paywall.
+    private var lockedNutritionCard: some View {
+        Button {
+            showPaywall = true
+        } label: {
+            nutritionCardContainer {
+                VStack(alignment: .leading, spacing: 16) {
+                    nutritionCardHeader(caption: "Per serving")
+                    HStack(spacing: 22) {
+                        LockedNutritionRingView()
+                        VStack(alignment: .leading, spacing: 10) {
+                            nutritionLegendRow(color: .sageAccent, label: "Protein", grams: nil, percent: nil)
+                            nutritionLegendRow(color: .nutritionCarbs, label: "Carbs", grams: nil, percent: nil)
+                            nutritionLegendRow(color: .nutritionFat, label: "Fat", grams: nil, percent: nil)
+                        }
+                    }
+                    Text("Unlock with Pro")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(Color.sageAccent)
+                        .frame(maxWidth: .infinity)
+                }
+            }
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Nutrition is a Pro feature. Double tap to unlock.")
     }
 
     // MARK: Cookbooks

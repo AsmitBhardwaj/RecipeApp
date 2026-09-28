@@ -115,8 +115,13 @@ struct RecipeApp: App {
         let inner: AnyView
         switch mode {
         case "nutritionFree", "nutritionPro":
+            // Nutrition gating is server-driven now (recipe.nutrition /
+            // .nutritionLocked), not the cached entitlement, so the "Free"
+            // screenshot needs a recipe shaped like what a free account's
+            // response actually looks like (nutrition stripped, flag set).
+            let recipe = mode == "nutritionFree" ? Recipe.spicyNoodles.withNutritionLocked() : .spicyNoodles
             inner = AnyView(NavigationStack {
-                RecipeDetailView(recipe: .spicyNoodles, cookbooks: CookbooksModel())
+                RecipeDetailView(recipe: recipe, cookbooks: CookbooksModel())
             })
         case "pantryFree", "pantryPro":
             inner = AnyView(NavigationStack {
