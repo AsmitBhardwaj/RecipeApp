@@ -30,8 +30,14 @@ def meal(title: str, cost: float, equipment=()) -> BudgetPlanRecipeLLM:
         recipe=LLMRecipe(title=title, ingredients=[], instructions=[]),
         baseline_cost=CostEstimate(amount=float(cost), currency="USD", basis="llm-v1"),
         health_signal="Veg-forward",
-        equipment_used=list(equipment),
+        equipment_used=list(equipment) or [STOVE],  # the schema requires ≥1
     )
+
+
+def meal_without_equipment(title: str, cost: float) -> BudgetPlanRecipeLLM:
+    """A meal whose equipment_used is empty — the schema rejects this from the model,
+    so build it by copy (which skips validation) to exercise the server-side check."""
+    return meal(title, cost).model_copy(update={"equipment_used": []})
 
 
 def _completion(content: str):
@@ -118,11 +124,12 @@ class _Base(unittest.TestCase):
         return b
 
     def plan(self, body=None, pro=True, gen_return=None):
-        gen_return = gen_return or [meal("A", 30), meal("B", 30), meal("C", 30)]
+        body = body or self.body()
+        # Default meals use the first appliance the request lists, so they comply.
+        eq = [Appliance(body["appliances"][0])] if body.get("appliances") else [STOVE]
+        gen_return = gen_return or [meal("A", 30, eq), meal("B", 30, eq), meal("C", 30, eq)]
         with mock.patch("app.mealplan.llm.generate_budget_plan", return_value=gen_return):
-            return self.client.post(
-                "/v1/meal-plan/budget", json=body or self.body(), headers=self.headers(pro=pro)
-            )
+            return self.client.post("/v1/meal-plan/budget", json=body, headers=self.headers(pro=pro))
 
     def swap(self, plan_id, index=1, headers=None):
         return self.client.post(
@@ -288,6 +295,101 @@ class ApplianceTests(_Base):
         self.assertIsNone(db.get_free_plan_used_at(self.user.id))
 
 
+class EquipmentRequiredTests(_Base):
+    def test_schema_requires_at_least_one_item(self) -> None:
+        with self.assertRaises(Exception):
+            BudgetPlanRecipeLLM(
+                recipe=LLMRecipe(title="x", ingredients=[], instructions=[]),
+                baseline_cost=CostEstimate(amount=1.0),
+                equipment_used=[],
+            )
+        schema = BudgetPlanRecipeLLM.model_json_schema()
+        self.assertEqual(schema["properties"]["equipment_used"]["minItems"], 1)
+        self.assertIn("equipment_used", schema["required"])
+
+    def test_empty_equipment_is_a_violation_when_appliances_present(self) -> None:
+        first = [meal_without_equipment("Mystery", 45), meal("B", 45, [OVEN])]
+        second = [meal("Ziti", 45, [OVEN]), meal("B2", 45, [OVEN])]
+        with mock.patch("app.mealplan.llm.generate_budget_plan", side_effect=[first, second]) as gen, \
+             mock.patch("app.mealplan.llm.generate_single_meal") as single:
+            r = self.client.post(
+                "/v1/meal-plan/budget", json=self.body(appliances=["oven"]), headers=self.headers()
+            )
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual(gen.call_count, 2)
+        self.assertEqual(gen.call_args_list[1].kwargs["violations"], ["Mystery (listed no equipment_used)"])
+        single.assert_not_called()
+
+    def test_empty_equipment_after_retry_is_replaced_per_meal(self) -> None:
+        mk = lambda: [meal_without_equipment("Mystery", 45), meal("B", 45, [OVEN])]
+        with mock.patch("app.mealplan.llm.generate_budget_plan", side_effect=[mk(), mk()]), \
+             mock.patch("app.mealplan.llm.generate_single_meal", return_value=meal("Ziti", 45, [OVEN])) as single:
+            r = self.client.post(
+                "/v1/meal-plan/budget", json=self.body(appliances=["oven"]), headers=self.headers()
+            )
+        self.assertEqual([x["recipe"]["title"] for x in r.json()["recipes"]], ["Ziti", "B"])
+        self.assertEqual(single.call_count, 1)
+
+    def test_empty_equipment_ignored_without_appliances(self) -> None:
+        # v1.0 path: no validation at all.
+        with mock.patch(
+            "app.mealplan.llm.generate_budget_plan", return_value=[meal_without_equipment("A", 90)]
+        ) as gen:
+            r = self.client.post("/v1/meal-plan/budget", json=self.body(), headers=self.headers())
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual(gen.call_count, 1)
+
+    def test_swap_replacement_with_empty_equipment_is_rejected_then_corrected(self) -> None:
+        r = self.plan(self.body(appliances=["oven"]), gen_return=[meal(t, 30, [OVEN]) for t in "ABC"])
+        plan_id = r.json()["plan_id"]
+        seq = [meal_without_equipment("Z", 30), meal("Y", 30, [OVEN])]
+        with mock.patch("app.mealplan.llm.generate_single_meal", side_effect=seq) as single:
+            s = self.swap(plan_id)
+        self.assertEqual(s.status_code, 200, s.text)
+        self.assertIn("at least one", single.call_args_list[1].kwargs["feedback"])
+
+
+class SwapsRemainingTests(_Base):
+    def test_free_plan_reports_is_free_and_three_remaining(self) -> None:
+        r = self.plan(pro=False)
+        self.assertTrue(r.json()["is_free"])
+        self.assertEqual(r.json()["swaps_remaining"], 3)
+
+    def test_free_swaps_decrement_to_zero_then_402(self) -> None:
+        plan_id = self.plan(pro=False).json()["plan_id"]
+        free = self.headers(pro=False)
+        remaining = []
+        for i in range(3):
+            with mock.patch("app.mealplan.llm.generate_single_meal", return_value=meal(f"Z{i}", 30)):
+                remaining.append(self.swap(plan_id, index=i, headers=free).json()["swaps_remaining"])
+        self.assertEqual(remaining, [2, 1, 0])
+        with mock.patch("app.mealplan.llm.generate_single_meal") as single:
+            self.assertEqual(self.swap(plan_id, headers=free).status_code, 402)
+        single.assert_not_called()
+
+    def test_failed_swap_does_not_decrement(self) -> None:
+        plan_id = self.plan(pro=False).json()["plan_id"]
+        free = self.headers(pro=False)
+        with mock.patch("app.mealplan.llm.generate_single_meal", side_effect=llm.LLMError("x", "y")):
+            self.assertEqual(self.swap(plan_id, headers=free).status_code, 502)
+        with mock.patch("app.mealplan.llm.generate_single_meal", return_value=meal("Z", 30)):
+            self.assertEqual(self.swap(plan_id, headers=free).json()["swaps_remaining"], 2)
+
+    def test_pro_plan_is_not_free_and_swaps_remaining_is_null(self) -> None:
+        r = self.plan(pro=True)
+        self.assertFalse(r.json()["is_free"])
+        self.assertIsNone(r.json()["swaps_remaining"])
+        with mock.patch("app.mealplan.llm.generate_single_meal", return_value=meal("Z", 30)):
+            s = self.swap(r.json()["plan_id"])
+        self.assertIsNone(s.json()["swaps_remaining"])
+
+    def test_pro_swapping_their_earlier_free_plan_is_unlimited(self) -> None:
+        plan_id = self.plan(pro=False).json()["plan_id"]  # free plan
+        with mock.patch("app.mealplan.llm.generate_single_meal", return_value=meal("Z", 30)):
+            s = self.swap(plan_id, headers=self.headers(pro=True))
+        self.assertIsNone(s.json()["swaps_remaining"])
+
+
 class FreePlanTests(_Base):
     def test_free_plan_allowed_once_then_paywalled(self) -> None:
         r1 = self.plan(pro=False)
@@ -348,7 +450,7 @@ class FreePlanTests(_Base):
 class LedgerTests(_Base):
     def test_plan_id_returned_and_persisted(self) -> None:
         r = self.plan(self.body(appliances=["oven"], food_moods=["comfort"], store_tier="premium", budget=130),
-                      gen_return=[meal("A", 40, [OVEN]), meal("B", 40, [OVEN]), meal("C", 30, [])])
+                      gen_return=[meal("A", 40, [OVEN]), meal("B", 40, [OVEN]), meal("C", 30, [OVEN])])
         self.assertEqual(r.status_code, 200, r.text)
         plan_id = r.json()["plan_id"]
         row = db.get_budget_plan(plan_id)

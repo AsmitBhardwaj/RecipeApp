@@ -99,6 +99,11 @@ class BudgetPlanResponse(BaseModel):
     regional_multiplier: float
     # The ledger id, for the swap endpoint. New field; v1.0 ignores it.
     plan_id: Optional[str] = None
+    # True when this plan used the account's free plan (a non-Pro caller).
+    is_free: bool = False
+    # Swaps the caller has left on this plan: an int for a non-Pro caller on a free
+    # plan, None (unlimited, bounded only by the burst cap) for Pro.
+    swaps_remaining: Optional[int] = None
 
 
 class SwapRequest(BaseModel):
@@ -113,6 +118,7 @@ class SwapResponse(BaseModel):
     currency: str
     budget: float
     swaps_used: int
+    swaps_remaining: Optional[int] = None  # None for Pro (unlimited)
 
 
 # --------------------------------------------------------------------------- #
@@ -145,13 +151,24 @@ def _resolve_multiplier(req: "BudgetPlanRequest") -> float:
     return regional_cost.multiplier_for(req.country, req.area_type, req.store_tier)
 
 
-def _violations(item: "llm.BudgetPlanRecipeLLM", appliances: Optional[List[Appliance]]) -> List[Appliance]:
-    """Appliances this meal needs that the user doesn't have. Always empty when the
-    request carried no appliances (v1.0): validation is skipped entirely."""
+NO_EQUIPMENT_LISTED = "no equipment listed"
+
+
+def _violations(item: "llm.BudgetPlanRecipeLLM", appliances: Optional[List[Appliance]]) -> List[str]:
+    """Why this meal breaks the appliance constraint: the appliances it needs that
+    the user lacks, or `NO_EQUIPMENT_LISTED` when its `equipment_used` is empty (an
+    unverifiable claim counts as a violation). Always empty when the request
+    carried no appliances (v1.0): validation is skipped entirely."""
     if not appliances:
         return []
+    if not item.equipment_used:
+        return [NO_EQUIPMENT_LISTED]
     allowed = set(appliances)
-    return sorted({a for a in item.equipment_used if a not in allowed}, key=lambda a: a.value)
+    return sorted({a.value for a in item.equipment_used if a not in allowed})
+
+
+def _describe_violation(bad: List[str]) -> str:
+    return "listed no equipment_used" if bad == [NO_EQUIPMENT_LISTED] else f"needs {', '.join(bad)}"
 
 
 def _violation_notes(plan: List["llm.BudgetPlanRecipeLLM"], appliances: Optional[List[Appliance]]) -> List[str]:
@@ -159,7 +176,7 @@ def _violation_notes(plan: List["llm.BudgetPlanRecipeLLM"], appliances: Optional
     for item in plan:
         bad = _violations(item, appliances)
         if bad:
-            notes.append(f"{item.recipe.title} (needs {', '.join(a.value for a in bad)})")
+            notes.append(f"{item.recipe.title} ({_describe_violation(bad)})")
     return notes
 
 
@@ -210,7 +227,7 @@ def _replacement_problem(
     bad = _violations(item, appliances)
     if bad:
         have = ", ".join(a.value for a in (appliances or []))
-        return f"it needs {', '.join(a.value for a in bad)}, but the cook only has: {have}."
+        return f"it {_describe_violation(bad)}; the cook only has: {have}. equipment_used must list at least one."
     if item.baseline_cost.amount > max_cost + 0.01:
         return f"its baseline_cost {item.baseline_cost.amount:.2f} exceeds the maximum {max_cost:.2f}."
     if item.recipe.title.strip().casefold() in {t.strip().casefold() for t in exclude_titles}:
@@ -542,6 +559,8 @@ def plan_on_a_budget(
         min_budget=min_local,
         regional_multiplier=multiplier,
         plan_id=plan_id,
+        is_free=not is_pro,
+        swaps_remaining=None if is_pro else config.FREE_PLAN_SWAP_LIMIT,
     )
 
 
@@ -565,7 +584,8 @@ def swap_meal(
     # 2. Swap entitlement. Pro: always (bounded by the burst cap below). Non-Pro:
     #    only on their free plan, and at most FREE_PLAN_SWAP_LIMIT times. Checked
     #    BEFORE the burst counter so a paywalled request doesn't burn allowance.
-    if not entitlements.is_pro_user(user.id):
+    is_pro = entitlements.is_pro_user(user.id)
+    if not is_pro:
         if not row["is_free"]:
             raise HTTPException(
                 status_code=403,
@@ -671,4 +691,7 @@ def swap_meal(
         currency=req.currency,
         budget=req.budget,
         swaps_used=row["swaps_used"] + 1,
+        swaps_remaining=(
+            None if is_pro else max(config.FREE_PLAN_SWAP_LIMIT - (row["swaps_used"] + 1), 0)
+        ),
     )

@@ -210,6 +210,7 @@ class BudgetPlanEndpointTests(unittest.TestCase):
                 recipe=LLMRecipe(title="Fried Rice", ingredients=[], instructions=[]),
                 baseline_cost=CostEstimate(amount=10.0, currency="USD", basis="llm-v1"),
                 health_signal="Veg-forward",
+                equipment_used=["stovetop"],
             )
         ]
 
@@ -220,6 +221,7 @@ class BudgetPlanEndpointTests(unittest.TestCase):
                 recipe=LLMRecipe(title=f"{title}-{i}", ingredients=[], instructions=[]),
                 baseline_cost=CostEstimate(amount=float(a), currency="USD", basis="llm-v1"),
                 health_signal=health,
+                equipment_used=["stovetop"],
             )
             for i, a in enumerate(amounts)
         ]

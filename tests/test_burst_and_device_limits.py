@@ -339,6 +339,7 @@ class BudgetAndPantryCapTests(_DBBase):
                 recipe=LLMRecipe(title="Fried Rice", ingredients=[], instructions=[]),
                 baseline_cost=CostEstimate(amount=10.0, currency="USD", basis="llm-v1"),
                 health_signal="Veg-forward",
+                equipment_used=["stovetop"],
             )
         ]
 
