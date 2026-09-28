@@ -743,6 +743,28 @@ class DeleteAccountTests(_Base):
         self.assertIn("budget_plans", inspect.getsource(fn))
 
 
+class RateLimitSweepTests(_Base):
+    def test_cleanup_sweep_never_deletes_a_live_daily_burst_bucket(self) -> None:
+        # A daily bucket's window_start is UTC midnight — hours old. The sweep must
+        # keep it, or the daily caps reset at random (1% per generic rate check).
+        import time
+        from app import burstlimit, ratelimit
+        burstlimit.check_swap("acct-sweep")
+        now = int(time.time())
+        with mock.patch("app.ratelimit.random.random", return_value=0.0):
+            ratelimit._maybe_cleanup(now)
+        self.assertEqual(db.rate_limit_incr(f"burst:swap:acct-sweep:86400", now - (now % 86400)), 2)
+
+    def test_cleanup_sweep_still_removes_expired_rows(self) -> None:
+        import time
+        from app import ratelimit
+        now = int(time.time())
+        db.rate_limit_incr("old-bucket", now - 3 * 86400)
+        with mock.patch("app.ratelimit.random.random", return_value=0.0):
+            ratelimit._maybe_cleanup(now)
+        self.assertEqual(db.rate_limit_incr("old-bucket", now - 3 * 86400), 1)  # was deleted → restarts
+
+
 class SyncCollectionTests(unittest.TestCase):
     def test_cooking_preferences_is_allowed(self) -> None:
         self.assertIn("cooking_preferences", db.SYNC_COLLECTIONS)
