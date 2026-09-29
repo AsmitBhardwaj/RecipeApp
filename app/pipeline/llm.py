@@ -647,6 +647,7 @@ def generate_budget_plan(
             "cheap filler. Keep the count as requested."
         )
     lines += _cooking_lines(appliances, food_moods)
+    lines += _spread_lines(appliances)
     if prior_total is not None:
         lines.append(
             f"\nA previous plan totaled only about {prior_total:.0f} {currency} — well under the "
@@ -697,6 +698,22 @@ def _band_lines(target_cost: Optional[float], max_cost: float, currency: str) ->
     return [
         f"Target cost band for this dinner: {low:.2f}–{high:.2f} {currency} (the dinner it "
         f"replaces cost about {target_cost:.2f}). Aim inside the band; the maximum above is a hard cap."
+    ]
+
+
+def _spread_lines(appliances: Optional[List[str]]) -> List[str]:
+    """Hard appliance-spread rule for the WEEK plan: with stovetop plus at least one
+    other appliance available, at least 2 dinners must be mainly cooked on a
+    non-stovetop one. No rule if stovetop is the only appliance or isn't listed.
+    Prompt-only — the server does not enforce it."""
+    if not appliances or "stovetop" not in appliances:
+        return []
+    others = [a for a in appliances if a != "stovetop"]
+    if not others:
+        return []
+    return [
+        "APPLIANCE SPREAD (hard rule): at least 2 dinners must use a non-stovetop appliance "
+        f"from the list ({', '.join(others)}) as the MAIN cooking method — not stovetop."
     ]
 
 

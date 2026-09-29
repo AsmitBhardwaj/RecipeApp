@@ -865,6 +865,53 @@ class VarietyPromptTests(unittest.TestCase):
         self.assertIn("Rule 10 applies", system)
 
 
+class ApplianceSpreadRuleTests(unittest.TestCase):
+    RULE = "APPLIANCE SPREAD (hard rule)"
+
+    def _user_prompt(self, appliances, fn="plan"):
+        cap = _PromptCapture(_week_json(7) if fn == "plan" else meal("Z", 10).model_dump_json())
+        common = dict(currency="USD", household_size=2, dietary_preferences=[], on_hand=[], appliances=appliances)
+        with mock.patch.object(llm, "_raw_call", cap):
+            if fn == "plan":
+                llm.generate_budget_plan(budget=100, count=7, **common)
+            else:
+                llm.generate_single_meal(max_cost=40, exclude_titles=[], **common)
+        return cap.calls[0][1]
+
+    def test_rule_present_with_stovetop_plus_another_appliance(self) -> None:
+        p = self._user_prompt(["stovetop", "microwave", "air_fryer"])
+        self.assertIn(self.RULE, p)
+        self.assertIn("at least 2 dinners must use a non-stovetop appliance", p)
+        self.assertIn("(microwave, air_fryer)", p)  # only non-stovetop appliances are named
+
+    def test_rule_present_with_stovetop_and_one_other(self) -> None:
+        self.assertIn(self.RULE, self._user_prompt(["oven", "stovetop"]))
+
+    def test_no_rule_when_stovetop_is_the_only_appliance(self) -> None:
+        self.assertNotIn(self.RULE, self._user_prompt(["stovetop"]))
+
+    def test_no_rule_when_stovetop_is_not_listed(self) -> None:
+        self.assertNotIn(self.RULE, self._user_prompt(["microwave", "air_fryer"]))
+
+    def test_no_rule_without_appliances(self) -> None:
+        self.assertNotIn(self.RULE, self._user_prompt(None))
+
+    def test_rule_is_not_in_the_single_meal_prompt(self) -> None:
+        self.assertNotIn(self.RULE, self._user_prompt(["stovetop", "microwave"], fn="single"))
+
+
+class SpreadEndpointTests(_Base):
+    def test_all_stovetop_plan_is_shipped_with_one_call(self) -> None:
+        with mock.patch("app.mealplan.llm.generate_budget_plan", return_value=week(eq=STOVE)) as gen:
+            r = self.client.post(
+                "/v1/meal-plan/budget",
+                json=self.body(appliances=["stovetop", "microwave"]),
+                headers=self.headers(),
+            )
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual(gen.call_count, 1)
+
+
 class SwapCostBandTests(_Base):
     def _band_prompt(self, **kw):
         cap = _PromptCapture(meal("Z", 10).model_dump_json())
