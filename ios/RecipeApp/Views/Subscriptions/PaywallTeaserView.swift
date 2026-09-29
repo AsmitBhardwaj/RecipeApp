@@ -92,7 +92,12 @@ struct PaywallTeaserView: View {
                 .ignoresSafeArea()
         }
         .safeAreaInset(edge: .bottom, spacing: 0) { bottomBar }
-        .preferredColorScheme(.dark)   // light status bar over the sage
+        // Light status bar over the sage. SwiftUI has no status-bar-only API (a
+        // toolbarColorScheme on a nav bar doesn't move it), so this is the dark
+        // scheme — released while the paywall sheet is up so the paywall and the
+        // system chrome above it (StoreKit sheet, alerts) follow the user's own
+        // appearance, exactly as when opened from Account.
+        .preferredColorScheme(showingPaywall ? nil : .dark)
         .interactiveDismissDisabled()
         .sheet(isPresented: $showingPaywall, onDismiss: { onClose(subscriptions.isProUnlocked) }) {
             PlatterProPaywallView().environmentObject(subscriptions)

@@ -214,6 +214,17 @@ struct AccountView: View {
                             SettingsValueRow(icon: "number", title: "Version", value: displayedVersion)
                             SettingsDivider()
                             SettingsValueRow(icon: "fork.knife", title: "Recipes are", value: "Free & unlimited")
+                            SettingsDivider()
+                            Link(destination: URL(string: "https://www.pexels.com")!) {
+                                SettingsRowContent(icon: "photo", title: "Food photos provided by Pexels") {
+                                    Image(systemName: "arrow.up.right")
+                                        .font(.system(size: 13, weight: .semibold))
+                                        .foregroundStyle(Color.textSecondary.opacity(0.65))
+                                        .accessibilityHidden(true)
+                                }
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityHint("Opens pexels.com")
                         }
                     }
 

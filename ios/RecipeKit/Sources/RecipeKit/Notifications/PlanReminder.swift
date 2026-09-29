@@ -302,6 +302,7 @@ public final class PlanReminderService {
         await scheduler.cancelAll(withPrefix: PlanReminderPolicy.identifierPrefix)
     }
 
+    #if DEBUG
     /// DEBUG: fire the real notification (same content + payload) after `seconds`,
     /// under its own identifier so the one-pending invariant is untouched.
     public func scheduleDebug(in seconds: TimeInterval) async -> Bool {
@@ -316,6 +317,7 @@ public final class PlanReminderService {
         ))
         return true
     }
+    #endif
 
     // MARK: Private
 
