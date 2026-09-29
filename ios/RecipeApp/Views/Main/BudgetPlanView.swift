@@ -3,9 +3,11 @@
 //  RecipeApp
 //
 //  "Plan on a Budget" — a mode inside the Meal Plan tab (docs/budget-meal-planning.md).
-//  Setup → Generating → Results, all Pro-gated. Free users see a locked state.
-//  Budget math (per-person minimum, raise-only) mirrors the server via
-//  RecipeKit.BudgetMath; generation is Pro-gated server-side too.
+//  Setup → Generating → Results ("Your week", see BudgetPlanResultsView.swift).
+//  The server decides who may generate (a free account gets one plan; Pro is
+//  unlimited), so there is no client-side Pro lock: a 403 pro_required opens the
+//  paywall. Budget math (per-person minimum, raise-only) mirrors the server via
+//  RecipeKit.BudgetMath.
 //
 
 import SwiftUI
@@ -22,19 +24,45 @@ final class BudgetPlanModel: ObservableObject {
         case failed(String)
     }
 
+    /// A failed swap, kept so the UI can show the message and a retry action.
+    struct SwapFailure: Equatable {
+        let mealIndex: Int
+        let message: String
+    }
+
+    typealias Generate = (_ budget: Int, _ household: Int, _ dietary: [String], _ pantry: [String], _ options: BudgetPlanOptions) async throws -> BudgetPlanResponse
+    typealias Swap = (_ planID: String, _ mealIndex: Int) async throws -> BudgetSwapResponse
+
     @Published var phase: Phase = .setup
     @Published private(set) var budget: Int
     @Published private(set) var householdSize: Int
     @Published var useKitchen: Bool = true
     @Published private(set) var recipes: [PlannedRecipe] = []
     @Published private(set) var response: BudgetPlanResponse?
-    @Published var selection = BudgetPlanSelection(recipes: [])
     @Published var showPaywall = false
     @Published private(set) var budgetInputMessage: String?
 
+    // Results state
+    @Published private(set) var planID: String?
+    /// Current plan total; comes from the server after a swap, summed locally only
+    /// for the initial response.
+    @Published private(set) var total: Double = 0
+    /// Server-supplied; nil = unlimited (Pro) → no pill. Never counted client-side.
+    @Published private(set) var swapsRemaining: Int?
+    @Published private(set) var swappingIndex: Int?
+    @Published var swapFailure: SwapFailure?
+    /// The dinner whose sheet is open.
+    @Published var selectedMealIndex: Int?
+    @Published var showGrocery = false
+
+    /// Shown in "Estimated for <label> shoppers" until Stage 2 supplies a store.
+    let regionLabel: String?
+
     private let dietaryPreferences: [DietaryPreference]
     private let pantryNames: () -> [String]
-    private let generate: (_ budget: Int, _ household: Int, _ dietary: [String], _ pantry: [String]) async throws -> BudgetPlanResponse
+    private let options: () -> BudgetPlanOptions
+    private let generate: Generate
+    private let swap: Swap
     private let commit: (_ recipes: [PlannedRecipe]) -> Void
 
     private let budgetStep = 5
@@ -43,15 +71,21 @@ final class BudgetPlanModel: ObservableObject {
         budget: Int = 75,
         householdSize: Int,
         dietaryPreferences: [DietaryPreference],
+        regionLabel: String? = nil,
         pantryNames: @escaping () -> [String],
-        generate: @escaping (_ budget: Int, _ household: Int, _ dietary: [String], _ pantry: [String]) async throws -> BudgetPlanResponse,
+        options: @escaping () -> BudgetPlanOptions = { .none },
+        generate: @escaping Generate,
+        swap: @escaping Swap,
         commit: @escaping (_ recipes: [PlannedRecipe]) -> Void
     ) {
         let hs = max(1, min(householdSize, 12))
         self.householdSize = hs
         self.dietaryPreferences = dietaryPreferences
+        self.regionLabel = regionLabel
         self.pantryNames = pantryNames
+        self.options = options
         self.generate = generate
+        self.swap = swap
         self.commit = commit
         // Never start below the per-person minimum.
         self.budget = BudgetMath.reconciled(currentBudget: budget, householdSize: hs)
@@ -110,12 +144,15 @@ final class BudgetPlanModel: ObservableObject {
         let dietary = dietaryPreferences.filter { $0 != .noRestrictions }.map(\.displayName)
         let pantry = useKitchen ? pantryNames() : []
         do {
-            let resp = try await generate(budget, householdSize, dietary, pantry)
-            response = resp
-            recipes = resp.recipes
-            selection = BudgetPlanSelection(recipes: resp.recipes)
+            let resp = try await generate(budget, householdSize, dietary, pantry, options())
+            guard !resp.recipes.isEmpty else {
+                phase = .failed("We couldn't build a plan this time. Please try again.")
+                return
+            }
+            apply(resp)
             phase = .results
-        } catch BudgetPlanError.proRequired {
+        } catch BudgetPlanError.proRequired, BudgetPlanError.freePlanUsed {
+            // The server decides who may generate; both mean "show the paywall".
             showPaywall = true
             phase = .setup
         } catch BudgetPlanError.belowMinimum(let mn) {
@@ -129,32 +166,82 @@ final class BudgetPlanModel: ObservableObject {
         }
     }
 
-    func toggle(_ id: String) { selection.toggle(id) }
-    func isAccepted(_ id: String) -> Bool { selection.isAccepted(id) }
-    var acceptedCount: Int { selection.acceptedCount }
-    var totalSpent: Double { selection.totalCost(from: recipes) }
-    var budgetValue: Double { response?.budget ?? Double(budget) }
-
-    /// Missing-ingredients preview: unique recipe ingredient names across accepted
-    /// recipes, minus what's on hand (normalized). "Just what's missing" (v1: name
-    /// match only, no unit conversion — mirrors GroceryAggregator's edges).
-    func missingIngredients() -> [String] {
-        let onHand = Set(pantryNames().map { $0.lowercased() })
-        var seen = Set<String>()
-        var out: [String] = []
-        for planned in selection.accepted(from: recipes) {
-            for ing in planned.recipe.ingredients {
-                let key = ing.name.lowercased()
-                if key.isEmpty || onHand.contains(key) || seen.contains(key) { continue }
-                seen.insert(key)
-                out.append(ing.name)
-            }
-        }
-        return out
+    private func apply(_ resp: BudgetPlanResponse) {
+        response = resp
+        recipes = resp.recipes
+        planID = resp.planId
+        total = resp.total
+        swapsRemaining = resp.swapsRemaining
+        swappingIndex = nil
+        swapFailure = nil
+        selectedMealIndex = nil
     }
 
-    func save() { commit(selection.accepted(from: recipes)) }
+    // MARK: Derived (results)
+
+    var budgetValue: Double { response?.budget ?? Double(budget) }
+    var dinnerCount: Int { recipes.count }
+    var amountLeft: Double { budgetValue - total }
+    var isSwapping: Bool { swappingIndex != nil }
+
+    // MARK: Swap
+
+    /// Replace the dinner at `index` in place. Errors never leave the screen
+    /// blank: they land in `swapFailure` (message + retry), except the paywall
+    /// cases, which open the existing paywall.
+    func swapMeal(at index: Int) async {
+        guard recipes.indices.contains(index), swappingIndex == nil else { return }
+        guard let planID else {
+            swapFailure = SwapFailure(mealIndex: index, message: "This plan can't be swapped. Try building a new one.")
+            return
+        }
+        swappingIndex = index
+        swapFailure = nil
+        defer { swappingIndex = nil }
+        do {
+            let result = try await swap(planID, index)
+            guard recipes.indices.contains(result.mealIndex) else { return }
+            withAnimation(.easeInOut(duration: 0.35)) {
+                recipes[result.mealIndex] = result.meal
+                total = result.planTotal
+                swapsRemaining = result.swapsRemaining
+            }
+        } catch BudgetPlanError.freeSwapsUsed {
+            swapsRemaining = 0
+            showPaywall = true
+        } catch BudgetPlanError.proRequired, BudgetPlanError.freePlanUsed {
+            showPaywall = true
+        } catch let error as BudgetPlanError {
+            swapFailure = SwapFailure(mealIndex: index, message: error.swapMessage)
+        } catch {
+            swapFailure = SwapFailure(mealIndex: index, message: "Couldn't swap this dinner. Please try again.")
+        }
+    }
+
+    func retrySwap() async {
+        guard let failure = swapFailure else { return }
+        await swapMeal(at: failure.mealIndex)
+    }
+
+    // MARK: Grocery / commit
+
+    var groceryPantryNames: [String] { pantryNames() }
+
+    /// "Use this plan": commits every dinner (there are no per-dinner toggles now).
+    func usePlan() { commit(recipes) }
     func startOver() { phase = .setup }
+}
+
+private extension BudgetPlanError {
+    /// Message for a failed swap (differs from generation wording).
+    var swapMessage: String {
+        switch self {
+        case .constraintUnmet: return "Couldn't find a swap that fits — try again."
+        case .planChanged: return "This plan just changed. Please try again."
+        case .offline, .timedOut, .spendCapReached: return userMessage
+        default: return "Couldn't swap this dinner. Please try again."
+        }
+    }
 }
 
 // MARK: - Container
@@ -165,6 +252,7 @@ final class BudgetPlanModel: ObservableObject {
 struct BudgetPlanContainer: View {
     @StateObject private var model: BudgetPlanModel
     private let onSaved: () -> Void
+    private let userScope: String?
     /// DEBUG/QA only: auto-run generation on appear so the results state can be
     /// screenshotted. Always false in production.
     private let autoGenerate: Bool
@@ -173,8 +261,12 @@ struct BudgetPlanContainer: View {
     init(
         householdSize: Int,
         dietary: [DietaryPreference],
+        regionLabel: String? = nil,
+        userScope: String? = nil,
         pantryNames: @escaping () -> [String],
-        generate: @escaping (_ budget: Int, _ household: Int, _ dietary: [String], _ pantry: [String]) async throws -> BudgetPlanResponse,
+        options: @escaping () -> BudgetPlanOptions = { .none },
+        generate: @escaping BudgetPlanModel.Generate,
+        swap: @escaping BudgetPlanModel.Swap,
         commit: @escaping (_ recipes: [PlannedRecipe]) -> Void,
         onSaved: @escaping () -> Void,
         autoGenerate: Bool = false
@@ -182,16 +274,20 @@ struct BudgetPlanContainer: View {
         _model = StateObject(wrappedValue: BudgetPlanModel(
             householdSize: householdSize,
             dietaryPreferences: dietary,
+            regionLabel: regionLabel,
             pantryNames: pantryNames,
+            options: options,
             generate: generate,
+            swap: swap,
             commit: commit
         ))
         self.onSaved = onSaved
+        self.userScope = userScope
         self.autoGenerate = autoGenerate
     }
 
     var body: some View {
-        BudgetPlanView(model: model, onSaved: onSaved)
+        BudgetPlanView(model: model, userScope: userScope, onSaved: onSaved)
             .task {
                 if autoGenerate && !didAutoGenerate {
                     didAutoGenerate = true
@@ -206,37 +302,26 @@ struct BudgetPlanContainer: View {
 struct BudgetPlanView: View {
     @ObservedObject var model: BudgetPlanModel
     @EnvironmentObject private var subscriptions: SubscriptionService
-    /// Called after Save to Meal Plan so the tab returns to "This Week".
+    var userScope: String? = nil
+    /// Called after "Use this plan" so the tab returns to "This Week".
     var onSaved: () -> Void = {}
 
     var body: some View {
         Group {
-            if !subscriptions.isProUnlocked {
-                lockedState
-            } else {
-                switch model.phase {
-                case .setup: BudgetSetupView(model: model)
-                case .generating: BudgetGeneratingView()
-                case .results: BudgetResultsView(model: model, onSaved: onSaved)
-                case .failed(let message): failedState(message)
-                }
+            switch model.phase {
+            case .setup: BudgetSetupView(model: model)
+            case .generating: BudgetGeneratingView()
+            case .results: BudgetResultsView(model: model, userScope: userScope, onSaved: onSaved)
+            case .failed(let message): failedState(message)
             }
         }
-        .sheet(isPresented: $model.showPaywall) {
+        // The paywall hangs off the meal sheet when it's open (a sheet can't be
+        // presented over a presenting view that already has one), else off the root.
+        .sheet(isPresented: Binding(
+            get: { model.showPaywall && model.selectedMealIndex == nil },
+            set: { if !$0 { model.showPaywall = false } }
+        )) {
             PlatterProPaywallView().environmentObject(subscriptions)
-        }
-    }
-
-    private var lockedState: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                budgetHeadline
-                ProSuggestionsLockedCardBudget(onUpgrade: { model.showPaywall = true })
-            }
-            .padding(.horizontal, 24)
-            .padding(.top, 8)
-            .padding(.bottom, Theme.Spacing.tabBarClearance)
-            .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 
@@ -245,6 +330,7 @@ struct BudgetPlanView: View {
             Image(systemName: "exclamationmark.triangle")
                 .font(.largeTitle)
                 .foregroundStyle(.orange)
+                .accessibilityHidden(true)
             Text(message)
                 .font(.subheadline)
                 .foregroundStyle(Color.textSecondary)
@@ -253,59 +339,13 @@ struct BudgetPlanView: View {
                 .font(.headline)
                 .foregroundStyle(Color.accentColor)
                 .frame(minHeight: 44)
+            Button("Change budget") { model.startOver() }
+                .font(.subheadline)
+                .foregroundStyle(Color.textSecondary)
+                .frame(minHeight: 44)
         }
         .padding(24)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-
-    private var budgetHeadline: some View {
-        VStack(alignment: .leading, spacing: -4) {
-            Text("Plan on a")
-                .font(.editorialTitle(size: 32, relativeTo: .largeTitle))
-            Text("budget.")
-                .font(.scriptAccent(size: 38, relativeTo: .largeTitle))
-                .foregroundStyle(Color.accentColor)
-        }
-        .fixedSize(horizontal: false, vertical: true)
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("Plan on a budget")
-    }
-}
-
-/// Locked card for the budget mode (mirrors ProSuggestionsLockedCard copy).
-private struct ProSuggestionsLockedCardBudget: View {
-    let onUpgrade: () -> Void
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 12) {
-                Image(systemName: "lock.fill")
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(Color.accentColor)
-                    .frame(width: 40, height: 40)
-                    .background(Color.sageLight.opacity(0.42), in: Circle())
-                    .accessibilityHidden(true)
-                Text("Plan a week of meals that fits your budget with Platter Pro.")
-                    .font(.subheadline)
-                    .foregroundStyle(Color.textPrimary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            Button(action: onUpgrade) {
-                Text("Try Platter Pro")
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(Color.white)
-                    .frame(maxWidth: .infinity, minHeight: 44)
-                    .background(Color.accentColor, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-            }
-            .buttonStyle(.plain)
-        }
-        .padding(16)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.surface, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .overlay { RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(Color.hairline, lineWidth: 1) }
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("Plan on a Budget is a Platter Pro feature")
-        .accessibilityHint("Opens Platter Pro")
-        .accessibilityAddTraits(.isButton)
     }
 }
 
@@ -496,173 +536,5 @@ private struct BudgetGeneratingView: View {
             }
             .frame(height: 84)
             .accessibilityHidden(true)
-    }
-}
-
-// MARK: - Results
-
-private struct BudgetResultsView: View {
-    @ObservedObject var model: BudgetPlanModel
-    var onSaved: () -> Void
-    @State private var showGroceryPreview = false
-
-    var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                budgetBar
-                ForEach(model.recipes) { planned in
-                    recipeCard(planned)
-                }
-                groceryPreviewRow
-            }
-            .padding(.horizontal, 24)
-            .padding(.top, 12)
-            .padding(.bottom, Theme.Spacing.tabBarClearance)
-            .frame(maxWidth: .infinity, alignment: .leading)
-        }
-        .safeAreaInset(edge: .bottom) { saveBar }
-        .sheet(isPresented: $showGroceryPreview) { groceryPreviewSheet }
-    }
-
-    private var budgetBar: some View {
-        let spent = model.totalSpent
-        let budget = max(model.budgetValue, 1)
-        let fraction = min(1.0, spent / budget)
-        return VStack(alignment: .leading, spacing: 6) {
-            HStack {
-                Text("$\(Int(spent.rounded())) of $\(Int(budget.rounded()))")
-                    .font(.system(size: 16, weight: .semibold))
-                Spacer()
-                Text("\(model.acceptedCount) of \(model.recipes.count) meals")
-                    .font(.system(size: 13))
-                    .foregroundStyle(Color.textSecondary)
-            }
-            GeometryReader { geo in
-                ZStack(alignment: .leading) {
-                    Capsule().fill(Color.hairline).frame(height: 8)
-                    Capsule().fill(spent > budget ? Color.orange : Color.accentColor)
-                        .frame(width: geo.size.width * fraction, height: 8)
-                }
-            }
-            .frame(height: 8)
-        }
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("$\(Int(spent.rounded())) spent of $\(Int(budget.rounded())), \(model.acceptedCount) of \(model.recipes.count) meals added")
-    }
-
-    private func recipeCard(_ planned: PlannedRecipe) -> some View {
-        let accepted = model.isAccepted(planned.id)
-        return Button {
-            model.toggle(planned.id)
-        } label: {
-            HStack(alignment: .top, spacing: 12) {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(planned.recipe.title)
-                        .font(.system(size: 16, weight: .semibold))
-                        .foregroundStyle(Color.textPrimary)
-                        .multilineTextAlignment(.leading)
-                    HStack(spacing: 8) {
-                        Text("$\(Int(planned.estimatedCost.amount.rounded()))")
-                            .font(.system(size: 14, weight: .medium))
-                            .foregroundStyle(Color.textPrimary)
-                        if !planned.healthSignal.isEmpty {
-                            Text(planned.healthSignal)
-                                .font(.system(size: 12, weight: .medium))
-                                .foregroundStyle(Color.accentColor)
-                                .padding(.horizontal, 8)
-                                .padding(.vertical, 3)
-                                .background(Color.sageLight.opacity(0.42), in: Capsule())
-                        }
-                    }
-                }
-                Spacer(minLength: 8)
-                Image(systemName: accepted ? "checkmark.circle.fill" : "circle")
-                    .font(.system(size: 22, weight: .medium))
-                    .foregroundStyle(accepted ? Color.accentColor : Color.textSecondary.opacity(0.5))
-                    .accessibilityHidden(true)
-            }
-            .padding(16)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(accepted ? Color.sageLight.opacity(0.42) : Color.surface,
-                        in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-            .overlay {
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .strokeBorder(accepted ? Color.accentColor : Color.hairline, lineWidth: accepted ? 2 : 1)
-            }
-            .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel("\(planned.recipe.title), $\(Int(planned.estimatedCost.amount.rounded())), \(planned.healthSignal)")
-        .accessibilityValue(accepted ? "In your plan" : "Not in your plan")
-        .accessibilityAddTraits(accepted ? [.isButton, .isSelected] : .isButton)
-        .accessibilityHint("Double-tap to toggle this meal in your plan")
-    }
-
-    private var groceryPreviewRow: some View {
-        Button { showGroceryPreview = true } label: {
-            HStack(spacing: 12) {
-                Image(systemName: "cart")
-                    .font(.system(size: 16, weight: .medium))
-                    .foregroundStyle(Color.accentColor)
-                    .accessibilityHidden(true)
-                Text("Grocery list")
-                    .font(.system(size: 15, weight: .medium))
-                    .foregroundStyle(Color.textPrimary)
-                Spacer(minLength: 8)
-                Text("\(model.missingIngredients().count) items")
-                    .font(.system(size: 13))
-                    .foregroundStyle(Color.textSecondary)
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(Color.textSecondary)
-                    .accessibilityHidden(true)
-            }
-            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-            .padding(.horizontal, 14)
-            .padding(.vertical, 10)
-            .background(Color.surface, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-            .overlay { RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(Color.hairline, lineWidth: 1) }
-            .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel("Grocery list, \(model.missingIngredients().count) items")
-        .accessibilityHint("Preview what's missing for this plan")
-    }
-
-    private var saveBar: some View {
-        VStack(spacing: 0) {
-            Button {
-                model.save()
-                onSaved()
-            } label: {
-                Text("Save to Meal Plan")
-                    .font(.system(size: 17, weight: .semibold))
-                    .foregroundStyle(Color.white)
-                    .frame(maxWidth: .infinity, minHeight: 56)
-                    .background(Color.accentColor.opacity(model.acceptedCount > 0 ? 1 : 0.4),
-                                in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-            }
-            .buttonStyle(.plain)
-            .disabled(model.acceptedCount == 0)
-            .padding(.horizontal, 24)
-            .padding(.vertical, 12)
-        }
-        .background(Color.creamTint)
-    }
-
-    private var groceryPreviewSheet: some View {
-        let items = model.missingIngredients()
-        return NavigationStack {
-            List {
-                if items.isEmpty {
-                    Text("Nothing to buy — your Kitchen covers this plan.")
-                        .foregroundStyle(Color.textSecondary)
-                } else {
-                    ForEach(items, id: \.self) { Text($0) }
-                }
-            }
-            .navigationTitle("What's missing")
-            .navigationBarTitleDisplayMode(.inline)
-        }
     }
 }

@@ -734,7 +734,7 @@ private struct GroceryItemIconView: View {
 
 // MARK: - Checkable row
 
-private struct GroceryCheckRow: View {
+struct GroceryCheckRow: View {
     let text: String
     let detail: String?
     let icon: GroceryItemIcon

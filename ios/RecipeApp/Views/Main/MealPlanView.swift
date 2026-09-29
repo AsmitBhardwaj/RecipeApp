@@ -149,8 +149,10 @@ struct MealPlanView: View {
         BudgetPlanContainer(
             householdSize: cookingPreferences.householdSize,
             dietary: Array(cookingPreferences.dietaryPreferences),
+            regionLabel: cookingPreferences.country.flatMap { Locale.current.localizedString(forRegionCode: $0) },
+            userScope: userScope,
             pantryNames: { pantry.items.map(\.name) },
-            generate: { budget, household, dietary, pantryItems in
+            generate: { budget, household, dietary, pantryItems, options in
                 guard let sync else { throw BudgetPlanError.invalidResponse("not signed in") }
                 return try await sync.budgetPlan(
                     budget: budget, householdSize: household,
@@ -158,8 +160,15 @@ struct MealPlanView: View {
                     // The user's stored country + area type drive the cost
                     // multiplier; either unset falls back to 1.0 server-side.
                     country: cookingPreferences.country,
-                    areaType: cookingPreferences.areaType?.apiValue
+                    areaType: cookingPreferences.areaType?.apiValue,
+                    // store_tier / appliances / food_moods: empty until Stage 2
+                    // collects them, so the request stays v1.0-shaped.
+                    options: options
                 )
+            },
+            swap: { planID, index in
+                guard let sync else { throw BudgetPlanError.invalidResponse("not signed in") }
+                return try await sync.budgetSwap(planID: planID, mealIndex: index)
             },
             commit: { recipes in commitBudgetRecipes(recipes) },
             onSaved: { mode = .thisWeek }

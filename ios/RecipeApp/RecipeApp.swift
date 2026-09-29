@@ -154,7 +154,8 @@ struct RecipeApp: App {
                     householdSize: 2,
                     dietary: [],
                     pantryNames: { ["rice", "eggs", "spinach"] },
-                    generate: { _, _, _, _ in Self.sampleBudgetPlan() },
+                    generate: { _, _, _, _, _ in Self.sampleBudgetPlan(free: mode != "budgetPro") },
+                    swap: { _, index in Self.sampleSwap(index: index, free: mode != "budgetPro") },
                     commit: { _ in },
                     onSaved: {},
                     autoGenerate: mode == "budgetResults"
@@ -170,12 +171,19 @@ struct RecipeApp: App {
     }
 
     /// Sample budget plan for the `-gatePreview budgetResults` screenshot harness.
-    private static func sampleBudgetPlan() -> BudgetPlanResponse {
+    private static func sampleBudgetPlan(free: Bool = true) -> BudgetPlanResponse {
         func recipe(_ id: String, _ title: String) -> Recipe {
             Recipe(
                 recipeId: id, canonicalVideoId: "budget:\(id)", title: title,
                 servings: Servings(amount: 2, unit: nil), prepTimeMinutes: nil,
-                cookTimeMinutes: nil, totalTimeMinutes: nil, ingredients: [], instructions: [],
+                cookTimeMinutes: 25, totalTimeMinutes: nil,
+                ingredients: [
+                    Ingredient(quantity: 2, unit: nil, name: "eggs", notes: nil),
+                    Ingredient(quantity: 1, unit: "cup", name: "rice", notes: nil),
+                    Ingredient(quantity: 2, unit: "cup", name: "spinach", notes: nil),
+                    Ingredient(quantity: 1, unit: "can", name: "chickpeas", notes: nil),
+                ],
+                instructions: [Instruction(stepNumber: 1, text: "Cook the rice."), Instruction(stepNumber: 2, text: "Combine and serve.")],
                 confidence: nil, sourceType: .generated, imageUrl: nil, imageSource: .none, transcript: nil
             )
         }
@@ -186,9 +194,30 @@ struct RecipeApp: App {
             ("b4", "Veggie Pasta Bake", 9, "Comfort, veg-forward"),
         ]
         let planned = items.map { id, title, cost, health in
-            PlannedRecipe(recipe: recipe(id, title), estimatedCost: CostEstimate(amount: cost), healthSignal: health)
+            PlannedRecipe(recipe: recipe(id, title), estimatedCost: CostEstimate(amount: cost), healthSignal: health,
+                          equipmentUsed: id == "b2" ? ["no_cook"] : ["stovetop", "oven"])
         }
-        return BudgetPlanResponse(recipes: planned, currency: "USD", budget: 75, minBudget: 50, regionalMultiplier: 1.0)
+        return BudgetPlanResponse(
+            recipes: planned, currency: "USD", budget: 75, minBudget: 50, regionalMultiplier: 1.0,
+            planId: "preview", isFree: free, swapsRemaining: free ? 3 : nil
+        )
+    }
+
+    private static func sampleSwap(index: Int, free: Bool) -> BudgetSwapResponse {
+        let base = sampleBudgetPlan(free: free)
+        let meal = PlannedRecipe(
+            recipe: Recipe(
+                recipeId: "swap-\(Int.random(in: 0...9999))", canonicalVideoId: "budget:swap", title: "Black Bean Tacos",
+                servings: Servings(amount: 2, unit: nil), prepTimeMinutes: 10, cookTimeMinutes: 10,
+                totalTimeMinutes: nil, ingredients: [], instructions: [], confidence: nil,
+                sourceType: .generated, imageUrl: nil, imageSource: .none, transcript: nil
+            ),
+            estimatedCost: CostEstimate(amount: 5), healthSignal: "", equipmentUsed: ["stovetop"]
+        )
+        return BudgetSwapResponse(
+            planId: "preview", mealIndex: index, meal: meal, planTotal: base.total - 3, budget: 75,
+            swapsUsed: 1, swapsRemaining: free ? 2 : nil
+        )
     }
     #endif
 }
