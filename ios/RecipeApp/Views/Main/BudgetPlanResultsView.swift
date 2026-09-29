@@ -186,6 +186,22 @@ struct BudgetResultsView: View {
     var userScope: String?
     var onOpenMealPlan: () -> Void
     @EnvironmentObject private var subscriptions: SubscriptionService
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    /// The reveal: the budget card fades/scales in, then the dinner cards stagger
+    /// in ~60ms apart. Only plays for a freshly generated plan; a restored plan
+    /// (or Reduce Motion) shows everything at once.
+    @State private var budgetShown: Bool
+    @State private var shownCards: Int
+
+    init(model: BudgetPlanModel, userScope: String?, onOpenMealPlan: @escaping () -> Void) {
+        self.model = model
+        self.userScope = userScope
+        self.onOpenMealPlan = onOpenMealPlan
+        let fresh = model.isFreshReveal
+        _budgetShown = State(initialValue: !fresh)
+        _shownCards = State(initialValue: fresh ? 0 : .max)
+    }
 
     var body: some View {
         ScrollView {
@@ -195,6 +211,8 @@ struct BudgetResultsView: View {
                 BudgetSummaryCard(
                     total: model.total, budget: model.budgetValue, dinners: model.dinnerCount
                 )
+                .opacity(budgetShown ? 1 : 0)
+                .scaleEffect(budgetShown ? 1 : 0.96)
                 if let failure = model.swapFailure {
                     SwapFailureBanner(message: failure.message, isRetrying: model.isSwapping) {
                         Task { await model.retrySwap() }
@@ -206,6 +224,8 @@ struct BudgetResultsView: View {
                             model.selectedMealIndex = index
                         }
                         .transition(.opacity.combined(with: .scale(scale: 0.97)))
+                        .opacity(index < shownCards ? 1 : 0)
+                        .offset(y: index < shownCards ? 0 : 14)
                     }
                 }
             }
@@ -234,6 +254,7 @@ struct BudgetResultsView: View {
         }
         .animation(.easeInOut(duration: 0.3), value: model.showFreeSavedToast)
         .onAppear { model.refreshAddedState() }
+        .task { await playReveal() }
         .sheet(isPresented: $model.showGrocery) {
             BudgetGroceryListView(
                 recipes: model.recipes.map(\.recipe),
@@ -247,6 +268,32 @@ struct BudgetResultsView: View {
             DinnerSheet(model: model, userScope: userScope)
                 .environmentObject(subscriptions)
         }
+    }
+
+    // MARK: Reveal
+
+    private func playReveal() async {
+        if model.consumeFreshReveal() {
+            if reduceMotion {
+                budgetShown = true
+                shownCards = .max
+            } else {
+                withAnimation(.spring(response: 0.6, dampingFraction: 0.85)) { budgetShown = true }
+                try? await Task.sleep(nanoseconds: 300_000_000)
+                for i in 1...max(model.dinnerCount, 1) {
+                    guard !Task.isCancelled else { return }
+                    withAnimation(.spring(response: 0.5, dampingFraction: 0.85)) { shownCards = i }
+                    try? await Task.sleep(nanoseconds: 60_000_000)
+                }
+                try? await Task.sleep(nanoseconds: 450_000_000)   // let the last card settle
+                shownCards = .max
+            }
+        } else {
+            budgetShown = true
+            shownCards = .max
+        }
+        // After the cards are in: the free plan's one-time teaser, if it's due.
+        await model.presentRevealTeaserIfDue()
     }
 
     // MARK: Header
@@ -271,7 +318,7 @@ struct BudgetResultsView: View {
                 }
                 .buttonStyle(PlanPressStyle())
                 .accessibilityLabel("New plan")
-                .accessibilityHint(model.swapsRemaining != nil ? "Opens Platter Pro" : "Starts a new plan")
+                .accessibilityHint(model.swapsRemaining != nil ? "Shows Platter Pro" : "Starts a new plan")
             }
             Text(subtitle)
                 .font(.system(size: 14))
@@ -491,12 +538,13 @@ private struct DinnerSheet: View {
         .background(Color.appBackground)
         .presentationDragIndicator(.visible)
         .onAppear { model.refreshAddedState() }
-        // Paywall from inside the sheet (the root can't present over it).
-        .sheet(isPresented: Binding(
-            get: { model.showPaywall && model.selectedMealIndex != nil },
-            set: { if !$0 { model.showPaywall = false } }
+        // Teaser from inside the sheet (the root can't present over it).
+        .fullScreenCover(isPresented: Binding(
+            get: { model.showTeaser && model.selectedMealIndex != nil },
+            set: { if !$0 { model.teaserClosed(isPro: subscriptions.isProUnlocked) } }
         )) {
-            PlatterProPaywallView().environmentObject(subscriptions)
+            PaywallTeaserView { model.teaserClosed(isPro: $0) }
+                .environmentObject(subscriptions)
         }
         .fullScreenCover(isPresented: $cooking) {
             if let planned {

@@ -4,7 +4,7 @@ import SwiftUI
 /// First-run onboarding (sign-in stays first, in `RootView`):
 ///   Value screen → People → Diet → Food mood → Appliances → Store → Budget
 /// The quiz screens live in `PlanQuizFlow`; this view owns the Value screen, the
-/// hand-off to the quiz, and finishing (save answers → paywall → main app, which
+/// hand-off to the quiz, and finishing (save answers → main app, which
 /// opens Plan on a Budget and generates the first week).
 struct OnboardingView: View {
     @ObservedObject var auth: AuthModel
@@ -18,7 +18,6 @@ struct OnboardingView: View {
     /// kept, so Back to the Value screen and forward again keeps the answers.
     @State private var quiz: PlanQuizModel?
     @State private var showingQuiz = false
-    @State private var showingPaywall = false
 
     init(auth: AuthModel, startInQuiz: Bool = false) {
         self.auth = auth
@@ -43,10 +42,6 @@ struct OnboardingView: View {
             preferences.attachSync(sync)
             sync.triggerSync()
             if showingQuiz && quiz == nil { quiz = makeQuiz() }
-        }
-        .sheet(isPresented: $showingPaywall, onDismiss: completeOnboarding) {
-            PlatterProPaywallView()
-                .environmentObject(subscriptions)
         }
     }
 
@@ -111,19 +106,11 @@ struct OnboardingView: View {
 
     private func finishOnboarding() {
         sync.triggerSync()
-
-        // Keep onboarding mounted while the paywall is presented. Marking it
-        // complete first would make SignedInRoot replace this view immediately,
-        // preventing the sheet from appearing.
-        if subscriptions.isProUnlocked {
-            completeOnboarding()
-        } else {
-            // Final onboarding step: present the paywall once (trigger .onboarding),
-            // dismissible immediately. Mark it so the periodic app-open paywall is
-            // not also shown in this same session.
-            subscriptions.markOnboardingPaywallShown()
-            showingPaywall = true
-        }
+        // No paywall here: the free week comes first, and the Platter Pro teaser
+        // follows its reveal. Still mark the session so the periodic app-open
+        // paywall doesn't land on top of that first plan.
+        subscriptions.markOnboardingPaywallShown()
+        completeOnboarding()
     }
 
     private func completeOnboarding() {

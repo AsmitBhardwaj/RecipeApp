@@ -41,7 +41,12 @@ final class BudgetPlanModel: ObservableObject {
     @Published var useKitchen: Bool = true
     @Published private(set) var recipes: [PlannedRecipe] = []
     @Published private(set) var response: BudgetPlanResponse?
-    @Published var showPaywall = false
+    /// The full-screen "Keep a fresh week coming" teaser. It fronts the paywall
+    /// everywhere a free account hits the Pro line (see `PaywallTeaserTrigger`).
+    @Published var showTeaser = false
+    /// The API has answered while the loading screen is still up (min hold): the
+    /// progress bar completes.
+    @Published private(set) var loadingResponseArrived = false
     @Published private(set) var budgetInputMessage: String?
 
     // Results state
@@ -60,6 +65,11 @@ final class BudgetPlanModel: ObservableObject {
     /// The dinners already in the Meal Plan (derived from the plan itself, so it
     /// survives relaunch and reflects removals on the next refresh).
     @Published private(set) var addedIDs: Set<String> = []
+    /// Set when a plan was just generated (not restored) so "Your week" plays the
+    /// reveal; consumed by the view.
+    private(set) var isFreshReveal = false
+    /// The free plan whose reveal still owes a teaser.
+    private var pendingRevealTeaserKey: String?
     /// One-time "free week saved" toast, shown right after a free plan generates.
     @Published private(set) var showFreeSavedToast = false
 
@@ -80,8 +90,13 @@ final class BudgetPlanModel: ObservableObject {
     private let savedPlanStore: SavedBudgetPlanStore?
     private let onFreePlanGenerated: (_ recipes: [Recipe]) -> Void
     private let onMealSwapped: (_ old: Recipe, _ new: Recipe) -> Void
+    private let isPro: () -> Bool
+    private let teaserStore: PaywallTeaserStore?
+    private let minimumLoadingDuration: TimeInterval
+    private let now: () -> Date
+    private let sleep: (TimeInterval) async -> Void
     private var toastTask: Task<Void, Never>?
-    /// Set when "New plan" opened the paywall, so a purchase continues to setup.
+    /// Set when "New plan" opened the teaser, so a purchase continues to setup.
     private var newPlanPending = false
 
     private let budgetStep = 5
@@ -100,7 +115,12 @@ final class BudgetPlanModel: ObservableObject {
         isInMealPlan: @escaping (_ recipeId: String) -> Bool = { _ in false },
         savedPlanStore: SavedBudgetPlanStore? = nil,
         onFreePlanGenerated: @escaping (_ recipes: [Recipe]) -> Void = { _ in },
-        onMealSwapped: @escaping (_ old: Recipe, _ new: Recipe) -> Void = { _, _ in }
+        onMealSwapped: @escaping (_ old: Recipe, _ new: Recipe) -> Void = { _, _ in },
+        isPro: @escaping () -> Bool = { false },
+        teaserStore: PaywallTeaserStore? = nil,
+        minimumLoadingDuration: TimeInterval = 0,
+        now: @escaping () -> Date = Date.init,
+        sleep: @escaping (TimeInterval) async -> Void = { try? await Task.sleep(nanoseconds: UInt64($0 * 1_000_000_000)) }
     ) {
         let hs = max(1, min(householdSize, 12))
         self.householdSize = hs
@@ -116,6 +136,11 @@ final class BudgetPlanModel: ObservableObject {
         self.savedPlanStore = savedPlanStore
         self.onFreePlanGenerated = onFreePlanGenerated
         self.onMealSwapped = onMealSwapped
+        self.isPro = isPro
+        self.teaserStore = teaserStore
+        self.minimumLoadingDuration = minimumLoadingDuration
+        self.now = now
+        self.sleep = sleep
         // Never start below the per-person minimum.
         self.budget = BudgetMath.reconciled(currentBudget: budget, householdSize: hs)
         restoreSavedPlan()
@@ -208,6 +233,10 @@ final class BudgetPlanModel: ObservableObject {
 
     func generatePlan() async {
         phase = .generating
+        loadingResponseArrived = false
+        isFreshReveal = false
+        pendingRevealTeaserKey = nil
+        let started = now()
         let dietary = dietaryPreferences.filter { $0 != .noRestrictions }.map(\.displayName)
         let pantry = useKitchen ? pantryNames() : []
         do {
@@ -216,9 +245,22 @@ final class BudgetPlanModel: ObservableObject {
                 phase = .failed("We couldn't build a plan this time. Please try again.")
                 return
             }
+            // The loading screen shows for at least `minimumLoadingDuration`, however
+            // fast the API was (errors skip the hold — they show immediately).
+            loadingResponseArrived = true
+            let hold = PlanLoadingTiming.remainingHold(started: started, now: now(), minimum: minimumLoadingDuration)
+            if hold > 0 { await sleep(hold) }
             apply(resp)
+            isFreshReveal = true
             phase = .results
             persist()
+            let key = PaywallTeaserPolicy.planKey(planID: resp.planId, recipeIDs: recipes.map(\.id))
+            if PaywallTeaserPolicy.shouldShow(
+                .freePlanReveal(planKey: key), isFreePlan: resp.isFree, isPro: isPro(),
+                alreadyShown: { teaserStore?.hasShown(planKey: $0) ?? false }
+            ) {
+                pendingRevealTeaserKey = key
+            }
             if resp.isFree {
                 // The free plan is the account's only one: keep its recipes in the
                 // library so it can never be lost, and say so once.
@@ -226,9 +268,9 @@ final class BudgetPlanModel: ObservableObject {
                 flashFreeSavedToast()
             }
         } catch BudgetPlanError.proRequired, BudgetPlanError.freePlanUsed {
-            // The server decides who may generate; both mean "show the paywall".
-            showPaywall = true
-            phase = .setup
+            // The server decides who may generate; both mean "show the teaser".
+            showTeaser = true
+            phase = recipes.isEmpty ? .setup : .results
         } catch BudgetPlanError.belowMinimum(let mn) {
             // Server floor caught something the client didn't; correct and let them retry.
             budget = max(budget, mn)
@@ -288,9 +330,9 @@ final class BudgetPlanModel: ObservableObject {
         } catch BudgetPlanError.freeSwapsUsed {
             swapsRemaining = 0
             persist()
-            showPaywall = true
+            showTeaser = true
         } catch BudgetPlanError.proRequired, BudgetPlanError.freePlanUsed {
-            showPaywall = true
+            showTeaser = true
         } catch let error as BudgetPlanError {
             swapFailure = SwapFailure(mealIndex: index, message: error.swapMessage)
         } catch {
@@ -341,17 +383,45 @@ final class BudgetPlanModel: ObservableObject {
     /// its one plan, so go straight to the paywall — no generate call just to get
     /// a 403. If they subscribe from it, `paywallDismissed` continues to setup.
     func newPlan() {
-        if response?.isFree == true {
+        if response?.isFree == true && !isPro() {
             newPlanPending = true
-            showPaywall = true
+            showTeaser = true
         } else {
             startOver()
         }
     }
 
-    func paywallDismissed(isPro: Bool) {
-        showPaywall = false
-        if newPlanPending && isPro { startOver() }
+    // MARK: Teaser
+
+    /// Called by "Your week" once the dinner cards have finished animating in.
+    /// After a short beat, presents the teaser once for this free plan.
+    func presentRevealTeaserIfDue() async {
+        guard let key = pendingRevealTeaserKey else { return }
+        await sleep(PaywallTeaserPolicy.revealDelay)
+        guard !Task.isCancelled, pendingRevealTeaserKey == key, phase == .results, !showTeaser, !isPro() else { return }
+        pendingRevealTeaserKey = nil
+        teaserStore?.markShown(planKey: key)
+        showTeaser = true
+    }
+
+    /// Hands the reveal flag to the view, once.
+    func consumeFreshReveal() -> Bool {
+        defer { isFreshReveal = false }
+        return isFreshReveal
+    }
+
+    /// The teaser closed — via the paywall's close button, or after a purchase.
+    /// Both dismiss the teaser and any open dinner sheet, landing on "Your week".
+    /// With Pro unlocked the free-plan pill goes away, and a pending "New plan"
+    /// continues to setup.
+    func teaserClosed(isPro nowPro: Bool) {
+        showTeaser = false
+        selectedMealIndex = nil
+        if nowPro {
+            swapsRemaining = nil
+            persist()
+            if newPlanPending { startOver() }
+        }
         newPlanPending = false
     }
 
@@ -417,6 +487,9 @@ struct BudgetPlanContainer: View {
         savedPlanStore: SavedBudgetPlanStore? = nil,
         onFreePlanGenerated: @escaping (_ recipes: [Recipe]) -> Void = { _ in },
         onMealSwapped: @escaping (_ old: Recipe, _ new: Recipe) -> Void = { _, _ in },
+        isPro: @escaping () -> Bool = { false },
+        teaserStore: PaywallTeaserStore? = nil,
+        minimumLoadingDuration: TimeInterval = PlanLoadingTiming.minimumDuration,
         onOpenMealPlan: @escaping () -> Void,
         autoGenerate: Bool = false,
         launchPending: Bool = false,
@@ -435,7 +508,10 @@ struct BudgetPlanContainer: View {
             isInMealPlan: isInMealPlan,
             savedPlanStore: savedPlanStore,
             onFreePlanGenerated: onFreePlanGenerated,
-            onMealSwapped: onMealSwapped
+            onMealSwapped: onMealSwapped,
+            isPro: isPro,
+            teaserStore: teaserStore,
+            minimumLoadingDuration: minimumLoadingDuration
         )
         // Straight to the loading state: the quiz must not flash before the launch
         // generation starts.
@@ -491,18 +567,19 @@ struct BudgetPlanView: View {
         Group {
             switch model.phase {
             case .setup: BudgetSetupLanding(onStart: openQuiz)
-            case .generating: BudgetGeneratingView()
+            case .generating: PlanLoadingView(model: model, prefs: cookingPreferences.preferences)
             case .results: BudgetResultsView(model: model, userScope: userScope, onOpenMealPlan: onOpenMealPlan)
             case .failed(let message): failedState(message)
             }
         }
-        // The paywall hangs off the meal sheet when it's open (a sheet can't be
+        // The teaser hangs off the meal sheet when it's open (a sheet can't be
         // presented over a presenting view that already has one), else off the root.
-        .sheet(isPresented: Binding(
-            get: { model.showPaywall && model.selectedMealIndex == nil },
-            set: { if !$0 { model.showPaywall = false } }
-        ), onDismiss: { model.paywallDismissed(isPro: subscriptions.isProUnlocked) }) {
-            PlatterProPaywallView().environmentObject(subscriptions)
+        .fullScreenCover(isPresented: Binding(
+            get: { model.showTeaser && model.selectedMealIndex == nil },
+            set: { if !$0 { model.teaserClosed(isPro: subscriptions.isProUnlocked) } }
+        )) {
+            PaywallTeaserView { model.teaserClosed(isPro: $0) }
+                .environmentObject(subscriptions)
         }
         // Setup runs as a full-screen quiz: the first time Plan on a Budget opens
         // with no saved plan (existing users answer Mood → Appliances → Store →
@@ -512,11 +589,11 @@ struct BudgetPlanView: View {
                 PlanQuizFlow(model: quiz, onExit: cancelQuiz, onFinish: buildWeek)
             }
         }
-        .onAppear { if model.phase == .setup && !model.showPaywall { openQuiz() } }
+        .onAppear { if model.phase == .setup && !model.showTeaser { openQuiz() } }
         .onChange(of: model.phase) { _, phase in
-            // A paywall bounce (generating → setup while the paywall opens) must not
+            // A teaser bounce (generating → setup while the teaser opens) must not
             // stack the quiz on top of it.
-            if phase == .setup && !model.showPaywall { openQuiz() }
+            if phase == .setup && !model.showTeaser { openQuiz() }
         }
     }
 
@@ -596,44 +673,5 @@ private struct BudgetSetupLanding: View {
         .padding(.horizontal, 24)
         .padding(.top, 8)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-    }
-}
-
-// MARK: - Generating
-
-private struct BudgetGeneratingView: View {
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                HStack(spacing: 10) {
-                    ProgressView().tint(Color.accentColor)
-                    Text("Building your plan…")
-                        .font(.headline)
-                }
-                .padding(.bottom, 4)
-                ForEach(0..<4, id: \.self) { _ in skeletonCard }
-            }
-            .padding(.horizontal, 24)
-            .padding(.top, 16)
-            .padding(.bottom, Theme.Spacing.tabBarClearance)
-            .frame(maxWidth: .infinity, alignment: .leading)
-        }
-        .accessibilityLabel("Building your plan")
-    }
-
-    private var skeletonCard: some View {
-        RoundedRectangle(cornerRadius: 16, style: .continuous)
-            .fill(Color.surface)
-            .overlay { RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(Color.hairline, lineWidth: 1) }
-            .overlay(alignment: .topLeading) {
-                VStack(alignment: .leading, spacing: 10) {
-                    Capsule().fill(Color.hairline).frame(width: 160, height: 14)
-                    Capsule().fill(Color.hairline).frame(width: 90, height: 10)
-                }
-                .padding(16)
-            }
-            .frame(height: 84)
-            .accessibilityHidden(true)
     }
 }

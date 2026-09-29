@@ -180,6 +180,8 @@ struct MealPlanView: View {
             savedPlanStore: SavedBudgetPlanStore(userScope: userScope),
             onFreePlanGenerated: { budgetLibrary.savePlan($0) },
             onMealSwapped: { budgetLibrary.replace($0, with: $1) },
+            isPro: { subscriptions.isProUnlocked },
+            teaserStore: PaywallTeaserStore(userScope: userScope),
             onOpenMealPlan: { mode = .thisWeek },
             launchPending: cookingPreferences.pendingPlanBuild,
             onLaunch: { model in

@@ -50,6 +50,28 @@ final class CookingPreferencesStoreTests: XCTestCase {
         XCTAssertEqual(decoded?.dietaryPreferences, [.vegan])
     }
 
+    func testVersion1DietBlobDecodesByRawValueRegardlessOfEnumOrder() throws {
+        // A 1.0 build persisted diets as raw-value strings, in its own enum order
+        // (vegetarian, vegan, glutenFree, dairyFree, noRestrictions). Reordering the
+        // enum, or adding cases, must not change what an old blob means.
+        let blob = #"{"primaryGoal":"planMyWeek","dietaryPreferences":["dairyFree","vegetarian","glutenFree"],"householdSize":3,"hasCompletedOnboarding":true}"#
+        let decoded = try JSONDecoder().decode(CookingPreferences.self, from: Data(blob.utf8))
+        XCTAssertEqual(decoded.dietaryPreferences, [.vegetarian, .glutenFree, .dairyFree])
+        XCTAssertEqual(decoded.householdSize, 3)
+        XCTAssertNil(decoded.storeName)
+        XCTAssertTrue(decoded.appliances.isEmpty)
+
+        let allOld = #"{"dietaryPreferences":["vegetarian","vegan","glutenFree","dairyFree","noRestrictions"]}"#
+        let all = try JSONDecoder().decode(CookingPreferences.self, from: Data(allOld.utf8))
+        XCTAssertEqual(all.dietaryPreferences, [.noRestrictions]) // normalized: none wins
+
+        // Raw values are the wire format: pin them.
+        XCTAssertEqual(DietaryPreference.vegetarian.rawValue, "vegetarian")
+        XCTAssertEqual(DietaryPreference.glutenFree.rawValue, "glutenFree")
+        XCTAssertEqual(DietaryPreference.dairyFree.rawValue, "dairyFree")
+        XCTAssertEqual(DietaryPreference.noRestrictions.rawValue, "noRestrictions")
+    }
+
     func testLegacyRegionFieldIsIgnoredOnDecode() {
         // A blob from before this change carried a single "region" key. Decoding
         // must succeed and simply drop it — the user re-picks country + area type.

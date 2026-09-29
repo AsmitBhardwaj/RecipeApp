@@ -57,7 +57,7 @@ final class BudgetPlanModelTests: XCTestCase {
         XCTAssertEqual(model.phase, .results)
         XCTAssertEqual(model.swapsRemaining, 3)
         XCTAssertEqual(model.total, 50)
-        XCTAssertFalse(model.showPaywall)
+        XCTAssertFalse(model.showTeaser)
     }
 
     func testProAccountHasNoPill() async {
@@ -79,7 +79,7 @@ final class BudgetPlanModelTests: XCTestCase {
         for error in [BudgetPlanError.freePlanUsed, .proRequired] {
             let model = makeModel(generate: { _, _, _, _, _ in throw error })
             await model.generatePlan()
-            XCTAssertTrue(model.showPaywall)
+            XCTAssertTrue(model.showTeaser)
             XCTAssertEqual(model.phase, .setup, "back to setup, never a blank screen")
         }
     }
@@ -122,7 +122,7 @@ final class BudgetPlanModelTests: XCTestCase {
         )
         await model.generatePlan()
         await model.swapMeal(at: 0)
-        XCTAssertTrue(model.showPaywall)
+        XCTAssertTrue(model.showTeaser)
         XCTAssertEqual(model.recipes[0].recipe.recipeId, "m1", "meal untouched")
         XCTAssertNil(model.swapFailure)
     }
@@ -141,7 +141,7 @@ final class BudgetPlanModelTests: XCTestCase {
         await model.swapMeal(at: 2)
         XCTAssertEqual(model.swapFailure?.message, "Couldn't find a swap that fits — try again.")
         XCTAssertEqual(model.swapsRemaining, 3, "no swap consumed")
-        XCTAssertFalse(model.showPaywall)
+        XCTAssertFalse(model.showTeaser)
 
         await model.retrySwap()
         XCTAssertNil(model.swapFailure)
@@ -287,7 +287,7 @@ final class BudgetPlanModelTests: XCTestCase {
         XCTAssertTrue(pairs.isEmpty)
     }
 
-    func testNewPlanOnFreePlanOpensPaywallWithoutGenerating() async {
+    func testNewPlanOnFreePlanOpensTeaserWithoutGenerating() async {
         var generateCalls = 0
         let model = BudgetPlanModel(
             householdSize: 2, dietaryPreferences: [], pantryNames: { [] },
@@ -296,21 +296,21 @@ final class BudgetPlanModelTests: XCTestCase {
         )
         await model.generatePlan()
         model.newPlan()
-        XCTAssertTrue(model.showPaywall)
+        XCTAssertTrue(model.showTeaser)
         XCTAssertEqual(model.phase, .results)
         XCTAssertEqual(generateCalls, 1, "no generate just to get a 403")
 
         // Dismissed without subscribing: stay on the plan.
-        model.paywallDismissed(isPro: false)
+        model.teaserClosed(isPro: false)
         XCTAssertEqual(model.phase, .results)
-        XCTAssertFalse(model.showPaywall)
+        XCTAssertFalse(model.showTeaser)
     }
 
-    func testNewPlanFromPaywallContinuesToSetupIfTheyBecomePro() async {
+    func testNewPlanFromTeaserContinuesToSetupIfTheyBecomePro() async {
         let model = makeModel(generate: { _, _, _, _, _ in self.response(swaps: 3) })
         await model.generatePlan()
         model.newPlan()
-        model.paywallDismissed(isPro: true)
+        model.teaserClosed(isPro: true)
         XCTAssertEqual(model.phase, .setup)
     }
 
@@ -319,7 +319,7 @@ final class BudgetPlanModelTests: XCTestCase {
         await model.generatePlan()
         model.newPlan()
         XCTAssertEqual(model.phase, .setup)
-        XCTAssertFalse(model.showPaywall)
+        XCTAssertFalse(model.showTeaser)
     }
 
     func testV1ShapedOptionsAreEmptyByDefault() async {
@@ -327,5 +327,173 @@ final class BudgetPlanModelTests: XCTestCase {
         let model = makeModel(generate: { _, _, _, _, options in received = options; return self.response() })
         await model.generatePlan()
         XCTAssertEqual(received, BudgetPlanOptions.none)
+    }
+
+    // MARK: Loading hold + Platter Pro teaser
+
+    private func teaserModel(
+        isPro: Bool = false,
+        swaps: Int? = 3,
+        store: PaywallTeaserStore? = nil,
+        minimum: TimeInterval = 0,
+        clock: @escaping () -> Date = Date.init,
+        slept: @escaping (TimeInterval) -> Void = { _ in },
+        generate: BudgetPlanModel.Generate? = nil,
+        swap: @escaping BudgetPlanModel.Swap = { _, _ in throw BudgetPlanError.http(500) }
+    ) -> BudgetPlanModel {
+        BudgetPlanModel(
+            householdSize: 2, dietaryPreferences: [], pantryNames: { [] },
+            generate: generate ?? { _, _, _, _, _ in self.response(swaps: swaps) },
+            swap: swap, commit: { _ in },
+            isPro: { isPro }, teaserStore: store, minimumLoadingDuration: minimum,
+            now: clock, sleep: { slept($0) }
+        )
+    }
+
+    private func teaserStore() -> PaywallTeaserStore {
+        PaywallTeaserStore(defaults: UserDefaults(suiteName: "teaser-\(UUID().uuidString)")!, userScope: "u")
+    }
+
+    func testFastResponseIsHeldToTheMinimumDuration() async {
+        var sleeps: [TimeInterval] = []
+        var t = Date(timeIntervalSince1970: 1000)
+        // generate "takes" 1.5s of the fake clock.
+        let model = teaserModel(minimum: 4, clock: { t }, slept: { sleeps.append($0) },
+                                generate: { _, _, _, _, _ in t = t.addingTimeInterval(1.5); return self.response() })
+        await model.generatePlan()
+        XCTAssertEqual(sleeps.count, 1)
+        XCTAssertEqual(sleeps[0], 2.5, accuracy: 0.001)
+        XCTAssertEqual(model.phase, .results)
+        XCTAssertTrue(model.loadingResponseArrived)
+    }
+
+    func testSlowResponseIsNotHeldFurther() async {
+        var sleeps: [TimeInterval] = []
+        var t = Date(timeIntervalSince1970: 1000)
+        let model = teaserModel(minimum: 4, clock: { t }, slept: { sleeps.append($0) },
+                                generate: { _, _, _, _, _ in t = t.addingTimeInterval(9); return self.response() })
+        await model.generatePlan()
+        XCTAssertTrue(sleeps.isEmpty)
+        XCTAssertEqual(model.phase, .results)
+    }
+
+    func testErrorsSkipTheMinimumHold() async {
+        var sleeps: [TimeInterval] = []
+        let model = teaserModel(minimum: 4, slept: { sleeps.append($0) },
+                                generate: { _, _, _, _, _ in throw BudgetPlanError.offline })
+        await model.generatePlan()
+        XCTAssertTrue(sleeps.isEmpty)
+        if case .failed = model.phase {} else { XCTFail("expected failed") }
+    }
+
+    func testRevealTeaserShownOncePerFreePlanAfterDelay() async {
+        var sleeps: [TimeInterval] = []
+        let store = teaserStore()
+        let model = teaserModel(store: store, slept: { sleeps.append($0) })
+        await model.generatePlan()
+        XCTAssertFalse(model.showTeaser, "not before the cards finish animating")
+        await model.presentRevealTeaserIfDue()
+        XCTAssertTrue(model.showTeaser)
+        XCTAssertEqual(sleeps.last, PaywallTeaserPolicy.revealDelay)
+        XCTAssertTrue(store.hasShown(planKey: "plan1"))
+
+        // Relaunch/restore of the same plan never shows it again.
+        model.teaserClosed(isPro: false)
+        let again = teaserModel(store: store)
+        await again.generatePlan()   // same planId "plan1"
+        await again.presentRevealTeaserIfDue()
+        XCTAssertFalse(again.showTeaser)
+        await model.presentRevealTeaserIfDue()
+        XCTAssertFalse(model.showTeaser)
+    }
+
+    func testRestoredPlanNeverShowsRevealTeaser() async {
+        let store = freshStore()
+        let first = BudgetPlanModel(
+            householdSize: 2, dietaryPreferences: [], pantryNames: { [] },
+            generate: { _, _, _, _, _ in self.response(swaps: 3) }, swap: { _, _ in throw BudgetPlanError.http(500) },
+            commit: { _ in }, savedPlanStore: store, sleep: { _ in })
+        await first.generatePlan()
+        let restored = BudgetPlanModel(
+            householdSize: 2, dietaryPreferences: [], pantryNames: { [] },
+            generate: { _, _, _, _, _ in self.response(swaps: 3) }, swap: { _, _ in throw BudgetPlanError.http(500) },
+            commit: { _ in }, savedPlanStore: store, sleep: { _ in })
+        XCTAssertEqual(restored.phase, .results)
+        await restored.presentRevealTeaserIfDue()
+        XCTAssertFalse(restored.showTeaser)
+    }
+
+    func testRevealTeaserNeverForProOrNonFreePlans() async {
+        let pro = teaserModel(isPro: true)
+        await pro.generatePlan()
+        await pro.presentRevealTeaserIfDue()
+        XCTAssertFalse(pro.showTeaser)
+
+        let paid = teaserModel(swaps: nil)   // isFree == false
+        await paid.generatePlan()
+        await paid.presentRevealTeaserIfDue()
+        XCTAssertFalse(paid.showTeaser)
+    }
+
+    func testBlockedGenerateShowsTeaserImmediately() async {
+        for error in [BudgetPlanError.freePlanUsed, .proRequired] {
+            let model = teaserModel(generate: { _, _, _, _, _ in throw error })
+            await model.generatePlan()
+            XCTAssertTrue(model.showTeaser)
+        }
+    }
+
+    func testSwapLimitShowsTeaserImmediately() async {
+        let model = teaserModel(swap: { _, _ in throw BudgetPlanError.freeSwapsUsed })
+        await model.generatePlan()
+        await model.swapMeal(at: 0)
+        XCTAssertTrue(model.showTeaser)
+        XCTAssertEqual(model.swapsRemaining, 0)
+    }
+
+    func testNewPlanOnFreePlanShowsTeaserButNeverForPro() async {
+        let free = teaserModel()
+        await free.generatePlan()
+        free.newPlan()
+        XCTAssertTrue(free.showTeaser)
+
+        let pro = teaserModel(isPro: true)
+        await pro.generatePlan()
+        pro.newPlan()
+        XCTAssertFalse(pro.showTeaser)
+        XCTAssertEqual(pro.phase, .setup)
+    }
+
+    func testTeaserCloseLandsOnYourWeekAndPurchaseClearsPill() async {
+        // Swap limit from the dinner sheet: closing dismisses teaser + sheet.
+        let model = teaserModel(swap: { _, _ in throw BudgetPlanError.freeSwapsUsed })
+        await model.generatePlan()
+        model.selectedMealIndex = 0
+        await model.swapMeal(at: 0)
+        model.teaserClosed(isPro: false)
+        XCTAssertFalse(model.showTeaser)
+        XCTAssertNil(model.selectedMealIndex)
+        XCTAssertEqual(model.phase, .results)
+        XCTAssertEqual(model.swapsRemaining, 0)
+
+        // Purchase: same landing, pill gone, does NOT jump into setup.
+        model.teaserClosed(isPro: true)
+        XCTAssertEqual(model.phase, .results)
+        XCTAssertNil(model.swapsRemaining)
+    }
+
+    func testBlockedGenerateWithAPlanOnScreenLandsOnYourWeek() async {
+        var blocked = false
+        let model = teaserModel(generate: { _, _, _, _, _ in
+            if blocked { throw BudgetPlanError.freePlanUsed }
+            return self.response()
+        })
+        await model.generatePlan()
+        blocked = true
+        await model.generatePlan()
+        XCTAssertTrue(model.showTeaser)
+        XCTAssertEqual(model.phase, .results)
+        model.teaserClosed(isPro: true)
+        XCTAssertEqual(model.phase, .results)
     }
 }

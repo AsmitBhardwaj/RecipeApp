@@ -479,3 +479,60 @@ final class PlanQuizTests: XCTestCase {
         XCTAssertEqual(restored?.hasCompletedOnboarding, true)
     }
 }
+
+final class PlanLoadingScriptTests: XCTestCase {
+    func testLinesFromFullAnswers() {
+        let prefs = CookingPreferences(
+            dietaryPreferences: [.noRestrictions], householdSize: 2,
+            foodMoods: [.comfort, .quick], appliances: [.stovetop, .microwave, .airFryer],
+            storeName: "Aldi", weeklyBudget: 75
+        )
+        XCTAssertEqual(PlanLoadingScript.answerLines(for: prefs), [
+            "2 people", "No restrictions", "Comfort food · Quick",
+            "Stovetop, microwave, air fryer", "Aldi prices",
+        ])
+        XCTAssertEqual(PlanLoadingScript.finalLine(budget: 75), "Fitting it into $75")
+    }
+
+    func testNoMoodsSingleApplianceOtherStoreAndSinglePerson() {
+        let prefs = CookingPreferences(
+            dietaryPreferences: [.vegetarian, .glutenFree], householdSize: 1,
+            appliances: [.oven], storeName: PlanStore.otherName
+        )
+        XCTAssertEqual(PlanLoadingScript.answerLines(for: prefs), ["1 person", "Vegetarian, Gluten-free", "Oven"])
+    }
+
+    func testSkippedQuizStillHasPeopleAndDiet() {
+        XCTAssertEqual(PlanLoadingScript.answerLines(for: CookingPreferences()), ["2 people", "No restrictions"])
+    }
+
+    func testRemainingHold() {
+        let t0 = Date(timeIntervalSince1970: 100)
+        XCTAssertEqual(PlanLoadingTiming.remainingHold(started: t0, now: t0.addingTimeInterval(1.5)), 2.5, accuracy: 0.001)
+        XCTAssertEqual(PlanLoadingTiming.remainingHold(started: t0, now: t0.addingTimeInterval(4)), 0)
+        XCTAssertEqual(PlanLoadingTiming.remainingHold(started: t0, now: t0.addingTimeInterval(20)), 0)
+        XCTAssertEqual(PlanLoadingTiming.minimumDuration, 4)
+    }
+
+    func testTeaserPolicy() {
+        let none: (String) -> Bool = { _ in false }
+        XCTAssertTrue(PaywallTeaserPolicy.shouldShow(.freePlanReveal(planKey: "a"), isPro: false, alreadyShown: none))
+        XCTAssertFalse(PaywallTeaserPolicy.shouldShow(.freePlanReveal(planKey: "a"), isPro: false, alreadyShown: { $0 == "a" }))
+        XCTAssertFalse(PaywallTeaserPolicy.shouldShow(.freePlanReveal(planKey: "a"), isFreePlan: false, isPro: false, alreadyShown: none))
+        for trigger in [PaywallTeaserTrigger.freePlanReveal(planKey: "a"), .newPlanOnFreePlan] {
+            XCTAssertFalse(PaywallTeaserPolicy.shouldShow(trigger, isPro: true, alreadyShown: none))
+        }
+        XCTAssertTrue(PaywallTeaserPolicy.shouldShow(.freePlanUsed, isPro: false, alreadyShown: none))
+        XCTAssertTrue(PaywallTeaserPolicy.shouldShow(.freeSwapsUsed, isPro: false, alreadyShown: none))
+        XCTAssertTrue(PaywallTeaserPolicy.shouldShow(.newPlanOnFreePlan, isPro: false, alreadyShown: none))
+    }
+
+    func testTeaserStorePersistsPerAccount() {
+        let d = UserDefaults(suiteName: "teaser-\(UUID().uuidString)")!
+        let a = PaywallTeaserStore(defaults: d, userScope: "a")
+        a.markShown(planKey: "p1")
+        XCTAssertTrue(PaywallTeaserStore(defaults: d, userScope: "a").hasShown(planKey: "p1"))
+        XCTAssertFalse(PaywallTeaserStore(defaults: d, userScope: "b").hasShown(planKey: "p1"))
+        XCTAssertFalse(a.hasShown(planKey: "p2"))
+    }
+}
