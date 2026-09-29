@@ -50,6 +50,135 @@ struct FoodStickerView: View {
     }
 }
 
+// MARK: - Action buttons
+
+/// The one button system for this flow: 52pt tall, 16pt continuous corners, 17pt
+/// semibold (scales with Dynamic Type), single-line label, press feedback (scale
+/// 0.97 + slight fade) and a light haptic on tap.
+struct PlanActionButton: View {
+    enum Style { case filled, outlined, tinted }
+
+    let title: String
+    var icon: String?
+    var style: Style = .filled
+    /// Inline spinner in place of the icon; the caller passes the loading title.
+    var isLoading = false
+    var accessibilityLabel: String?
+    var accessibilityHint: String?
+    let action: () -> Void
+
+    @ScaledMetric(relativeTo: .body) private var fontSize: CGFloat = 17
+
+    private var foreground: Color { style == .filled ? .white : .accentColor }
+    private let shape = RoundedRectangle(cornerRadius: 16, style: .continuous)
+
+    var body: some View {
+        Button {
+            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+            action()
+        } label: {
+            HStack(spacing: 6) {
+                if isLoading {
+                    ProgressView().tint(foreground)
+                } else if let icon {
+                    Image(systemName: icon).accessibilityHidden(true)
+                }
+                Text(title)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.9)
+            }
+            .font(.system(size: fontSize, weight: .semibold))
+            .foregroundStyle(foreground)
+            .padding(.horizontal, 10)
+            .frame(maxWidth: .infinity, minHeight: 52)
+            .background {
+                switch style {
+                case .filled: shape.fill(Color.accentColor)
+                case .tinted: shape.fill(Color.planSelectedTint)
+                case .outlined:
+                    shape.fill(Color.surface)
+                    shape.strokeBorder(Color.accentColor, lineWidth: 1.5)
+                }
+            }
+            .contentShape(shape)
+        }
+        .buttonStyle(PlanPressStyle())
+        .accessibilityLabel(accessibilityLabel ?? title)
+        .accessibilityHint(accessibilityHint ?? "")
+    }
+}
+
+private struct PlanPressStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed ? 0.97 : 1)
+            .opacity(configuration.isPressed ? 0.85 : 1)
+            .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
+    }
+}
+
+/// Two side-by-side children split `leadingShare` / rest with a fixed gap. When
+/// asked for its ideal size it reports the width both labels need, so wrapping it
+/// in `ViewThatFits` falls back to a vertical stack at large text sizes.
+private struct SplitRow: Layout {
+    var leadingShare: CGFloat = 0.6
+    var spacing: CGFloat = 12
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        guard subviews.count == 2 else { return .zero }
+        let height = subviews.map { $0.sizeThatFits(.unspecified).height }.max() ?? 0
+        if let width = proposal.width { return CGSize(width: width, height: height) }
+        let a = subviews[0].sizeThatFits(.unspecified).width
+        let b = subviews[1].sizeThatFits(.unspecified).width
+        // Labels may shrink to 0.9 (minimumScaleFactor) before we give up and stack.
+        let usable = max(a * 0.92 / leadingShare, b * 0.92 / (1 - leadingShare))
+        return CGSize(width: usable + spacing, height: height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        guard subviews.count == 2 else { return }
+        let usable = bounds.width - spacing
+        let w0 = usable * leadingShare
+        subviews[0].place(at: CGPoint(x: bounds.minX, y: bounds.minY), anchor: .topLeading,
+                          proposal: ProposedViewSize(width: w0, height: bounds.height))
+        subviews[1].place(at: CGPoint(x: bounds.minX + w0 + spacing, y: bounds.minY), anchor: .topLeading,
+                          proposal: ProposedViewSize(width: usable - w0, height: bounds.height))
+    }
+}
+
+/// A soft highlight sweeping across a card (Reduce Motion: a static tint).
+private struct Shimmer: ViewModifier {
+    let active: Bool
+    @State private var phase: CGFloat = -1
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    func body(content: Content) -> some View {
+        content.overlay {
+            if active {
+                GeometryReader { geo in
+                    if reduceMotion {
+                        Color.accentColor.opacity(0.06)
+                    } else {
+                        LinearGradient(
+                            colors: [.clear, Color.accentColor.opacity(0.14), .clear],
+                            startPoint: .leading, endPoint: .trailing
+                        )
+                        .frame(width: geo.size.width * 0.6)
+                        .offset(x: phase * geo.size.width)
+                        .onAppear {
+                            phase = -0.6
+                            withAnimation(.linear(duration: 1.2).repeatForever(autoreverses: false)) { phase = 1.0 }
+                        }
+                    }
+                }
+                .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+            }
+        }
+    }
+}
+
 // MARK: - Results
 
 struct BudgetResultsView: View {
@@ -82,10 +211,13 @@ struct BudgetResultsView: View {
             }
             .padding(.horizontal, 24)
             .padding(.top, 8)
-            .padding(.bottom, 16)
+            .padding(.bottom, 32)   // last card scrolls fully clear of the bar
             .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .safeAreaInset(edge: .bottom) { bottomBar }
+        #if DEBUG
+        .defaultScrollAnchor(ProcessInfo.processInfo.arguments.contains("-debugScrollBottom") ? .bottom : .top)
+        #endif
+        .safeAreaInset(edge: .bottom, spacing: 0) { bottomBar }
         .overlay(alignment: .top) {
             if model.showFreeSavedToast {
                 Text("Your free week is saved to your recipes")
@@ -129,12 +261,15 @@ struct BudgetResultsView: View {
                 Spacer(minLength: 8)
                 Button { model.newPlan() } label: {
                     Label("New plan", systemImage: "plus")
-                        .font(.system(size: 15, weight: .semibold))
+                        .font(.system(size: 14, weight: .semibold))
                         .foregroundStyle(Color.accentColor)
-                        .frame(minHeight: 44)
+                        .padding(.horizontal, 14)
+                        .frame(height: 36)
+                        .background(Color.planSelectedTint, in: Capsule())
+                        .frame(minHeight: 44)          // keep a 44pt tap target
                         .contentShape(Rectangle())
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(PlanPressStyle())
                 .accessibilityLabel("New plan")
                 .accessibilityHint(model.swapsRemaining != nil ? "Opens Platter Pro" : "Starts a new plan")
             }
@@ -168,41 +303,41 @@ struct BudgetResultsView: View {
     // MARK: Sticky bar
 
     private var bottomBar: some View {
-        HStack(spacing: 12) {
-            Button { model.showGrocery = true } label: {
-                Text("Grocery list")
-                    .font(.system(size: 17, weight: .semibold))
-                    .foregroundStyle(Color.accentColor)
-                    .frame(maxWidth: .infinity, minHeight: 56)
-                    .overlay {
-                        RoundedRectangle(cornerRadius: 18, style: .continuous)
-                            .strokeBorder(Color.accentColor, lineWidth: 2)
-                    }
-                    .contentShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Grocery list")
-            .accessibilityHint("Shows the ingredients to buy for this plan")
-
-            Button {
-                if model.weekAdded { onOpenMealPlan() } else { model.addWeekToMealPlan() }
-            } label: {
-                Text(model.weekAdded ? "Added to Meal Plan ✓" : "Add week to Meal Plan")
-                    .font(.system(size: 17, weight: .semibold))
-                    .foregroundStyle(Color.white)
-                    .multilineTextAlignment(.center)
-                    .minimumScaleFactor(0.8)
-                    .lineLimit(2)
-                    .frame(maxWidth: .infinity, minHeight: 56)
-                    .background(Color.accentColor, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel(model.weekAdded ? "Added to Meal Plan" : "Add week to Meal Plan")
-            .accessibilityHint(model.weekAdded ? "Opens your Meal Plan" : "Adds these dinners to open days in your Meal Plan")
+        let added = model.weekAdded
+        let grocery = PlanActionButton(
+            title: "Grocery list", icon: "cart", style: .outlined,
+            accessibilityHint: "Shows the ingredients to buy for this plan"
+        ) { model.showGrocery = true }
+        let primary = PlanActionButton(
+            title: added ? "Added ✓" : "Add to Meal Plan",
+            icon: added ? nil : "calendar.badge.plus",
+            style: added ? .tinted : .filled,
+            accessibilityLabel: added ? "Added to Meal Plan" : "Add to Meal Plan",
+            accessibilityHint: added ? "Opens your Meal Plan" : "Adds these dinners to open days in your Meal Plan"
+        ) {
+            if added { onOpenMealPlan() } else { model.addWeekToMealPlan() }
+        }
+        return ViewThatFits(in: .horizontal) {
+            // ~60% primary / ~40% secondary, 12pt gap.
+            SplitRow(leadingShare: 0.6, spacing: 12) { primary; grocery }
+            // Large text: stack instead of truncating.
+            VStack(spacing: 10) { primary; grocery }
         }
         .padding(.horizontal, 24)
         .padding(.vertical, 12)
         .background(Color.appBackground)
+        .overlay(alignment: .top) {
+            // Hairline divider, with a soft white fade above it so cards scrolling
+            // under the bar don't cut off harshly.
+            ZStack(alignment: .top) {
+                LinearGradient(colors: [Color.appBackground.opacity(0), Color.appBackground],
+                               startPoint: .top, endPoint: .bottom)
+                    .frame(height: 24)
+                    .offset(y: -24)
+                    .allowsHitTesting(false)
+                Rectangle().fill(Color.hairline).frame(height: 1)
+            }
+        }
     }
 }
 
@@ -278,14 +413,10 @@ private struct DinnerCard: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 Spacer(minLength: 8)
-                if isSwapping {
-                    ProgressView().tint(Color.accentColor)
-                } else {
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(Color.textSecondary)
-                        .accessibilityHidden(true)
-                }
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(Color.textSecondary)
+                    .accessibilityHidden(true)
             }
             .padding(14)
             .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
@@ -293,7 +424,8 @@ private struct DinnerCard: View {
             .overlay {
                 RoundedRectangle(cornerRadius: 18, style: .continuous).strokeBorder(Color.hairline, lineWidth: 1)
             }
-            .opacity(isSwapping ? 0.55 : 1)
+            .modifier(Shimmer(active: isSwapping))
+            .opacity(isSwapping ? 0.8 : 1)
             .contentShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
         }
         .buttonStyle(.plain)
@@ -428,8 +560,6 @@ private struct DinnerSheet: View {
             .padding(.top, 28)
             .padding(.bottom, 24)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .opacity(swapping ? 0.6 : 1)
-            .animation(.easeInOut(duration: 0.2), value: swapping)
         }
     }
 
@@ -458,61 +588,29 @@ private struct DinnerSheet: View {
     }
 
     private func actions(_ planned: PlannedRecipe, index: Int, swapping: Bool) -> some View {
-        VStack(spacing: 12) {
-            Button {
-                Task { await model.swapMeal(at: index) }
-            } label: {
-                HStack(spacing: 8) {
-                    if swapping {
-                        ProgressView().tint(Color.accentColor)
-                    } else {
-                        Image(systemName: "arrow.triangle.2.circlepath")
-                            .accessibilityHidden(true)
-                    }
-                    Text(swapping ? "Swapping…" : "Swap this dinner")
-                }
-                .font(.system(size: 17, weight: .semibold))
-                .foregroundStyle(Color.accentColor)
-                .frame(maxWidth: .infinity, minHeight: 56)
-                .overlay {
-                    RoundedRectangle(cornerRadius: 18, style: .continuous)
-                        .strokeBorder(Color.accentColor, lineWidth: 2)
-                }
-                .contentShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-            }
-            .buttonStyle(.plain)
+        let added = model.isAdded(planned.id)
+        return VStack(spacing: 10) {
+            PlanActionButton(
+                title: swapping ? "Finding a swap…" : "Swap this dinner",
+                icon: "arrow.triangle.2.circlepath", style: .outlined, isLoading: swapping,
+                accessibilityLabel: swapping ? "Finding a swap" : "Swap this dinner"
+            ) { Task { await model.swapMeal(at: index) } }
             .disabled(model.isSwapping)
-            .accessibilityLabel(swapping ? "Swapping this dinner" : "Swap this dinner")
 
-            let added = model.isAdded(planned.id)
-            Button {
-                model.addDinnerToMealPlan(at: index)
-            } label: {
-                HStack(spacing: 8) {
-                    Image(systemName: added ? "checkmark" : "calendar.badge.plus")
-                        .accessibilityHidden(true)
-                    Text(added ? "Added ✓" : "Add to Meal Plan")
-                }
-                .font(.system(size: 17, weight: .semibold))
-                .foregroundStyle(Color.accentColor)
-                .frame(maxWidth: .infinity, minHeight: 56)
-                .background(Color.planSelectedTint, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-            }
-            .buttonStyle(.plain)
+            PlanActionButton(
+                title: added ? "Added ✓" : "Add to Meal Plan",
+                icon: added ? nil : "calendar.badge.plus", style: added ? .tinted : .outlined,
+                accessibilityLabel: added ? "Added to Meal Plan" : "Add to Meal Plan"
+            ) { model.addDinnerToMealPlan(at: index) }
             .disabled(added || swapping)
-            .accessibilityLabel(added ? "Added to Meal Plan" : "Add to Meal Plan")
 
+            // Primary action last.
             if !planned.recipe.instructions.isEmpty {
-                Button { cooking = true } label: {
-                    Text("Start cooking")
-                        .font(.system(size: 17, weight: .semibold))
-                        .foregroundStyle(Color.white)
-                        .frame(maxWidth: .infinity, minHeight: 56)
-                        .background(Color.accentColor, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-                }
-                .buttonStyle(.plain)
+                PlanActionButton(
+                    title: "Start cooking", icon: "flame", style: .filled,
+                    accessibilityLabel: "Start cooking \(planned.recipe.title)"
+                ) { cooking = true }
                 .disabled(swapping)
-                .accessibilityLabel("Start cooking \(planned.recipe.title)")
             }
         }
     }

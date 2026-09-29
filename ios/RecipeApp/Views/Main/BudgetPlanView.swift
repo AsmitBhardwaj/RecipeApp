@@ -420,6 +420,17 @@ struct BudgetPlanContainer: View {
                 if autoGenerate && !didAutoGenerate {
                     didAutoGenerate = true
                     await model.generatePlan()
+                    #if DEBUG
+                    // Screenshot harness: `-debugOpenSheet` opens the first dinner's
+                    // sheet; `-debugSwapping` also starts a (slow, stubbed) swap.
+                    let args = ProcessInfo.processInfo.arguments
+                    if args.contains("-debugOpenSheet") || args.contains("-debugSwapping") {
+                        model.selectedMealIndex = 0
+                    }
+                    if args.contains("-debugSwapping") || args.contains("-debugSwapCard") {
+                        Task { await model.swapMeal(at: 0) }
+                    }
+                    #endif
                 }
             }
     }

@@ -155,7 +155,7 @@ struct RecipeApp: App {
                     dietary: [],
                     pantryNames: { ["rice", "eggs", "spinach"] },
                     generate: { _, _, _, _, _ in Self.sampleBudgetPlan(free: mode != "budgetPro") },
-                    swap: { _, index in Self.sampleSwap(index: index, free: mode != "budgetPro") },
+                    swap: { _, index in await Self.sampleSwap(index: index, free: mode != "budgetPro") },
                     commit: { _ in },
                     onOpenMealPlan: {},
                     autoGenerate: mode == "budgetResults"
@@ -187,12 +187,15 @@ struct RecipeApp: App {
                 confidence: nil, sourceType: .generated, imageUrl: nil, imageSource: .none, transcript: nil
             )
         }
-        let items: [(String, String, Double, String)] = [
+        var items: [(String, String, Double, String)] = [
             ("b1", "Chickpea & Spinach Curry", 8, "High fiber, veg-forward"),
             ("b2", "Egg Fried Rice", 6, "Quick, balanced"),
             ("b3", "Lentil Soup", 7, "High protein, low fat"),
             ("b4", "Veggie Pasta Bake", 9, "Comfort, veg-forward"),
         ]
+        if ProcessInfo.processInfo.arguments.contains("-debugSevenDinners") {
+            items += [("b5", "Beef Tacos", 8, ""), ("b6", "Garlic Butter Shrimp", 9, ""), ("b7", "Greek Salad", 6, "")]
+        }
         let planned = items.map { id, title, cost, health in
             PlannedRecipe(recipe: recipe(id, title), estimatedCost: CostEstimate(amount: cost), healthSignal: health,
                           equipmentUsed: id == "b2" ? ["no_cook"] : ["stovetop", "oven"])
@@ -203,7 +206,10 @@ struct RecipeApp: App {
         )
     }
 
-    private static func sampleSwap(index: Int, free: Bool) -> BudgetSwapResponse {
+    private static func sampleSwap(index: Int, free: Bool) async -> BudgetSwapResponse {
+        if ProcessInfo.processInfo.arguments.contains("-debugSwapping") || ProcessInfo.processInfo.arguments.contains("-debugSwapCard") {
+            try? await Task.sleep(nanoseconds: 600_000_000_000)   // hold the mid-swap state
+        }
         let base = sampleBudgetPlan(free: free)
         let meal = PlannedRecipe(
             recipe: Recipe(
