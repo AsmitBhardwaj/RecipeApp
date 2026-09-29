@@ -52,21 +52,13 @@ public struct PlannedRecipe: Codable, Identifiable, Hashable {
     /// from a v1.0 server response, so it decodes to `[]`. Use `equipmentLabels`
     /// for display — `no_cook` is never an appliance.
     public let equipmentUsed: [String]
-    /// Stock photo for the meal and its Pexels credit. Both absent from an older
-    /// server response, so they decode to nil (callers fall back to the tile).
-    public let imageUrl: String?
-    public let photoCredit: PhotoCredit?
-
     public var id: String { recipe.recipeId }
 
-    public init(recipe: Recipe, estimatedCost: CostEstimate, healthSignal: String, equipmentUsed: [String] = [],
-                imageUrl: String? = nil, photoCredit: PhotoCredit? = nil) {
+    public init(recipe: Recipe, estimatedCost: CostEstimate, healthSignal: String, equipmentUsed: [String] = []) {
         self.recipe = recipe
         self.estimatedCost = estimatedCost
         self.healthSignal = healthSignal
         self.equipmentUsed = equipmentUsed
-        self.imageUrl = imageUrl
-        self.photoCredit = photoCredit
     }
 
     enum CodingKeys: String, CodingKey {
@@ -74,8 +66,6 @@ public struct PlannedRecipe: Codable, Identifiable, Hashable {
         case estimatedCost = "estimated_cost"
         case healthSignal = "health_signal"
         case equipmentUsed = "equipment_used"
-        case imageUrl = "image_url"
-        case photoCredit = "photo_credit"
     }
 
     public init(from decoder: Decoder) throws {
@@ -84,14 +74,16 @@ public struct PlannedRecipe: Codable, Identifiable, Hashable {
         estimatedCost = try c.decode(CostEstimate.self, forKey: .estimatedCost)
         healthSignal = try c.decodeIfPresent(String.self, forKey: .healthSignal) ?? ""
         equipmentUsed = try c.decodeIfPresent([String].self, forKey: .equipmentUsed) ?? []
-        imageUrl = try c.decodeIfPresent(String.self, forKey: .imageUrl)
-        photoCredit = try c.decodeIfPresent(PhotoCredit.self, forKey: .photoCredit)
     }
 
-    /// The meal's photo: the plan-level `image_url`, else the recipe's own.
+    /// The meal's stock photo. The server puts `image_url` / `photo_credit` on the
+    /// recipe itself (single source of truth); nil for plans generated before photos.
     public var photoURL: String? {
-        [imageUrl, recipe.imageUrl].lazy.compactMap { $0 }.first { !$0.isEmpty }
+        recipe.imageUrl.flatMap { $0.isEmpty ? nil : $0 }
     }
+
+    /// Pexels credit for `photoURL`, when the server supplied one.
+    public var photoCredit: PhotoCredit? { recipe.photoCredit }
 
     /// Display labels for `equipmentUsed`, de-duplicated and in server order.
     public var equipmentLabels: [String] { BudgetEquipment.labels(for: equipmentUsed) }
