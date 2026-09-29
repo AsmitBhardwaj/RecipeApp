@@ -210,6 +210,7 @@ class BudgetPlanEndpointTests(unittest.TestCase):
                 recipe=LLMRecipe(title="Fried Rice", ingredients=[], instructions=[]),
                 baseline_cost=CostEstimate(amount=10.0, currency="USD", basis="llm-v1"),
                 health_signal="Veg-forward",
+                equipment_used=["stovetop"],
             )
         ]
 
@@ -220,15 +221,21 @@ class BudgetPlanEndpointTests(unittest.TestCase):
                 recipe=LLMRecipe(title=f"{title}-{i}", ingredients=[], instructions=[]),
                 baseline_cost=CostEstimate(amount=float(a), currency="USD", basis="llm-v1"),
                 health_signal=health,
+                equipment_used=["stovetop"],
             )
             for i, a in enumerate(amounts)
         ]
 
-    def test_free_user_cannot_call_endpoint(self) -> None:
-        # No stored entitlement → 403 pro_required, before any generation.
-        r = self.client.post("/v1/meal-plan/budget", json=self._body(), headers=self._headers(pro=False))
+    def test_free_user_with_free_plan_spent_cannot_call_endpoint(self) -> None:
+        # A non-Pro account whose free plan is already used gets the paywall
+        # response (403 pro_required — what v1.0 opens its paywall on), before any
+        # generation. (The first free plan is covered in test_budget_planner.py.)
+        db.claim_free_plan(self.user.id, "2026-01-01T00:00:00+00:00")
+        with mock.patch("app.mealplan.llm.generate_budget_plan") as gen:
+            r = self.client.post("/v1/meal-plan/budget", json=self._body(), headers=self._headers(pro=False))
         self.assertEqual(r.status_code, 403)
         self.assertEqual(r.json()["detail"]["error_code"], "pro_required")
+        gen.assert_not_called()
 
     def test_below_minimum_is_rejected_even_if_client_missed_it(self) -> None:
         # household 4 → min $50 (3×4×4=48 → $50); a client that sent $40 anyway is

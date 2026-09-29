@@ -27,8 +27,11 @@ from . import config, db
 
 _MINUTE = 60
 _HOUR = 3600
-# Largest window we keep; rows older than this can never be read again.
-_MAX_WINDOW = _HOUR
+# Largest window we keep; rows older than this can never be read again. This table
+# is SHARED with the daily burst caps (app/burstlimit.py), whose bucket starts at
+# UTC midnight — up to a day old — so the horizon must cover a day, not just this
+# module's own (≤ hour) windows, or the sweep silently resets the daily caps.
+_MAX_WINDOW = 86400
 # Chance a given check also runs a global cleanup sweep. A beta has few distinct
 # identities, so the table stays tiny without needing a scheduler/cron.
 _CLEANUP_PROBABILITY = 0.01

@@ -109,6 +109,7 @@ def estimate_cost_usd(
 class _Ctx:
     account_id: Optional[str]
     call_type: str
+    plan_id: Optional[str] = None
 
 
 _current: ContextVar[Optional[_Ctx]] = ContextVar("llm_cost_ctx", default=None)
@@ -116,17 +117,18 @@ _current: ContextVar[Optional[_Ctx]] = ContextVar("llm_cost_ctx", default=None)
 # The call categories the operator asked to track. Kept as an allowlist so a
 # typo in a `track(...)` call is caught loudly rather than silently logged under
 # a bogus category.
-CALL_TYPES = frozenset({"import", "budget_plan", "pantry_suggestion"})
+CALL_TYPES = frozenset({"import", "budget_plan", "budget_swap", "pantry_suggestion"})
 
 
 @contextmanager
-def track(account_id: Optional[str], call_type: str) -> Iterator[None]:
+def track(account_id: Optional[str], call_type: str, plan_id: Optional[str] = None) -> Iterator[None]:
     """Attribute every LLM call made inside this block to `account_id` /
-    `call_type`. Nestable and re-entrant (the inner context wins, then the outer
-    is restored). `account_id` may be None for an unauthenticated import."""
+    `call_type` (and, for Plan on a Budget, the `plan_id` it belongs to). Nestable
+    and re-entrant (the inner context wins, then the outer is restored).
+    `account_id` may be None for an unauthenticated import."""
     if call_type not in CALL_TYPES:
         raise ValueError(f"unknown llm_cost call_type: {call_type!r}")
-    token = _current.set(_Ctx(account_id=account_id, call_type=call_type))
+    token = _current.set(_Ctx(account_id=account_id, call_type=call_type, plan_id=plan_id))
     try:
         yield
     finally:
@@ -165,6 +167,7 @@ def record_usage(model: str, usage) -> None:
             completion_tokens=completion_tokens,
             estimated_cost_usd=cost,
             created_at=datetime.now(timezone.utc).isoformat(),
+            plan_id=ctx.plan_id,
         )
     except Exception as exc:  # noqa: BLE001 — accounting must never break a call
         _log.warning("failed to record LLM cost event: %s", exc)

@@ -1,6 +1,12 @@
 # Budget Meal Planning — Feature Plan
 
-**Status:** Planning. The three open questions and the C1 sequencing are now
+**Status (updated 2026-09-28):** the backend is **built** and this doc describes
+what it actually does — see [§3.6](#36-backend-as-built-planner-revamp) for the
+real endpoints, store tier, appliances, ledger, swap, and free plan. The sections
+below that pre-date the build keep their original planning text, except where
+they named the endpoint: it is `POST /v1/meal-plan/budget`, not `POST /v1/meal-plan/budget`.
+
+*(Original planning status, kept for history:)* The three open questions and the C1 sequencing are now
 **SETTLED** (see [§4](#4-settled-decisions-was-open-questions) and
 [C1](#complications), locked 2026-09-04). **Do not write feature code until the
 [§6.1](#61-hard-prerequisites-close-these-before-any-implementation) blocker is
@@ -42,7 +48,7 @@ The app plans healthy meals within that budget and produces a grocery list of
    **regional cost multiplier** over a baseline estimated basket cost. Always
    presented as a labeled estimate, never store-accurate.
 2. **Meal sourcing:** **v1 is generation-first** (see [C1](#complications) — this
-   was revised from the original cache-first framing). `POST /v1/plan` always
+   was revised from the original cache-first framing). `POST /v1/meal-plan/budget` always
    generates via budget/On-Hand-aware LLM generation; cache-first querying is a
    usage-gated fast-follow, not a v1 concern.
 3. **On Hand is persistent per-user state** the user maintains (add/remove).
@@ -104,13 +110,14 @@ planned as such). Only the per-recipe cost/health *annotations* are additive
 
 ### 3.2 Backend — API endpoints
 
-- `POST /v1/plan` (new) — body: `{ budget, currency?, location, on_hand: [...],
-  constraints?: { days, slots, dietary/health } }`. Returns: per-slot recipe
-  (**with display snapshot** so the client renders without a vault endpoint — same
-  reason `MealPlanEntry` denormalizes), per-recipe + total **estimated** cost
-  (clearly labeled), and the **missing-ingredients grocery list** (planned
-  ingredients minus On Hand). App-key gated + rate-limited like `/v1/jobs` — this
-  fans out to multiple LLM generations, so **guard cost hard**.
+- `POST /v1/meal-plan/budget` — *as built:* see [§3.6](#36-backend-as-built-planner-revamp)
+  for the real request/response. (Original plan: body `{ budget, currency?,
+  location, on_hand, constraints }` returning per-slot recipes with display
+  snapshots, labeled estimated costs, and a missing-ingredients list. The
+  missing-ingredients list is computed client-side, not by the endpoint.)
+  Rate-limited and burst/spend-capped like `/v1/jobs` — this fans out to LLM
+  generation, so **guard cost hard**.
+- `POST /v1/meal-plan/budget/{plan_id}/swap` — replace one dinner (§3.6).
 - **On Hand:** no new endpoints — it flows through existing `/v1/sync/*` push/pull.
   Only add `on_hand` to the server `SYNC_COLLECTIONS` allowlist.
 - **Commit accepted recipes into `meal_plan` client-side** (create
@@ -119,7 +126,7 @@ planned as such). Only the per-recipe cost/health *annotations* are additive
 ### 3.3 Meal sourcing — generation-first (v1)
 
 Per the settled C1 revision, **v1 does not attempt a constraint-based cache
-lookup.** For each meal slot, `POST /v1/plan` runs **budget/On-Hand-aware LLM
+lookup.** For each meal slot, `POST /v1/meal-plan/budget` runs **budget/On-Hand-aware LLM
 generation** (extending `generate_generic_recipe` with budget + On-Hand context
 and new prompt framing). Every recipe generated this way is:
 
@@ -151,6 +158,12 @@ regional_multiplier(location)`, where:
   `app/pipeline/regional_cost.py`; the final multiplier is rounded to two decimals.
   Always present cost to the user as an **estimate/range**.
 
+  **Store tier (added after v1.0):** a request may carry `store_tier`
+  (`budget 0.85 / standard 1.00 / premium 1.30`, `STORE_TIER_MODIFIERS`). When
+  present, `multiplier = country_baseline × store_tier` and **`area_type` is
+  ignored**; when absent (the v1.0 client) the two-part formula above applies
+  unchanged.
+
 **Pre-ship sanity check (replaces the cancelled spike):** confirm the static
 table's **ordering is sane** — a high-cost country/city (e.g. Switzerland/city)
 must rank above the US suburb baseline, which must rank above a low-cost
@@ -181,6 +194,80 @@ feel wrong post-launch.
   alpha-2 code) and **area type** (City / Suburb / Rural). They live on
   `CookingPreferences` (device-local) and are sent as `country` + `area_type` on
   the budget request. CoreLocation optional/not used.
+
+### 3.6 Backend as built (planner revamp)
+
+All in `app/mealplan.py` (endpoints), `app/pipeline/llm.py` (prompts),
+`app/pipeline/regional_cost.py`, `app/db.py`. Backward compatible: a v1.0 request
+(`area_type`, none of the fields below) behaves exactly as before, except that a
+non-Pro account now gets its one free plan instead of an unconditional 403.
+
+**`POST /v1/meal-plan/budget`** — generation-first, one LLM call for the week.
+
+| New optional request field | Meaning |
+|---|---|
+| `store_tier` | `budget \| standard \| premium`; replaces `area_type` in the multiplier (§3.4) |
+| `appliances` | subset of `stovetop, oven, microwave, air_fryer, slow_cooker, rice_cooker, blender, kettle`, ≥1 item when present. **Hard** constraint |
+| `food_moods` | subset of `comfort, light_fresh, spicy, quick, adventurous, high_protein`, max 3. **Soft** steer |
+
+- **Appliances.** The prompt says every dinner must be cookable using only the
+  user's appliances. Each generated recipe carries `equipment_used`; a meal
+  *violates* the constraint if that list contains anything outside the user's
+  appliances (self-reported by the model — the server checks the report, not the
+  instructions). `equipment_used` is required (≥1) and may also contain `no_cook` (a
+  dish needing no appliance), which is always allowed and never a violation; an
+  empty list counts as a violation. The existing single corrective retry now triggers on a budget
+  undershoot **or** a violation (one retry total, however many things were wrong).
+  Violations that survive it are replaced one-by-one through the single-meal path;
+  a meal that still can't be replaced is dropped, not shipped (all dropped → 502
+  `appliance_constraint_unmet`). No `appliances` → validation is skipped.
+- **Bounds** (`budget_below_minimum` / `budget_above_maximum`) and their
+  local-currency messages use whichever multiplier applies.
+- **Response** adds `plan_id` and, per recipe, `equipment_used`.
+
+**Free first plan.** Allowed if the account is Pro (`entitlements.is_pro_user`,
+including billing grace) **or** `users.free_plan_used_at` is null. The timestamp
+is set only after a plan **succeeds** (compare-and-set; failures, budget
+rejections and LLM errors never consume it — same rule as `importlimit.py`). A Pro
+plan never burns it. After that a non-Pro caller gets
+**HTTP 403** `{"error_code": "pro_required", "reason": "free_plan_used"}`. It is a
+403/`pro_required` rather than a new 402 code because the shipped v1.0 client
+(`BudgetPlanClient.swift`) opens its paywall only for exactly that pair; the
+distinction for newer clients is `reason`.
+
+**Ledger.** Every successful plan is a `budget_plans` row: `id` (uuid = the
+`plan_id`), `user_id`, `created_at`, `is_free`, `swaps_used`, `request_json` (the
+request plus the `resolved_multiplier` it was priced with), `plan_json` (current
+meals: recipe id, title, per-meal **baseline** cost, `equipment_used`), and
+`budget_baseline`. Created by `metadata.create_all`; the new columns
+(`users.free_plan_used_at`, `llm_cost_events.plan_id`) go through
+`_add_missing_columns`, so SQLite and Postgres migrate the same way as before.
+Rows are deleted with the account.
+
+**`POST /v1/meal-plan/budget/{plan_id}/swap`** — body `{ "meal_index": n }`.
+
+- Auth required; a plan that doesn't exist **or** isn't the caller's is `404`.
+- Per-meal budget (baseline space) = `budget_baseline − current total + cost of the
+  meal being replaced`, floored at `PER_DINNER_FLOOR × household`. All current
+  meal names are excluded. Household, diet, appliances (hard, validated), moods,
+  on-hand items and the **stored** multiplier are reused from the original request.
+- Exactly one replacement via `llm.generate_single_meal` (reuses the budget-plan
+  system prompt + a one-dinner addendum). It is checked for appliances, cost cap
+  and duplicate title, with one corrective attempt; if it still fails, `502
+  swap_constraint_unmet` and **no swap is consumed**.
+- Returns `{ plan_id, meal_index, meal, plan_total, currency, budget, swaps_used }`.
+- Limits: non-Pro on a free plan → max `FREE_PLAN_SWAP_LIMIT` (3) swaps, then `402
+  free_swaps_used`; non-Pro on a paid plan → `403 pro_required`; everyone →
+  `BURST_SWAP_PER_DAY` (20/day, `429 rate_limit_exceeded`) plus the usual rate
+  limit and 30-day spend cap. A swap racing another on the same plan gets `409
+  plan_changed`.
+
+**Cost accounting.** `llm_cost.track(account, call_type, plan_id)`; generation,
+the corrective retry and any per-meal replacements are `budget_plan`, swaps are
+`budget_swap`, all rows carrying the `plan_id`.
+
+**Preferences sync.** `cooking_preferences` is in `SYNC_COLLECTIONS` (opaque
+payload, like the other collections).
 
 ---
 
@@ -231,7 +318,7 @@ Ranked by impact.
   (REVISED SEQUENCING, settled).** `get_recipe_by_video_id`/`get_recipe` are
   exact-key lookups; there is no way to ask the cache for "a recipe that is cheap,
   healthy, and reuses these On-Hand items." Rather than build search/index
-  infrastructure upfront, **v1 ships generation-first**: `POST /v1/plan` always
+  infrastructure upfront, **v1 ships generation-first**: `POST /v1/meal-plan/budget` always
   generates, and every generated recipe is tagged with `baseline_cost_estimate` +
   a health signal and written to the cache — so the annotated cache builds
   organically as a byproduct of usage. **Signal for when cache-search becomes
@@ -320,7 +407,7 @@ Order = implementation order. **Nothing starts until 6.1's blocker clears.**
   check; location capture on the client.
 
 **Phase 3 (v1) — The planner** *(owner sign-off)*
-- `POST /v1/plan`: budget + location + On-Hand snapshot + constraints →
+- `POST /v1/meal-plan/budget`: budget + location + On-Hand snapshot + constraints →
   generation-first sourcing (C1), budget/On-Hand-aware generation prompt(s),
   per-recipe annotation, cost math, missing-ingredients list (with display
   snapshots).
@@ -334,6 +421,7 @@ Order = implementation order. **Nothing starts until 6.1's blocker clears.**
   Grocery List check-offs.
 - **Cache-first sourcing** (the C1 search/index layer), gated on the recurrence
   signal above.
-- Persisted plan **history** (`budget_plan` collection).
+- Plan **history UI** / listing past plans (the `budget_plans` ledger exists now;
+  nothing reads it except swap).
 - Unit conversion in the missing-ingredients math.
 - A dedicated server-side On Hand table / server-side reasoning without the client.

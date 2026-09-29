@@ -297,6 +297,7 @@ class AuthTests(unittest.TestCase):
         ).json()
         self.assertNotEqual(again["user"]["id"], uid)
 
+    @unittest.skipIf(os.getenv("TEST_DATABASE_URL"), "uses a SQLite-only CREATE TRIGGER")
     def test_delete_account_rolls_back_atomically(self):
         reg = self.client.post(
             "/auth/register", json={"email": "atomic@b.com", "password": "supersecret1"}

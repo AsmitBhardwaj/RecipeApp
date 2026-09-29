@@ -223,6 +223,11 @@ BURST_IMPORT_PER_HOUR: int = int(os.getenv("BURST_IMPORT_PER_HOUR", "30"))
 BURST_IMPORT_PER_DAY: int = int(os.getenv("BURST_IMPORT_PER_DAY", "100"))
 BURST_BUDGET_PLAN_PER_DAY: int = int(os.getenv("BURST_BUDGET_PLAN_PER_DAY", "10"))
 BURST_PANTRY_PER_DAY: int = int(os.getenv("BURST_PANTRY_PER_DAY", "20"))
+# Budget-plan meal swaps (POST /v1/meal-plan/budget/{plan_id}/swap): a per-account
+# daily ceiling that applies to Pro too. Free accounts are additionally capped per
+# plan (FREE_PLAN_SWAP_LIMIT) on their one free plan.
+BURST_SWAP_PER_DAY: int = int(os.getenv("BURST_SWAP_PER_DAY", "20"))
+FREE_PLAN_SWAP_LIMIT: int = int(os.getenv("FREE_PLAN_SWAP_LIMIT", "3"))
 
 # Device-level account-creation signal (app/devicesignal.py). A new account
 # created from a device (the client's persistent `X-User-Id`) that ALREADY

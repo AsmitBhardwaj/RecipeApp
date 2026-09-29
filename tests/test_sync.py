@@ -79,6 +79,17 @@ class SyncTests(unittest.TestCase):
         # Pulling again from the new cursor yields nothing.
         self.assertEqual(len(self._pull(pull["cursor"]).json()["changes"]), 0)
 
+    def test_cooking_preferences_collection_syncs(self):
+        payload = '{"appliances":["oven","stovetop"],"moods":["comfort"]}'
+        push = self._push(
+            [{"collection": "cooking_preferences", "item_id": "prefs", "updated_at": 100, "payload": payload}]
+        )
+        self.assertEqual(push.status_code, 200, push.text)
+        self.assertEqual(push.json()["applied"], ["prefs"])
+        changes = self._pull(0).json()["changes"]
+        self.assertEqual([(c["collection"], c["item_id"], c["payload"]) for c in changes],
+                         [("cooking_preferences", "prefs", payload)])
+
     def test_delta_pull_only_returns_new_changes(self):
         self._push([{"collection": "meal_plan", "item_id": "m1", "updated_at": 1, "payload": "{}"}])
         c1 = self._pull(0).json()["cursor"]
