@@ -534,7 +534,12 @@ RULES:
 10. Make the week varied: spread the dinners across different cuisines, let no
    more than 2 dinners share a main protein, and — when the APPLIANCES list has
    several — use different appliances from it across the week where sensible
-   instead of cooking everything in one."""
+   instead of cooking everything in one.
+11. For each recipe provide "photo_query": 2-5 words describing the finished dish
+   generically, as you would type it into a stock-photo search (e.g. "chicken
+   burrito bowl", "lentil vegetable soup"). It is used to find a stock photo of
+   the dish, so name the food itself: no brand names, no appliance, no cost or
+   diet words, no people."""
 
 # Appended when replacing ONE dinner in an existing plan (generate_single_meal).
 # Reuses every rule above; this only re-scopes rules 1 and 6 from "the week" to
@@ -556,6 +561,7 @@ Respond with ONLY a JSON object of this shape:
       "recipe": { ...the recipe object (title, servings, ingredients[], instructions[], confidence)... },
       "baseline_cost": { "amount": number, "currency": "USD", "basis": "llm-v1" },
       "health_signal": "short string",
+      "photo_query": "2-5 word generic dish description for a stock-photo search",
       "equipment_used": [at least one of "stovetop" | "oven" | "microwave" | "air_fryer" | "slow_cooker" | "rice_cooker" | "blender" | "kettle" | "no_cook"]
     }
   ]
@@ -567,6 +573,7 @@ Respond with ONLY a JSON object of this shape (ONE recipe, not a list):
   "recipe": { ...the recipe object (title, servings, ingredients[], instructions[], confidence)... },
   "baseline_cost": { "amount": number, "currency": "USD", "basis": "llm-v1" },
   "health_signal": "short string",
+  "photo_query": "2-5 word generic dish description for a stock-photo search",
   "equipment_used": [at least one of "stovetop" | "oven" | "microwave" | "air_fryer" | "slow_cooker" | "rice_cooker" | "blender" | "kettle" | "no_cook"]
 }"""
 
@@ -577,6 +584,9 @@ class BudgetPlanRecipeLLM(BaseModel):
     recipe: LLMRecipe
     baseline_cost: CostEstimate
     health_signal: str = ""
+    # 2-5 word generic dish description used only to look up a stock photo
+    # (app/pipeline/photos.py). Optional: blank falls back to the title.
+    photo_query: str = ""
     # Appliances the recipe needs (self-reported by the model; the server checks
     # it against the user's appliances — see app/mealplan.py). Required, at least
     # one: an empty list is an unverifiable claim, so the schema refuses it.

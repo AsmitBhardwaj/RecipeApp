@@ -47,8 +47,8 @@ from pydantic import BaseModel, Field
 from . import budget, burstlimit, config, db, entitlements, llm_cost, ratelimit, spendcap
 from .auth.router import current_user
 from .auth.service import User
-from .models import Appliance, CostEstimate, Equipment, FoodMood, Recipe
-from .pipeline import llm, regional_cost
+from .models import Appliance, CostEstimate, Equipment, FoodMood, PhotoCredit, Recipe
+from .pipeline import llm, photos, regional_cost
 
 router = APIRouter(prefix="/v1/meal-plan", tags=["meal-plan"])
 
@@ -324,6 +324,30 @@ def _build_recipe(item: "llm.BudgetPlanRecipeLLM") -> Recipe:
     )
 
 
+def _attach_photos(pairs: List[tuple]) -> None:
+    """Best-effort stock photos for freshly generated meals: one concurrent batch
+    (photos.fetch_photos), then image_url / photo_credit / image_source are set ON
+    the recipe. Runs after the plan is validated and before the recipe is saved, so
+    the cached and ledgered copies keep the photo. Never raises; a meal with no
+    photo is left exactly as built (image_source "none")."""
+    try:
+        queries = [(item.photo_query or recipe.title) for recipe, item in pairs]
+        results = photos.fetch_photos(queries)
+    except Exception as exc:  # noqa: BLE001 - photos must never fail a plan
+        _log.warning("plan photos skipped: %s", exc)
+        return
+    for (recipe, _item), found in zip(pairs, results):
+        if not found:
+            continue
+        recipe.image_url = found["image_url"]
+        recipe.image_source = "stock_photo"
+        recipe.photo_credit = PhotoCredit(
+            photographer=found.get("photographer"),
+            photographer_url=found.get("photographer_url"),
+            pexels_url=found.get("pexels_url"),
+        )
+
+
 def _planned(recipe: Recipe, item: "llm.BudgetPlanRecipeLLM", multiplier: float, currency: str) -> PlannedRecipe:
     estimated = CostEstimate(
         amount=round(item.baseline_cost.amount * multiplier, 2),
@@ -347,6 +371,9 @@ def _ledger_meal(recipe: Recipe, item: "llm.BudgetPlanRecipeLLM") -> dict:
         "baseline_cost": item.baseline_cost.model_dump(mode="json"),
         "health_signal": item.health_signal,
         "equipment_used": [a.value for a in item.equipment_used],
+        "image_url": recipe.image_url,
+        "image_source": recipe.image_source,
+        "photo_credit": recipe.photo_credit.model_dump(mode="json") if recipe.photo_credit else None,
     }
 
 
@@ -541,10 +568,11 @@ def plan_on_a_budget(
 
     # 6. Annotate, cache, and apply the multiplier — only for the SELECTED plan, so a
     #    discarded corrective attempt never pollutes the shared cache.
+    built = [(_build_recipe(item), item) for item in generated]
+    _attach_photos(built)  # before saving, so the cached copy keeps the photo
     planned: List[PlannedRecipe] = []
     ledger_meals: List[dict] = []
-    for item in generated:
-        recipe = _build_recipe(item)
+    for recipe, item in built:
         db.save_recipe(recipe)  # organically grows the annotated shared cache
         planned.append(_planned(recipe, item, multiplier, req.currency))
         ledger_meals.append(_ledger_meal(recipe, item))
@@ -693,6 +721,7 @@ def swap_meal(
     # 7. Commit: optimistic write so two concurrent swaps can't both apply against
     #    the same stored plan; only then cache the recipe body.
     recipe = _build_recipe(item)
+    _attach_photos([(recipe, item)])
     meals[body.meal_index] = _ledger_meal(recipe, item)
     if not db.update_budget_plan_after_swap(plan_id, json.dumps(meals), row["swaps_used"]):
         raise HTTPException(
