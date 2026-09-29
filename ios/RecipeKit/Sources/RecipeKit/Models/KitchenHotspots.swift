@@ -6,9 +6,8 @@
 //  Every rect is NORMALIZED (0–1 of the image's width/height), so the same table
 //  scales to any device and any rendered image size.
 //
-//  >>> PLACEHOLDER RECTS <<< — a 4×2 grid until the `kitchen_scene` art lands.
-//  When it does, edit ONLY `table` below (and `imageAspectRatio` if the art isn't
-//  4:3); nothing else needs to change.
+//  Rects were measured on the 1200×1490 `kitchen_scene` art. If the art changes,
+//  edit ONLY `table` below (and `imageAspectRatio` if the dimensions change).
 //
 
 import CoreGraphics
@@ -50,28 +49,32 @@ public struct NormalizedRect: Equatable, Sendable {
 }
 
 public enum KitchenHotspots {
-    /// width ÷ height of the `kitchen_scene` picture (and of its placeholder).
-    public static let imageAspectRatio: Double = 4.0 / 3.0
+    /// width ÷ height of the `kitchen_scene` picture (1200×1490).
+    public static let imageAspectRatio: Double = 1200.0 / 1490.0
 
     public struct Hotspot: Sendable {
         public let appliance: Appliance
         public let rect: NormalizedRect
-        init(_ appliance: Appliance, _ x: Double, _ y: Double, _ width: Double, _ height: Double) {
+        /// Show the selected-state name above the rect instead of below it, where
+        /// the label below would cover a neighbouring appliance.
+        public let labelAbove: Bool
+        init(_ appliance: Appliance, _ x: Double, _ y: Double, _ width: Double, _ height: Double, labelAbove: Bool = false) {
             self.appliance = appliance
+            self.labelAbove = labelAbove
             self.rect = NormalizedRect(x: x, y: y, width: width, height: height)
         }
     }
 
     /// THE table. One entry per appliance, in display order: (appliance, x, y, w, h).
     public static let table: [Hotspot] = [
-        Hotspot(.stovetop,   0.04, 0.08, 0.22, 0.38),
-        Hotspot(.oven,       0.28, 0.08, 0.22, 0.38),
-        Hotspot(.microwave,  0.52, 0.08, 0.22, 0.38),
-        Hotspot(.airFryer,   0.76, 0.08, 0.20, 0.38),
-        Hotspot(.slowCooker, 0.04, 0.54, 0.22, 0.38),
-        Hotspot(.riceCooker, 0.28, 0.54, 0.22, 0.38),
-        Hotspot(.blender,    0.52, 0.54, 0.22, 0.38),
-        Hotspot(.kettle,     0.76, 0.54, 0.20, 0.38),
+        Hotspot(.blender,    0.452, 0.148, 0.106, 0.149),
+        Hotspot(.microwave,  0.017, 0.436, 0.225, 0.120),
+        Hotspot(.kettle,     0.258, 0.434, 0.114, 0.122, labelAbove: true),
+        Hotspot(.stovetop,   0.380, 0.475, 0.274, 0.097, labelAbove: true),
+        Hotspot(.riceCooker, 0.660, 0.442, 0.163, 0.116, labelAbove: true),
+        Hotspot(.airFryer,   0.833, 0.420, 0.150, 0.138),
+        Hotspot(.oven,       0.340, 0.592, 0.320, 0.236),
+        Hotspot(.slowCooker, 0.075, 0.622, 0.207, 0.126),
     ]
 
     public static func rect(for appliance: Appliance) -> NormalizedRect? {

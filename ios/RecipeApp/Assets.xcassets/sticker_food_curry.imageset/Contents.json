@@ -1,0 +1,12 @@
+{
+  "images" : [
+    {
+      "filename" : "sticker_food_curry.png",
+      "idiom" : "universal"
+    }
+  ],
+  "info" : {
+    "author" : "xcode",
+    "version" : 1
+  }
+}

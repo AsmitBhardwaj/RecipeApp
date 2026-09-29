@@ -263,6 +263,12 @@ private struct QuizPreviewHarness: View {
         // Screenshots of the selected states: two diets, two moods (Store is seeded to Aldi).
         if mode == "quizDiet" { session.toggleDiet(.vegetarian); session.toggleDiet(.glutenFree) }
         if mode == "quizMood" { _ = session.toggleMood(.comfort); _ = session.toggleMood(.spicy) }
+        // `-debugKitchenSelection`: Microwave, Stovetop and Air fryer selected.
+        if mode == "quizAppliances", ProcessInfo.processInfo.arguments.contains("-debugKitchenSelection") {
+            session.toggleAppliance(.oven)
+            session.toggleAppliance(.microwave)
+            session.toggleAppliance(.airFryer)
+        }
         _model = StateObject(wrappedValue: PlanQuizModel(session: session))
     }
 

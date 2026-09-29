@@ -183,11 +183,11 @@ struct QuizAppliancesContent: View {
     }
 }
 
-/// The interactive kitchen picture: `kitchen_scene` at a fixed aspect ratio in a
-/// rounded card, with one tappable hotspot per appliance placed from the single
-/// normalized-rect table in RecipeKit (`KitchenHotspots.table`) so it scales on
-/// every device. Until the art lands the card shows the tinted fallback with each
-/// hotspot's name so the placeholder rects can be checked.
+/// The interactive kitchen picture: `kitchen_scene` at its native aspect ratio
+/// (no crop, no stretch) in a rounded card, with one tappable hotspot per appliance
+/// placed from the single normalized-rect table in RecipeKit
+/// (`KitchenHotspots.table`) so it scales on every device. If the asset fails to
+/// load the card falls back to a tinted surface with each hotspot's name.
 struct KitchenPicture: View {
     let selected: Set<Appliance>
     let onToggle: (Appliance) -> Void
@@ -199,13 +199,26 @@ struct KitchenPicture: View {
         GeometryReader { proxy in
             let size = proxy.size
             ZStack(alignment: .topLeading) {
-                QuizAssetImage(name: "kitchen_scene", cornerRadius: 0)
-                    .frame(width: size.width, height: size.height)
-                    .clipped()
-                    .accessibilityHidden(true)
+                if hasArt {
+                    Image("kitchen_scene")
+                        .resizable()
+                        .frame(width: size.width, height: size.height)
+                        .accessibilityHidden(true)
+                } else {
+                    QuizAssetImage(name: "kitchen_scene", cornerRadius: 0)
+                        .frame(width: size.width, height: size.height)
+                        .accessibilityHidden(true)
+                }
                 ForEach(KitchenHotspots.table, id: \.appliance) { spot in
                     hotspot(spot, in: size)
                 }
+                #if DEBUG
+                if Self.debugHotspots {
+                    ForEach(KitchenHotspots.table, id: \.appliance) { spot in
+                        debugOutline(spot, in: size)
+                    }
+                }
+                #endif
             }
             .frame(width: size.width, height: size.height)
         }
@@ -215,6 +228,30 @@ struct KitchenPicture: View {
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Your kitchen")
     }
+
+    #if DEBUG
+    /// `-debugHotspots` launch argument (DEBUG builds only).
+    private static let debugHotspots = ProcessInfo.processInfo.arguments.contains("-debugHotspots")
+
+    private func debugOutline(_ spot: KitchenHotspots.Hotspot, in size: CGSize) -> some View {
+        let frame = spot.rect.frame(in: size)
+        return Rectangle()
+            .strokeBorder(Color.red, lineWidth: 1)
+            .frame(width: frame.width, height: frame.height)
+            .overlay(alignment: .topLeading) {
+                Text(spot.appliance.title)
+                    .font(.system(size: 9, weight: .bold))
+                    .lineLimit(1)
+                    .fixedSize()
+                    .foregroundStyle(Color.red)
+                    .shadow(color: .white, radius: 1)
+                    .padding(2)
+            }
+            .position(x: frame.midX, y: frame.midY)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+    }
+    #endif
 
     @ViewBuilder
     private func hotspot(_ spot: KitchenHotspots.Hotspot, in size: CGSize) -> some View {
@@ -265,6 +302,12 @@ struct KitchenPicture: View {
         .accessibilityHint(isOn ? "Double tap to remove" : "Double tap to add")
 
         if isOn {
+            // Estimated pill width so the label can be clamped inside the image.
+            let labelW = CGFloat(spot.appliance.title.count) * 6.5 + 18
+            let labelX = min(max(frame.midX, labelW / 2 + 4), size.width - labelW / 2 - 4)
+            let labelY = spot.labelAbove
+                ? max(frame.minY - 12, 11)
+                : min(frame.maxY + 12, size.height - 11)
             Text(spot.appliance.title)
                 .font(.system(size: 11, weight: .semibold))
                 .foregroundStyle(Color.accentColor)
@@ -272,7 +315,7 @@ struct KitchenPicture: View {
                 .frame(height: 20)
                 .background(Color.appBackground, in: Capsule())
                 .overlay { Capsule().strokeBorder(Color.accentColor.opacity(0.4), lineWidth: 1) }
-                .position(x: frame.midX, y: min(frame.maxY + 12, size.height - 11))
+                .position(x: labelX, y: labelY)
                 .allowsHitTesting(false)
                 .accessibilityHidden(true)
         }
