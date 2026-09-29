@@ -206,8 +206,6 @@ struct BudgetResultsView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
-                header
-                if let swaps = model.swapsRemaining { freePlanPill(swaps) }
                 BudgetSummaryCard(
                     total: model.total, budget: model.budgetValue, dinners: model.dinnerCount
                 )
@@ -230,13 +228,16 @@ struct BudgetResultsView: View {
                 }
             }
             .padding(.horizontal, 24)
-            .padding(.top, 8)
+            .padding(.top, 4)
             .padding(.bottom, 32)   // last card scrolls fully clear of the bar
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         #if DEBUG
         .defaultScrollAnchor(ProcessInfo.processInfo.arguments.contains("-debugScrollBottom") ? .bottom : .top)
         #endif
+        // The header (title, New plan, free pill) is pinned above the scroll view so
+        // it's always on screen — on first appear and while scrolling.
+        .safeAreaInset(edge: .top, spacing: 0) { pinnedHeader }
         .safeAreaInset(edge: .bottom, spacing: 0) { bottomBar }
         .overlay(alignment: .top) {
             if model.showFreeSavedToast {
@@ -297,6 +298,19 @@ struct BudgetResultsView: View {
     }
 
     // MARK: Header
+
+    private var pinnedHeader: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            header
+            if let swaps = model.swapsRemaining { freePlanPill(swaps) }
+        }
+        .padding(.horizontal, 24)
+        .padding(.top, 8)
+        .padding(.bottom, 10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.appBackground)
+        .overlay(alignment: .bottom) { Color.hairline.frame(height: 1) }
+    }
 
     private var header: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -443,41 +457,43 @@ private struct DinnerCard: View {
     let isSwapping: Bool
     let onTap: () -> Void
 
+    private var category: FoodSticker { FoodSticker.category(forMealName: planned.recipe.title) }
+
+    private var accessibilitySummary: String {
+        let equipment = DinnerEquipment.icons(for: planned.equipmentUsed).map(\.label)
+        let parts = [planned.recipe.title, planned.costLabel, planned.timeLabel] + equipment
+        return parts.compactMap { $0 }.joined(separator: ", ")
+    }
+
     var body: some View {
         Button(action: onTap) {
-            HStack(spacing: 14) {
-                FoodStickerView(mealName: planned.recipe.title, size: 56)
-                VStack(alignment: .leading, spacing: 4) {
+            HStack(alignment: .top, spacing: 14) {
+                DinnerTile(category: category)
+                VStack(alignment: .leading, spacing: 8) {
                     Text(planned.recipe.title)
-                        .font(.system(size: 16, weight: .semibold))
+                        .font(.system(size: 17, weight: .semibold))
                         .foregroundStyle(Color.textPrimary)
                         .multilineTextAlignment(.leading)
+                        .lineLimit(2)
                         .fixedSize(horizontal: false, vertical: true)
-                    Text(planned.cardDetail)
-                        .font(.system(size: 13))
-                        .foregroundStyle(Color.textSecondary)
-                        .multilineTextAlignment(.leading)
-                        .fixedSize(horizontal: false, vertical: true)
+                    DinnerMetaRow(timeLabel: planned.timeLabel, equipment: planned.equipmentUsed)
                 }
-                Spacer(minLength: 8)
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(Color.textSecondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                DinnerPricePill(text: planned.costLabel)
                     .accessibilityHidden(true)
             }
             .padding(14)
             .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-            .background(Color.surface, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-            .overlay {
-                RoundedRectangle(cornerRadius: 18, style: .continuous).strokeBorder(Color.hairline, lineWidth: 1)
-            }
+            .dinnerCardSurface()
             .modifier(Shimmer(active: isSwapping))
             .opacity(isSwapping ? 0.8 : 1)
-            .contentShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .contentShape(RoundedRectangle(cornerRadius: DinnerCardSurface.radius, style: .continuous))
         }
-        .buttonStyle(.plain)
-        .accessibilityLabel(isSwapping ? "Swapping \(planned.recipe.title)" : "\(planned.recipe.title), \(planned.cardDetail)")
+        .buttonStyle(DinnerPressStyle())
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(isSwapping ? "Swapping \(planned.recipe.title)" : accessibilitySummary)
         .accessibilityHint("Opens details and swap")
+        .accessibilityAddTraits(.isButton)
     }
 }
 
@@ -543,7 +559,7 @@ private struct DinnerSheet: View {
             get: { model.showTeaser && model.selectedMealIndex != nil },
             set: { if !$0 { model.teaserClosed(isPro: subscriptions.isProUnlocked) } }
         )) {
-            PaywallTeaserView { model.teaserClosed(isPro: $0) }
+            PaywallTeaserView(budget: Int(model.budgetValue.rounded()), dinners: model.dinnerCount) { model.teaserClosed(isPro: $0) }
                 .environmentObject(subscriptions)
         }
         .fullScreenCover(isPresented: $cooking) {

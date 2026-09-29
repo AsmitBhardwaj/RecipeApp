@@ -8,7 +8,7 @@
 //  the screen is valid). Also the selectable rows / tiles the screens share.
 //
 //  Visual tokens: sage primary buttons (56pt tall, 18pt radius); selected state
-//  #EEF3EC fill with a 2pt sage border; secondary text #6B645B; 44pt minimum
+//  solid sage #56704F with white text (mood cards: 2.5pt sage border + check badge); secondary text #6B645B; 44pt minimum
 //  touch targets; a VoiceOver label on everything.
 //
 
@@ -24,6 +24,9 @@ enum QuizStyle {
     static let selectedFill = Color(hex: "EEF3EC")
     static let backCircle = Color(hex: "F1EFE9")
     static let secondaryText = Color(hex: "6B645B")
+    /// Selected rows / tiles: solid sage with white text (5.5:1 contrast).
+    static let sage = Color(hex: "56704F")
+    static let selectionAnimation = Animation.easeInOut(duration: 0.15)
 }
 
 // MARK: - Screen scaffold
@@ -149,7 +152,7 @@ struct QuizOptionRow: View {
             HStack(spacing: 14) {
                 Text(title)
                     .font(.system(size: 17, weight: .medium))
-                    .foregroundStyle(Color.textPrimary)
+                    .foregroundStyle(isSelected ? Color.white : Color.textPrimary)
                     .multilineTextAlignment(.leading)
                 Spacer(minLength: 8)
                 markView
@@ -169,20 +172,20 @@ struct QuizOptionRow: View {
         switch mark {
         case .radio:
             ZStack {
-                Circle().strokeBorder(isSelected ? Color.accentColor : Color.textSecondary.opacity(0.5), lineWidth: 2)
-                if isSelected { Circle().fill(Color.accentColor).padding(5) }
+                Circle().strokeBorder(isSelected ? Color.white : Color.textSecondary.opacity(0.5), lineWidth: 2)
+                if isSelected { Circle().fill(Color.white).padding(5) }
             }
             .frame(width: 24, height: 24)
         case .checkbox:
             ZStack {
                 RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .fill(isSelected ? Color.accentColor : Color.clear)
+                    .fill(isSelected ? Color.white : Color.clear)
                 RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .strokeBorder(isSelected ? Color.accentColor : Color.textSecondary.opacity(0.5), lineWidth: 2)
+                    .strokeBorder(isSelected ? Color.white : Color.textSecondary.opacity(0.5), lineWidth: 2)
                 if isSelected {
                     Image(systemName: "checkmark")
                         .font(.system(size: 13, weight: .bold))
-                        .foregroundStyle(.white)
+                        .foregroundStyle(QuizStyle.sage)
                 }
             }
             .frame(width: 24, height: 24)
@@ -190,20 +193,23 @@ struct QuizOptionRow: View {
     }
 }
 
-/// Selected: #EEF3EC fill + 2pt sage border. Unselected: surface + hairline.
+/// Selected: solid sage fill (#56704F). Unselected: surface + hairline. The fill
+/// animates over 0.15s.
 struct QuizSelectionSurface: ViewModifier {
     let isSelected: Bool
     let radius: CGFloat
 
     func body(content: Content) -> some View {
+        let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
         content
-            .background(isSelected ? QuizStyle.selectedFill : Color.surface,
-                        in: RoundedRectangle(cornerRadius: radius, style: .continuous))
-            .overlay {
-                RoundedRectangle(cornerRadius: radius, style: .continuous)
-                    .strokeBorder(isSelected ? Color.accentColor : Color.hairline,
-                                  lineWidth: isSelected ? QuizStyle.selectedBorder : 1)
+            .background {
+                ZStack {
+                    shape.fill(Color.surface)
+                    shape.fill(QuizStyle.sage).opacity(isSelected ? 1 : 0)
+                }
             }
+            .overlay { shape.strokeBorder(Color.hairline, lineWidth: 1).opacity(isSelected ? 0 : 1) }
+            .animation(QuizStyle.selectionAnimation, value: isSelected)
     }
 }
 

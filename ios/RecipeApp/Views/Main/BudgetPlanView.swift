@@ -578,7 +578,7 @@ struct BudgetPlanView: View {
             get: { model.showTeaser && model.selectedMealIndex == nil },
             set: { if !$0 { model.teaserClosed(isPro: subscriptions.isProUnlocked) } }
         )) {
-            PaywallTeaserView { model.teaserClosed(isPro: $0) }
+            PaywallTeaserView(budget: Int(model.budgetValue.rounded()), dinners: model.dinnerCount) { model.teaserClosed(isPro: $0) }
                 .environmentObject(subscriptions)
         }
         // Setup runs as a full-screen quiz: the first time Plan on a Budget opens

@@ -145,20 +145,31 @@ struct RecipeApp: App {
             // (`quizSetup` = the 4-step existing-user flow). Answers are seeded so
             // every earlier step is valid.
             inner = AnyView(QuizPreviewHarness(mode: mode))
-        case "budgetFree", "budgetPro", "budgetResults":
+        case "budgetFree", "budgetPro", "budgetResults", "budgetResultsPro":
             inner = AnyView(NavigationStack {
                 BudgetPlanContainer(
                     householdSize: 2,
                     dietary: [],
                     pantryNames: { ["rice", "eggs", "spinach"] },
-                    generate: { _, _, _, _, _ in Self.sampleBudgetPlan(free: mode != "budgetPro") },
-                    swap: { _, index in await Self.sampleSwap(index: index, free: mode != "budgetPro") },
+                    generate: { _, _, _, _, _ in Self.sampleBudgetPlan(free: mode != "budgetPro" && mode != "budgetResultsPro") },
+                    swap: { _, index in await Self.sampleSwap(index: index, free: mode != "budgetPro" && mode != "budgetResultsPro") },
                     commit: { _ in },
                     onOpenMealPlan: {},
-                    autoGenerate: mode == "budgetResults"
+                    autoGenerate: false,
+                    // Screenshot harness: skip the quiz and generate the sample plan.
+                    launchPending: mode.hasPrefix("budgetResults"),
+                    onLaunch: { model in
+                        Task {
+                            await model.generate(using: CookingPreferences(
+                                householdSize: 2, appliances: [.stovetop, .oven], storeName: "Aldi", hasCompletedOnboarding: true
+                            ))
+                        }
+                    }
                 )
                 .environmentObject(CookingPreferencesModel(userScope: "preview"))
             })
+        case "teaser":
+            inner = AnyView(PaywallTeaserView(budget: 75, dinners: 5) { _ in })
         default:
             return nil
         }
@@ -242,6 +253,9 @@ private struct QuizPreviewHarness: View {
             "quizAppliances": .appliances, "quizStore": .store, "quizBudget": .budget,
         ][mode]
         if let target { while session.step != target && session.advance() {} }
+        // Screenshots of the selected states: two diets, two moods (Store is seeded to Aldi).
+        if mode == "quizDiet" { session.toggleDiet(.vegetarian); session.toggleDiet(.glutenFree) }
+        if mode == "quizMood" { _ = session.toggleMood(.comfort); _ = session.toggleMood(.spicy) }
         _model = StateObject(wrappedValue: PlanQuizModel(session: session))
     }
 

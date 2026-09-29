@@ -82,12 +82,17 @@ private struct MoodCard: View {
     let isBlocked: Bool
     let action: () -> Void
 
+    private let shape = RoundedRectangle(cornerRadius: 18, style: .continuous)
+
     var body: some View {
         Button(action: action) {
             VStack(alignment: .leading, spacing: 0) {
-                QuizAssetImage(name: mood.assetName, cornerRadius: 0)
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 96)
+                // 3:2 photo, scaledToFill, clipped to the card's top corners (the
+                // card clip below). Missing art falls back to the tinted block.
+                Color.clear
+                    .aspectRatio(3.0 / 2.0, contentMode: .fit)
+                    .overlay { QuizAssetImage(name: mood.assetName, cornerRadius: 0) }
+                    .overlay { Color.black.opacity(isSelected ? 0.10 : 0) }
                     .clipped()
                     .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 3) {
@@ -104,15 +109,17 @@ private struct MoodCard: View {
                 .padding(.vertical, 12)
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-            .modifier(QuizSelectionSurface(isSelected: isSelected, radius: 18))
+            .background(Color.surface)
+            .clipShape(shape)
+            .overlay { shape.strokeBorder(Color.hairline, lineWidth: 1).opacity(isSelected ? 0 : 1) }
+            .overlay { shape.strokeBorder(QuizStyle.sage, lineWidth: 2.5).opacity(isSelected ? 1 : 0) }
             .overlay(alignment: .topTrailing) {
                 if isSelected {
                     Image(systemName: "checkmark")
                         .font(.system(size: 12, weight: .bold))
                         .foregroundStyle(.white)
                         .frame(width: 24, height: 24)
-                        .background(Color.accentColor, in: Circle())
+                        .background(QuizStyle.sage, in: Circle())
                         .padding(8)
                         .transition(.scale.combined(with: .opacity))
                         .accessibilityHidden(true)
@@ -122,7 +129,7 @@ private struct MoodCard: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .animation(.easeInOut(duration: 0.15), value: isSelected)
+        .animation(QuizStyle.selectionAnimation, value: isSelected)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("\(mood.title). \(mood.blurb)")
         .accessibilityAddTraits(isSelected ? .isSelected : [])
@@ -276,48 +283,17 @@ struct KitchenPicture: View {
 
 struct QuizStoreContent: View {
     @ObservedObject var model: PlanQuizModel
-    @State private var showingCountryPicker = false
     private let columns = Array(repeating: GridItem(.flexible(), spacing: 10), count: 3)
 
-    private var countryBinding: Binding<String?> {
-        Binding(get: { model.session.draft.country }, set: { model.session.setCountry($0) })
-    }
-
-    private var countryName: String {
-        model.session.draft.country.flatMap { GroceryCountry.localizedName(for: $0) } ?? "Not set"
-    }
-
+    // Country isn't asked here: the session already defaults it from the device
+    // region. It stays editable in Account → Plan preferences.
     var body: some View {
-        VStack(alignment: .leading, spacing: 20) {
-            Button { showingCountryPicker = true } label: {
-                HStack(spacing: 6) {
-                    Text("Country: \(countryName)")
-                        .font(.system(size: 16, weight: .medium))
-                        .foregroundStyle(Color.textPrimary)
-                        .lineLimit(1)
-                    Text("·").foregroundStyle(QuizStyle.secondaryText)
-                    Text("Change")
-                        .font(.system(size: 16, weight: .semibold))
-                        .foregroundStyle(Color.accentColor)
-                    Spacer(minLength: 0)
-                }
-                .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Country, \(countryName)")
-            .accessibilityHint("Change country")
-
-            LazyVGrid(columns: columns, spacing: 10) {
-                ForEach(PlanStore.all, id: \.name) { store in
-                    StoreTile(store: store, isSelected: model.session.draft.storeName == store.name) {
-                        model.session.selectStore(store)
-                    }
+        LazyVGrid(columns: columns, spacing: 10) {
+            ForEach(PlanStore.all, id: \.name) { store in
+                StoreTile(store: store, isSelected: model.session.draft.storeName == store.name) {
+                    model.session.selectStore(store)
                 }
             }
-        }
-        .sheet(isPresented: $showingCountryPicker) {
-            CountryPickerSheet(selection: countryBinding)
         }
     }
 }
@@ -332,13 +308,13 @@ private struct StoreTile: View {
             VStack(spacing: 4) {
                 Text(store.name)
                     .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(Color.textPrimary)
+                    .foregroundStyle(isSelected ? Color.white : Color.textPrimary)
                     .lineLimit(2)
                     .minimumScaleFactor(0.8)
                     .multilineTextAlignment(.center)
                 Text(store.priceHint.isEmpty ? " " : store.priceHint)
                     .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(QuizStyle.secondaryText)
+                    .foregroundStyle(isSelected ? Color.white.opacity(0.9) : QuizStyle.secondaryText)
             }
             .padding(.horizontal, 6)
             .frame(maxWidth: .infinity, minHeight: 76)
