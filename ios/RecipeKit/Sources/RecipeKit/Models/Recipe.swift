@@ -41,6 +41,10 @@ public struct Recipe: Codable, Identifiable, Hashable {
     public let sourcePlatform: String?
     public let sourceCreator: String?
 
+    /// Pexels attribution when `imageSource == .stockPhoto` (budget-plan meals);
+    /// nil otherwise, and for recipes cached before the field existed.
+    public let photoCredit: PhotoCredit?
+
     /// Future-facing nullable field (CLAUDE.md §8). Always null today.
     public let transcript: String?
 
@@ -84,7 +88,8 @@ public struct Recipe: Codable, Identifiable, Hashable {
         nutritionLocked: Bool? = nil,
         sourceUrl: String? = nil,
         sourcePlatform: String? = nil,
-        sourceCreator: String? = nil
+        sourceCreator: String? = nil,
+        photoCredit: PhotoCredit? = nil
     ) {
         self.recipeId = recipeId
         self.canonicalVideoId = canonicalVideoId
@@ -105,6 +110,7 @@ public struct Recipe: Codable, Identifiable, Hashable {
         self.transcript = transcript
         self.nutrition = nutrition
         self.nutritionLocked = nutritionLocked
+        self.photoCredit = photoCredit
     }
 
     enum CodingKeys: String, CodingKey {
@@ -127,6 +133,7 @@ public struct Recipe: Codable, Identifiable, Hashable {
         case transcript
         case nutrition
         case nutritionLocked = "nutrition_locked"
+        case photoCredit = "photo_credit"
     }
 }
 

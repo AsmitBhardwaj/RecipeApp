@@ -16,6 +16,7 @@
 //    cookbook_membership→ "<cookbookId>|<recipeId>"
 //    library            → recipeId
 //    pantry_items       → PantryItem.id (uuidString); payload is the PantryItem
+//    cooking_preferences→ CookingPreferences.syncItemId (one record); payload is CookingPreferences
 //
 
 import Foundation

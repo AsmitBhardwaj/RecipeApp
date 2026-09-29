@@ -21,6 +21,7 @@ public enum SyncCollection: String, CaseIterable, Codable, Sendable {
     case cookbook
     case cookbookMembership = "cookbook_membership"
     case pantryItems = "pantry_items"
+    case cookingPreferences = "cooking_preferences"
 }
 
 public struct SyncChange: Codable, Equatable, Sendable {

@@ -13,6 +13,7 @@
 //  "Done" until the user resets it — see CookTimerNotificationScheduler).
 //
 
+import RecipeKit
 import UIKit
 import UserNotifications
 
@@ -36,5 +37,17 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
     ) {
         completionHandler([.banner, .sound, .list])
+    }
+
+    /// A tap on the day-6 plan reminder deep-links to Meal Plan → Plan on a Budget.
+    func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        didReceive response: UNNotificationResponse,
+        withCompletionHandler completionHandler: @escaping () -> Void
+    ) {
+        if let userId = PlanReminderDeepLink.userId(fromUserInfo: response.notification.request.content.userInfo) {
+            Task { @MainActor in PlanReminderRouter.shared.open(userId: userId) }
+        }
+        completionHandler()
     }
 }

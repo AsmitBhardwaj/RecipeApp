@@ -45,6 +45,22 @@ public enum BudgetMath {
         roundToIncrement(max(1, householdSize) * maxBudgetPerPerson)
     }
 
+    /// The bounds in the USER's currency space for a regional multiplier: the server
+    /// checks budget ÷ multiplier against `minBudget`/`maxBudget`, so the user-facing
+    /// floor rounds UP to $5 (never below what the server accepts) and the cap rounds
+    /// DOWN. A multiplier of 1 returns the plain bounds.
+    public static func minBudget(householdSize: Int, multiplier: Double) -> Int {
+        guard multiplier != 1 else { return minBudget(householdSize: householdSize) }
+        let raw = Double(minBudget(householdSize: householdSize)) * multiplier
+        return Int((raw / Double(increment)).rounded(.up)) * increment
+    }
+
+    public static func maxBudget(householdSize: Int, multiplier: Double) -> Int {
+        guard multiplier != 1 else { return maxBudget(householdSize: householdSize) }
+        let raw = Double(maxBudget(householdSize: householdSize)) * multiplier
+        return Int((raw / Double(increment)).rounded(.down)) * increment
+    }
+
     /// Validates direct-entry text against the same nominal bounds as the budget
     /// stepper. Decimal amounts are accepted and rounded to the nearest dollar.
     public static func validateInput(

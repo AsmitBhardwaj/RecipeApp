@@ -23,15 +23,21 @@ struct MealPlanView: View {
     @StateObject private var pantry: PantryModel
     @EnvironmentObject private var subscriptions: SubscriptionService
     @EnvironmentObject private var cookingPreferences: CookingPreferencesModel
+    @EnvironmentObject private var reminders: PlanReminderModel
+    @EnvironmentObject private var reminderRouter: PlanReminderRouter
 
     private let userScope: String?
     private let sync: SyncCoordinator?
 
     /// This Week (manual) vs Plan on a Budget (generated).
-    @State private var mode: PlanMode = .thisWeek
+    @State private var mode: PlanMode
     private enum PlanMode: String, CaseIterable { case thisWeek = "This Week", budget = "Plan on a Budget" }
 
-    init(jobs: PendingJobsModel, cookbooks: CookbooksModel, userScope: String? = nil, sync: SyncCoordinator? = nil) {
+    /// `launchBudget`: open on Plan on a Budget (right after onboarding, which
+    /// builds the first week).
+    init(jobs: PendingJobsModel, cookbooks: CookbooksModel, userScope: String? = nil, sync: SyncCoordinator? = nil,
+         launchBudget: Bool = false) {
+        _mode = State(initialValue: launchBudget ? .budget : .thisWeek)
         self.jobs = jobs
         self.cookbooks = cookbooks
         self.userScope = userScope
@@ -73,6 +79,11 @@ struct MealPlanView: View {
         .foregroundStyle(Color.textPrimary)
         .appBackground()
         .toolbar(.hidden, for: .navigationBar)
+        // Tapped day-6 reminder → Plan on a Budget (the container then consumes it).
+        .onAppear { if reminderRouter.isPending(for: userScope) { mode = .budget } }
+        .onChange(of: reminderRouter.pendingUserId) { _, _ in
+            if reminderRouter.isPending(for: userScope) { mode = .budget }
+        }
         .sheet(isPresented: $showingAccount) {
             NavigationStack {
                 AccountView()
@@ -149,8 +160,10 @@ struct MealPlanView: View {
         BudgetPlanContainer(
             householdSize: cookingPreferences.householdSize,
             dietary: Array(cookingPreferences.dietaryPreferences),
+            regionLabel: cookingPreferences.preferences.store?.shopperLabel,
+            userScope: userScope,
             pantryNames: { pantry.items.map(\.name) },
-            generate: { budget, household, dietary, pantryItems in
+            generate: { budget, household, dietary, pantryItems, options in
                 guard let sync else { throw BudgetPlanError.invalidResponse("not signed in") }
                 return try await sync.budgetPlan(
                     budget: budget, householdSize: household,
@@ -158,25 +171,47 @@ struct MealPlanView: View {
                     // The user's stored country + area type drive the cost
                     // multiplier; either unset falls back to 1.0 server-side.
                     country: cookingPreferences.country,
-                    areaType: cookingPreferences.areaType?.apiValue
+                    areaType: cookingPreferences.areaType?.apiValue,
+                    // store_tier / appliances / food_moods come from the quiz
+                    // answers (see BudgetPlanModel.generate(using:)).
+                    options: options
                 )
             },
+            swap: { planID, index in
+                guard let sync else { throw BudgetPlanError.invalidResponse("not signed in") }
+                return try await sync.budgetSwap(planID: planID, mealIndex: index)
+            },
             commit: { recipes in commitBudgetRecipes(recipes) },
-            onSaved: { mode = .thisWeek }
+            addDinner: { planned in commitBudgetRecipes([planned]) },
+            isInMealPlan: { plan.containsRecipe($0) },
+            savedPlanStore: SavedBudgetPlanStore(userScope: userScope),
+            onFreePlanGenerated: { budgetLibrary.savePlan($0) },
+            onMealSwapped: { budgetLibrary.replace($0, with: $1) },
+            onPlanGenerated: { reminders.planGenerated(at: $0) },
+            isPro: { subscriptions.isProUnlocked },
+            teaserStore: PaywallTeaserStore(userScope: userScope),
+            onOpenMealPlan: { mode = .thisWeek },
+            launchPending: cookingPreferences.pendingPlanBuild,
+            onLaunch: { model in
+                cookingPreferences.consumePlanBuildRequest()
+                Task { await model.generate(using: cookingPreferences.preferences) }
+            }
         )
     }
 
-    /// Commit accepted budget recipes into the existing meal_plan collection: one
-    /// dinner per day starting today. Also persists each recipe body locally so it
-    /// can be opened / aggregated later (the plan entry only snapshots title+image).
+    private var budgetLibrary: BudgetPlanLibrary {
+        BudgetPlanLibrary(jobs: jobs, cookbooks: cookbooks, mealPlan: plan)
+    }
+
+    /// Add budget dinners to the meal plan: one per day starting today, skipping
+    /// any day that already has a dinner (previously each recipe was added on
+    /// today+index regardless, stacking onto days with dinners). Also persists each
+    /// recipe body locally so it can be opened / aggregated later (the plan entry
+    /// only snapshots title+image).
     private func commitBudgetRecipes(_ recipes: [PlannedRecipe]) {
         let store = RecipeStore(userScope: userScope)
-        let today = Calendar.current.startOfDay(for: Date())
-        for (index, planned) in recipes.enumerated() {
-            let date = Calendar.current.date(byAdding: .day, value: index, to: today) ?? today
-            plan.add(recipe: planned.recipe, to: date, slot: .dinner)
-            store.upsert(planned.recipe)
-        }
+        plan.addDinners(recipes.map(\.recipe))
+        for planned in recipes { store.upsert(planned.recipe) }
     }
 
     private var dayList: some View {

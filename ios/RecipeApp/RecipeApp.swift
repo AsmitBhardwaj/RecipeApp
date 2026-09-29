@@ -47,7 +47,11 @@ struct RecipeApp: App {
         _subscriptions = StateObject(wrappedValue: subscriptions)
         // Wipe entitlement caches whenever the session is torn down, so a prior
         // account's Pro status can't leak into the next account on this device.
-        auth.onSessionCleared = { await subscriptions.resetForAccountChange() }
+        auth.onSessionCleared = {
+            await subscriptions.resetForAccountChange()
+            // Nothing should fire for a signed-out device; sign-in re-arms it.
+            PlanReminderModel.cancelAllPending()
+        }
         _auth = StateObject(wrappedValue: auth)
         // Pro is server-verified per account now — the provider sends no Pro header.
         recipeProvider = APIRecipeProvider()
@@ -81,6 +85,7 @@ struct RecipeApp: App {
             .environmentObject(auth)
             .environmentObject(subscriptions)
             .environment(\.cookTimerScheduler, cookTimerScheduler)
+            .environmentObject(PlanReminderRouter.shared)
             .task { await subscriptions.start() }
     }
 
@@ -140,55 +145,129 @@ struct RecipeApp: App {
                 }
                 .environmentObject(CookingPreferencesModel(userScope: "preview"))
             )
-        case "onboardingPrefs", "onboardingRegion":
-            // Screenshot harness for the onboarding preferences (Screen 4) and the
-            // new grocery-region (Screen 5) steps, jumped to directly.
-            let startPage = mode == "onboardingRegion" ? 4 : 3
-            inner = AnyView(
-                OnboardingView(auth: auth, initialPage: startPage)
-                    .environmentObject(CookingPreferencesModel(userScope: "preview"))
-            )
-        case "budgetFree", "budgetPro", "budgetResults":
+        case "quizPeople", "quizDiet", "quizMood", "quizAppliances", "quizStore", "quizBudget", "quizSetup":
+            // Screenshot harness for the plan quiz: jumps straight to a step
+            // (`quizSetup` = the 4-step existing-user flow). Answers are seeded so
+            // every earlier step is valid.
+            inner = AnyView(QuizPreviewHarness(mode: mode))
+        case "budgetFree", "budgetPro", "budgetResults", "budgetResultsPro":
             inner = AnyView(NavigationStack {
                 BudgetPlanContainer(
                     householdSize: 2,
                     dietary: [],
                     pantryNames: { ["rice", "eggs", "spinach"] },
-                    generate: { _, _, _, _ in Self.sampleBudgetPlan() },
+                    generate: { _, _, _, _, _ in Self.sampleBudgetPlan(free: mode != "budgetPro" && mode != "budgetResultsPro") },
+                    swap: { _, index in await Self.sampleSwap(index: index, free: mode != "budgetPro" && mode != "budgetResultsPro") },
                     commit: { _ in },
-                    onSaved: {},
-                    autoGenerate: mode == "budgetResults"
+                    onOpenMealPlan: {},
+                    autoGenerate: false,
+                    // Screenshot harness: skip the quiz and generate the sample plan.
+                    launchPending: mode.hasPrefix("budgetResults"),
+                    onLaunch: { model in
+                        Task {
+                            await model.generate(using: CookingPreferences(
+                                householdSize: 2, appliances: [.stovetop, .oven], storeName: "Aldi", hasCompletedOnboarding: true
+                            ))
+                        }
+                    }
                 )
                 .environmentObject(CookingPreferencesModel(userScope: "preview"))
             })
+        case "teaser":
+            inner = AnyView(PaywallTeaserView(budget: 75, dinners: 5) { _ in })
         default:
             return nil
         }
         return AnyView(inner
             .environmentObject(subscriptions)
+            .environmentObject(PlanReminderRouter.shared)
+            .environmentObject(PlanReminderModel(userId: "preview", isPro: { false }))
             .environment(\.cookTimerScheduler, cookTimerScheduler))
     }
 
     /// Sample budget plan for the `-gatePreview budgetResults` screenshot harness.
-    private static func sampleBudgetPlan() -> BudgetPlanResponse {
+    private static func sampleBudgetPlan(free: Bool = true) -> BudgetPlanResponse {
         func recipe(_ id: String, _ title: String) -> Recipe {
             Recipe(
                 recipeId: id, canonicalVideoId: "budget:\(id)", title: title,
                 servings: Servings(amount: 2, unit: nil), prepTimeMinutes: nil,
-                cookTimeMinutes: nil, totalTimeMinutes: nil, ingredients: [], instructions: [],
+                cookTimeMinutes: 25, totalTimeMinutes: nil,
+                ingredients: [
+                    Ingredient(quantity: 2, unit: nil, name: "eggs", notes: nil),
+                    Ingredient(quantity: 1, unit: "cup", name: "rice", notes: nil),
+                    Ingredient(quantity: 2, unit: "cup", name: "spinach", notes: nil),
+                    Ingredient(quantity: 1, unit: "can", name: "chickpeas", notes: nil),
+                ],
+                instructions: [Instruction(stepNumber: 1, text: "Cook the rice."), Instruction(stepNumber: 2, text: "Combine and serve.")],
                 confidence: nil, sourceType: .generated, imageUrl: nil, imageSource: .none, transcript: nil
             )
         }
-        let items: [(String, String, Double, String)] = [
+        var items: [(String, String, Double, String)] = [
             ("b1", "Chickpea & Spinach Curry", 8, "High fiber, veg-forward"),
             ("b2", "Egg Fried Rice", 6, "Quick, balanced"),
             ("b3", "Lentil Soup", 7, "High protein, low fat"),
             ("b4", "Veggie Pasta Bake", 9, "Comfort, veg-forward"),
         ]
-        let planned = items.map { id, title, cost, health in
-            PlannedRecipe(recipe: recipe(id, title), estimatedCost: CostEstimate(amount: cost), healthSignal: health)
+        if ProcessInfo.processInfo.arguments.contains("-debugSevenDinners") {
+            items += [("b5", "Beef Tacos", 8, ""), ("b6", "Garlic Butter Shrimp", 9, ""), ("b7", "Greek Salad", 6, "")]
         }
-        return BudgetPlanResponse(recipes: planned, currency: "USD", budget: 75, minBudget: 50, regionalMultiplier: 1.0)
+        let planned = items.map { id, title, cost, health in
+            PlannedRecipe(recipe: recipe(id, title), estimatedCost: CostEstimate(amount: cost), healthSignal: health,
+                          equipmentUsed: id == "b2" ? ["no_cook"] : ["stovetop", "oven"])
+        }
+        return BudgetPlanResponse(
+            recipes: planned, currency: "USD", budget: 75, minBudget: 50, regionalMultiplier: 1.0,
+            planId: "preview", isFree: free, swapsRemaining: free ? 3 : nil
+        )
+    }
+
+    private static func sampleSwap(index: Int, free: Bool) async -> BudgetSwapResponse {
+        if ProcessInfo.processInfo.arguments.contains("-debugSwapping") || ProcessInfo.processInfo.arguments.contains("-debugSwapCard") {
+            try? await Task.sleep(nanoseconds: 600_000_000_000)   // hold the mid-swap state
+        }
+        let base = sampleBudgetPlan(free: free)
+        let meal = PlannedRecipe(
+            recipe: Recipe(
+                recipeId: "swap-\(Int.random(in: 0...9999))", canonicalVideoId: "budget:swap", title: "Black Bean Tacos",
+                servings: Servings(amount: 2, unit: nil), prepTimeMinutes: 10, cookTimeMinutes: 10,
+                totalTimeMinutes: nil, ingredients: [], instructions: [], confidence: nil,
+                sourceType: .generated, imageUrl: nil, imageSource: .none, transcript: nil
+            ),
+            estimatedCost: CostEstimate(amount: 5), healthSignal: "", equipmentUsed: ["stovetop"]
+        )
+        return BudgetSwapResponse(
+            planId: "preview", mealIndex: index, meal: meal, planTotal: base.total - 3, budget: 75,
+            swapsUsed: 1, swapsRemaining: free ? 2 : nil
+        )
     }
     #endif
 }
+
+#if DEBUG
+/// Hosts a `PlanQuizFlow` at a chosen step for the `-gatePreview quiz*` screenshots.
+private struct QuizPreviewHarness: View {
+    @StateObject private var model: PlanQuizModel
+
+    init(mode: String) {
+        let seeded = CookingPreferences(
+            householdSize: 2, appliances: [.stovetop, .oven], storeName: "Aldi", hasCompletedOnboarding: true
+        )
+        var session: PlanQuizSession = mode == "quizSetup"
+            ? .planSetup(from: CookingPreferences(hasCompletedOnboarding: true), deviceCountry: "US")
+            : .onboarding(from: seeded, deviceCountry: "US")
+        let target: PlanQuizStep? = [
+            "quizPeople": .people, "quizDiet": .diet, "quizMood": .mood,
+            "quizAppliances": .appliances, "quizStore": .store, "quizBudget": .budget,
+        ][mode]
+        if let target { while session.step != target && session.advance() {} }
+        // Screenshots of the selected states: two diets, two moods (Store is seeded to Aldi).
+        if mode == "quizDiet" { session.toggleDiet(.vegetarian); session.toggleDiet(.glutenFree) }
+        if mode == "quizMood" { _ = session.toggleMood(.comfort); _ = session.toggleMood(.spicy) }
+        _model = StateObject(wrappedValue: PlanQuizModel(session: session))
+    }
+
+    var body: some View {
+        PlanQuizFlow(model: model, onExit: {}, onFinish: { _ in })
+    }
+}
+#endif

@@ -15,6 +15,7 @@ struct AccountView: View {
     @EnvironmentObject private var auth: AuthModel
     @EnvironmentObject private var subscriptions: SubscriptionService
     @EnvironmentObject private var cookingPreferences: CookingPreferencesModel
+    @EnvironmentObject private var reminders: PlanReminderModel
     @AppStorage("hasCompletedOnboarding") private var hasCompletedOnboarding = false
     @AppStorage(AppAppearance.storageKey, store: .appGroup) private var appearance: AppAppearance = .system
 
@@ -22,6 +23,7 @@ struct AccountView: View {
     @State private var deleteError: String?
     @State private var showPaywall = false
     @State private var showingCountryPicker = false
+    @State private var showingPlanPreferences = false
 
     /// Drives the single "Dark Mode" switch. The stored preference keeps three
     /// states so first launch (`.system`) follows the OS; the toggle only ever
@@ -140,6 +142,24 @@ struct AccountView: View {
                             }
                             .accessibilityLabel("Where you live, \(cookingPreferences.areaType?.displayName ?? "Not set")")
                             .accessibilityHint("Adjusts budgets for a city, suburb, or rural area")
+
+                            SettingsDivider()
+                            Button {
+                                showingPlanPreferences = true
+                            } label: {
+                                SettingsRowContent(icon: "slider.horizontal.3", title: "Plan preferences") {
+                                    HStack(spacing: Theme.Spacing.sm) {
+                                        Text(cookingPreferences.needsPlanSetup ? "Not set up" : "")
+                                            .font(.subheadline)
+                                            .foregroundStyle(Color.textSecondary)
+                                            .lineLimit(1)
+                                        SettingsChevron()
+                                    }
+                                }
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("Plan preferences")
+                            .accessibilityHint("Edit people, diet, food mood, appliances, store and weekly budget")
                         }
                     }
 
@@ -150,6 +170,29 @@ struct AccountView: View {
                             }
                             .tint(Theme.accent)
                             .padding(.trailing, 16)
+                        }
+                    }
+
+                    settingsSection("Reminders") {
+                        VStack(alignment: .leading, spacing: 10) {
+                            SettingsCard {
+                                Toggle(isOn: Binding(get: { reminders.isOn }, set: { reminders.setEnabled($0) })) {
+                                    SettingsRowContent(icon: "bell", title: "Weekly plan reminder")
+                                }
+                                .tint(Theme.accent)
+                                .padding(.trailing, 16)
+                            }
+                            if reminders.isDenied {
+                                Button("Turn on notifications in Settings") { reminders.openSettings() }
+                                    .font(.footnote.weight(.semibold))
+                                    .foregroundStyle(Color.accentColor)
+                                    .padding(.horizontal, 4)
+                            } else {
+                                Text("A nudge at 6pm on day 6 of your plan to plan next week.")
+                                    .font(.footnote)
+                                    .foregroundStyle(Color.textSecondary)
+                                    .padding(.horizontal, 4)
+                            }
                         }
                     }
 
@@ -171,6 +214,17 @@ struct AccountView: View {
                             SettingsValueRow(icon: "number", title: "Version", value: displayedVersion)
                             SettingsDivider()
                             SettingsValueRow(icon: "fork.knife", title: "Recipes are", value: "Free & unlimited")
+                            SettingsDivider()
+                            Link(destination: URL(string: "https://www.pexels.com")!) {
+                                SettingsRowContent(icon: "photo", title: "Food photos provided by Pexels") {
+                                    Image(systemName: "arrow.up.right")
+                                        .font(.system(size: 13, weight: .semibold))
+                                        .foregroundStyle(Color.textSecondary.opacity(0.65))
+                                        .accessibilityHidden(true)
+                                }
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityHint("Opens pexels.com")
                         }
                     }
 
@@ -202,6 +256,10 @@ struct AccountView: View {
                     #if DEBUG
                     settingsSection("Developer") {
                         SettingsCard {
+                            SettingsActionRow(icon: "bell.badge", title: "Fire plan reminder in 10s") {
+                                reminders.scheduleDebugReminder()
+                            }
+                            SettingsDivider()
                             SettingsActionRow(icon: "arrow.counterclockwise", title: "Replay onboarding") {
                                 replayOnboarding()
                             }
@@ -221,6 +279,9 @@ struct AccountView: View {
         .sheet(isPresented: $showPaywall) {
             PlatterProPaywallView()
                 .environmentObject(subscriptions)
+        }
+        .sheet(isPresented: $showingPlanPreferences) {
+            PlanPreferencesEditorView()
         }
         .sheet(isPresented: $showingCountryPicker) {
             CountryPickerSheet(selection: countryBinding)

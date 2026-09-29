@@ -171,7 +171,8 @@ final class SyncCoordinator: ObservableObject {
         dietaryPreferences: [String],
         pantryItems: [String],
         country: String? = nil,
-        areaType: String? = nil
+        areaType: String? = nil,
+        options: BudgetPlanOptions = .none
     ) async throws -> BudgetPlanResponse {
         try await budgetClient.generate(
             budget: budget,
@@ -179,8 +180,14 @@ final class SyncCoordinator: ObservableObject {
             dietaryPreferences: dietaryPreferences,
             pantryItems: pantryItems,
             country: country,
-            areaType: areaType
+            areaType: areaType,
+            options: options
         )
+    }
+
+    /// Replace one dinner in a generated plan (POST /v1/meal-plan/budget/{id}/swap).
+    func budgetSwap(planID: String, mealIndex: Int) async throws -> BudgetSwapResponse {
+        try await budgetClient.swap(planID: planID, mealIndex: mealIndex)
     }
 
     private func hydrateIfNeeded() async throws {
