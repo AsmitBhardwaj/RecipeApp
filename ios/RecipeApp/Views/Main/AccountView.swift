@@ -15,6 +15,7 @@ struct AccountView: View {
     @EnvironmentObject private var auth: AuthModel
     @EnvironmentObject private var subscriptions: SubscriptionService
     @EnvironmentObject private var cookingPreferences: CookingPreferencesModel
+    @EnvironmentObject private var reminders: PlanReminderModel
     @AppStorage("hasCompletedOnboarding") private var hasCompletedOnboarding = false
     @AppStorage(AppAppearance.storageKey, store: .appGroup) private var appearance: AppAppearance = .system
 
@@ -172,6 +173,29 @@ struct AccountView: View {
                         }
                     }
 
+                    settingsSection("Reminders") {
+                        VStack(alignment: .leading, spacing: 10) {
+                            SettingsCard {
+                                Toggle(isOn: Binding(get: { reminders.isOn }, set: { reminders.setEnabled($0) })) {
+                                    SettingsRowContent(icon: "bell", title: "Weekly plan reminder")
+                                }
+                                .tint(Theme.accent)
+                                .padding(.trailing, 16)
+                            }
+                            if reminders.isDenied {
+                                Button("Turn on notifications in Settings") { reminders.openSettings() }
+                                    .font(.footnote.weight(.semibold))
+                                    .foregroundStyle(Color.accentColor)
+                                    .padding(.horizontal, 4)
+                            } else {
+                                Text("A nudge at 6pm on day 6 of your plan to plan next week.")
+                                    .font(.footnote)
+                                    .foregroundStyle(Color.textSecondary)
+                                    .padding(.horizontal, 4)
+                            }
+                        }
+                    }
+
                     settingsSection("Feedback") {
                         SettingsCard {
                             NavigationLink {
@@ -221,6 +245,10 @@ struct AccountView: View {
                     #if DEBUG
                     settingsSection("Developer") {
                         SettingsCard {
+                            SettingsActionRow(icon: "bell.badge", title: "Fire plan reminder in 10s") {
+                                reminders.scheduleDebugReminder()
+                            }
+                            SettingsDivider()
                             SettingsActionRow(icon: "arrow.counterclockwise", title: "Replay onboarding") {
                                 replayOnboarding()
                             }

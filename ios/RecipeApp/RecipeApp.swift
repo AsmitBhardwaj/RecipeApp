@@ -47,7 +47,11 @@ struct RecipeApp: App {
         _subscriptions = StateObject(wrappedValue: subscriptions)
         // Wipe entitlement caches whenever the session is torn down, so a prior
         // account's Pro status can't leak into the next account on this device.
-        auth.onSessionCleared = { await subscriptions.resetForAccountChange() }
+        auth.onSessionCleared = {
+            await subscriptions.resetForAccountChange()
+            // Nothing should fire for a signed-out device; sign-in re-arms it.
+            PlanReminderModel.cancelAllPending()
+        }
         _auth = StateObject(wrappedValue: auth)
         // Pro is server-verified per account now — the provider sends no Pro header.
         recipeProvider = APIRecipeProvider()
@@ -81,6 +85,7 @@ struct RecipeApp: App {
             .environmentObject(auth)
             .environmentObject(subscriptions)
             .environment(\.cookTimerScheduler, cookTimerScheduler)
+            .environmentObject(PlanReminderRouter.shared)
             .task { await subscriptions.start() }
     }
 
@@ -175,6 +180,8 @@ struct RecipeApp: App {
         }
         return AnyView(inner
             .environmentObject(subscriptions)
+            .environmentObject(PlanReminderRouter.shared)
+            .environmentObject(PlanReminderModel(userId: "preview", isPro: { false }))
             .environment(\.cookTimerScheduler, cookTimerScheduler))
     }
 

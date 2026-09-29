@@ -29,6 +29,8 @@ public enum AccountDataEraser {
         "sync_meta_v1",
         "cooking_preferences_v1",
         "budget_plan_v1",
+        "plan_reminder_v1",
+        "import_tip_dismissed_v1",
     ]
 
     public static func erase(userId: String, suiteName: String = AppGroup.identifier) {

@@ -44,6 +44,8 @@ final class BudgetPlanModel: ObservableObject {
     /// The full-screen "Keep a fresh week coming" teaser. It fronts the paywall
     /// everywhere a free account hits the Pro line (see `PaywallTeaserTrigger`).
     @Published var showTeaser = false
+    /// Brief highlight on "New plan" after a Pro user taps the day-6 reminder.
+    @Published private(set) var highlightNewPlan = false
     /// The API has answered while the loading screen is still up (min hold): the
     /// progress bar completes.
     @Published private(set) var loadingResponseArrived = false
@@ -90,6 +92,8 @@ final class BudgetPlanModel: ObservableObject {
     private let savedPlanStore: SavedBudgetPlanStore?
     private let onFreePlanGenerated: (_ recipes: [Recipe]) -> Void
     private let onMealSwapped: (_ old: Recipe, _ new: Recipe) -> Void
+    /// A plan was just generated (drives the day-6 reminder: replaced on each new plan).
+    private let onPlanGenerated: (_ at: Date) -> Void
     private let isPro: () -> Bool
     private let teaserStore: PaywallTeaserStore?
     private let minimumLoadingDuration: TimeInterval
@@ -116,6 +120,7 @@ final class BudgetPlanModel: ObservableObject {
         savedPlanStore: SavedBudgetPlanStore? = nil,
         onFreePlanGenerated: @escaping (_ recipes: [Recipe]) -> Void = { _ in },
         onMealSwapped: @escaping (_ old: Recipe, _ new: Recipe) -> Void = { _, _ in },
+        onPlanGenerated: @escaping (_ at: Date) -> Void = { _ in },
         isPro: @escaping () -> Bool = { false },
         teaserStore: PaywallTeaserStore? = nil,
         minimumLoadingDuration: TimeInterval = 0,
@@ -136,6 +141,7 @@ final class BudgetPlanModel: ObservableObject {
         self.savedPlanStore = savedPlanStore
         self.onFreePlanGenerated = onFreePlanGenerated
         self.onMealSwapped = onMealSwapped
+        self.onPlanGenerated = onPlanGenerated
         self.isPro = isPro
         self.teaserStore = teaserStore
         self.minimumLoadingDuration = minimumLoadingDuration
@@ -254,6 +260,7 @@ final class BudgetPlanModel: ObservableObject {
             isFreshReveal = true
             phase = .results
             persist()
+            onPlanGenerated(now())
             let key = PaywallTeaserPolicy.planKey(planID: resp.planId, recipeIDs: recipes.map(\.id))
             if PaywallTeaserPolicy.shouldShow(
                 .freePlanReveal(planKey: key), isFreePlan: resp.isFree, isPro: isPro(),
@@ -391,6 +398,28 @@ final class BudgetPlanModel: ObservableObject {
         }
     }
 
+    // MARK: Day-6 reminder
+
+    /// The user tapped the day-6 reminder. Same rule as `newPlan()`: a used free
+    /// plan gets the teaser; Pro gets a brief highlight on New plan. Only acts on a
+    /// plan already on screen (setup handles itself).
+    func handleReminderOpen() {
+        switch PlanReminderDeepLink.landing(
+            isPro: isPro(), hasPlan: phase == .results && !recipes.isEmpty, isFreePlan: response?.isFree == true
+        ) {
+        case .teaser:
+            newPlan()
+        case .highlightNewPlan:
+            highlightNewPlan = true
+            Task { [weak self] in
+                await self?.sleep(2.5)
+                self?.highlightNewPlan = false
+            }
+        case .none:
+            break
+        }
+    }
+
     // MARK: Teaser
 
     /// Called by "Your week" once the dinner cards have finished animating in.
@@ -471,6 +500,8 @@ struct BudgetPlanContainer: View {
     private let launchPending: Bool
     private let onLaunch: (BudgetPlanModel) -> Void
     @State private var didLaunch = false
+    @EnvironmentObject private var reminderRouter: PlanReminderRouter
+    @EnvironmentObject private var subscriptions: SubscriptionService
 
     init(
         householdSize: Int,
@@ -487,6 +518,7 @@ struct BudgetPlanContainer: View {
         savedPlanStore: SavedBudgetPlanStore? = nil,
         onFreePlanGenerated: @escaping (_ recipes: [Recipe]) -> Void = { _ in },
         onMealSwapped: @escaping (_ old: Recipe, _ new: Recipe) -> Void = { _, _ in },
+        onPlanGenerated: @escaping (_ at: Date) -> Void = { _ in },
         isPro: @escaping () -> Bool = { false },
         teaserStore: PaywallTeaserStore? = nil,
         minimumLoadingDuration: TimeInterval = PlanLoadingTiming.minimumDuration,
@@ -509,6 +541,7 @@ struct BudgetPlanContainer: View {
             savedPlanStore: savedPlanStore,
             onFreePlanGenerated: onFreePlanGenerated,
             onMealSwapped: onMealSwapped,
+            onPlanGenerated: onPlanGenerated,
             isPro: isPro,
             teaserStore: teaserStore,
             minimumLoadingDuration: minimumLoadingDuration
@@ -526,6 +559,8 @@ struct BudgetPlanContainer: View {
 
     var body: some View {
         BudgetPlanView(model: model, userScope: userScope, onOpenMealPlan: onOpenMealPlan)
+            // Day-6 reminder tap (also covers a cold launch: the router holds it).
+            .task(id: reminderRouter.pendingUserId) { await consumeReminderTap() }
             .task {
                 if launchPending && !didLaunch {
                     didLaunch = true
@@ -547,6 +582,23 @@ struct BudgetPlanContainer: View {
                     #endif
                 }
             }
+    }
+}
+
+extension BudgetPlanContainer {
+    /// Waits briefly for the server entitlement (so a Pro user isn't mistaken for
+    /// free on a cold launch), then routes the tap through the model.
+    @MainActor
+    fileprivate func consumeReminderTap() async {
+        guard reminderRouter.isPending(for: userScope) else { return }
+        for _ in 0..<30 where !subscriptions.serverEntitlementResolved {
+            try? await Task.sleep(nanoseconds: 100_000_000)
+        }
+        // Let a just-restored plan settle in before acting on it.
+        try? await Task.sleep(nanoseconds: 350_000_000)
+        guard !Task.isCancelled, reminderRouter.isPending(for: userScope) else { return }
+        reminderRouter.consume()
+        model.handleReminderOpen()
     }
 }
 

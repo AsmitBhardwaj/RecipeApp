@@ -40,6 +40,7 @@ struct QuizScreen<Content: View>: View {
     let canContinue: Bool
     var continueHint: String = ""
     let onBack: () -> Void
+    var showsBack = true
     let onContinue: () -> Void
     @ViewBuilder let content: () -> Content
 
@@ -77,15 +78,17 @@ struct QuizScreen<Content: View>: View {
 
     private var topBar: some View {
         HStack(spacing: 16) {
-            Button(action: onBack) {
-                Image(systemName: "chevron.left")
-                    .font(.system(size: 17, weight: .semibold))
-                    .foregroundStyle(Color.textPrimary)
-                    .frame(width: 44, height: 44)
-                    .background(QuizStyle.backCircle, in: Circle())
+            if showsBack {
+                Button(action: onBack) {
+                    Image(systemName: "chevron.left")
+                        .font(.system(size: 17, weight: .semibold))
+                        .foregroundStyle(Color.textPrimary)
+                        .frame(width: 44, height: 44)
+                        .background(QuizStyle.backCircle, in: Circle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Back")
             }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Back")
 
             QuizProgressBar(fraction: progress)
                 .accessibilityElement(children: .ignore)

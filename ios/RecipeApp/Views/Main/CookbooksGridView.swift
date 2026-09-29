@@ -22,6 +22,10 @@ struct CookbooksGridView: View {
     @State private var sortOrder: RecipeSortOrder = .newest
     @State private var cookbookFilterID: String?
     @State private var showingAddMenu = false
+    /// First-open import tip: starts hidden and is resolved from the per-user store
+    /// on appear, so a dismissed tip never flashes.
+    @State private var tipDismissed = true
+    @State private var showingHowTo = false
     @State private var showingAdd = false
     @State private var showingAccount = false
     @State private var showingNewCookbook = false
@@ -61,8 +65,11 @@ struct CookbooksGridView: View {
                 Button("Add Recipe") { showingAdd = true }
                 Button("New Cookbook") { showingNewCookbook = true }
             }
+            Button("How to import") { showingHowTo = true }
             Button("Cancel", role: .cancel) {}
         }
+        .sheet(isPresented: $showingHowTo) { ImportHowToSheet() }
+        .onAppear { tipDismissed = ImportTipStore(userScope: userScope).isDismissed }
         .sheet(isPresented: $showingAdd, onDismiss: presentPaywallIfPending) {
             AddRecipeView(jobs: jobs, onLimitReached: { pendingPaywall = true })
         }
@@ -201,6 +208,14 @@ struct CookbooksGridView: View {
     private var loadedContent: some View {
         ScrollView {
             LazyVStack(spacing: Theme.Spacing.lg) {
+                if !tipDismissed {
+                    ImportTipCard {
+                        ImportTipStore(userScope: userScope).dismiss()
+                        withAnimation(.easeOut(duration: 0.2)) { tipDismissed = true }
+                    }
+                    .padding(.bottom, Theme.Spacing.xs)
+                    .transition(.opacity)
+                }
                 searchControls
                 jobStatusCards
 
@@ -360,6 +375,10 @@ struct CookbooksGridView: View {
                 Text(searchText.isEmpty
                      ? "Tap + to create your first cookbook."
                      : "Try a different search.")
+            } actions: {
+                if searchText.isEmpty && jobs.recipes.isEmpty {
+                    HowToImportLink { showingHowTo = true }
+                }
             }
             .padding(.top, Theme.Spacing.xxl)
         } else {
@@ -438,6 +457,8 @@ struct CookbooksGridView: View {
                     Text(jobs.recipes.isEmpty
                          ? "Tap + to add your first recipe."
                          : "Try changing your search or filter.")
+                } actions: {
+                    if jobs.recipes.isEmpty { HowToImportLink { showingHowTo = true } }
                 }
                 .padding(.top, Theme.Spacing.xxl)
             }

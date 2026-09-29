@@ -23,6 +23,8 @@ struct MealPlanView: View {
     @StateObject private var pantry: PantryModel
     @EnvironmentObject private var subscriptions: SubscriptionService
     @EnvironmentObject private var cookingPreferences: CookingPreferencesModel
+    @EnvironmentObject private var reminders: PlanReminderModel
+    @EnvironmentObject private var reminderRouter: PlanReminderRouter
 
     private let userScope: String?
     private let sync: SyncCoordinator?
@@ -77,6 +79,11 @@ struct MealPlanView: View {
         .foregroundStyle(Color.textPrimary)
         .appBackground()
         .toolbar(.hidden, for: .navigationBar)
+        // Tapped day-6 reminder → Plan on a Budget (the container then consumes it).
+        .onAppear { if reminderRouter.isPending(for: userScope) { mode = .budget } }
+        .onChange(of: reminderRouter.pendingUserId) { _, _ in
+            if reminderRouter.isPending(for: userScope) { mode = .budget }
+        }
         .sheet(isPresented: $showingAccount) {
             NavigationStack {
                 AccountView()
@@ -180,6 +187,7 @@ struct MealPlanView: View {
             savedPlanStore: SavedBudgetPlanStore(userScope: userScope),
             onFreePlanGenerated: { budgetLibrary.savePlan($0) },
             onMealSwapped: { budgetLibrary.replace($0, with: $1) },
+            onPlanGenerated: { reminders.planGenerated(at: $0) },
             isPro: { subscriptions.isProUnlocked },
             teaserStore: PaywallTeaserStore(userScope: userScope),
             onOpenMealPlan: { mode = .thisWeek },

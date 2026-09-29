@@ -2,8 +2,9 @@
 //  RootView.swift
 //  RecipeApp
 //
-//  Decides between the onboarding flow (first launch) and the main app.
-//  Onboarding completion is persisted in `@AppStorage` so it only shows once.
+//  Decides between the first-run flow and the main app:
+//  launch → Value → Sign in → quiz → main. The Value screen is device-level (no
+//  account exists yet); once seen it never returns, including after sign-out.
 //
 
 import SwiftUI
@@ -24,6 +25,9 @@ struct RootView: View {
     /// launch and survives background/foreground (the view tree stays alive), so
     /// the splash never replays on resume.
     @State private var showSplash = true
+
+    private let flowStore = OnboardingFlowStore()
+    @State private var hasSeenValue = OnboardingFlowStore().hasSeenValue
 
     var body: some View {
         ZStack {
@@ -50,7 +54,15 @@ struct RootView: View {
     @ViewBuilder
     private var content: some View {
         if !auth.isSignedIn {
-            SignInView(auth: auth)
+            switch OnboardingRouter.route(isSignedIn: false, hasSeenValue: hasSeenValue,
+                                          hasCompletedOnboarding: false, skippedQuiz: false) {
+            case .value:
+                ValueView(onContinue: { finishValue(skipped: false) }, onSkip: { finishValue(skipped: true) })
+                    .transition(.opacity)
+            default:
+                SignInView(auth: auth)
+                    .transition(.opacity)
+            }
         } else if let userID = auth.currentUser?.id {
             SignedInRoot(
                 recipeProvider: recipeProvider,
@@ -59,7 +71,15 @@ struct RootView: View {
                 userID: userID,
                 legacyCompletion: legacyOnboardingCompletion
             )
+            // A signed-in user (incl. one upgrading from a build without the flag)
+            // never sees Value again, even after signing out.
+            .onAppear { flowStore.markValueSeen() }
         }
+    }
+
+    private func finishValue(skipped: Bool) {
+        flowStore.markValueSeen(skipped: skipped)
+        withAnimation(.easeInOut(duration: 0.25)) { hasSeenValue = true }
     }
 }
 
@@ -68,6 +88,10 @@ private struct SignedInRoot: View {
     @ObservedObject var auth: AuthModel
     let subscriptions: SubscriptionService
     @StateObject private var cookingPreferences: CookingPreferencesModel
+    /// Value's Skip was tapped before this sign-in: no quiz; MainTabView finishes
+    /// onboarding with the answers unset.
+    @StateObject private var reminders: PlanReminderModel
+    @State private var skippedQuiz = OnboardingFlowStore().skippedQuiz
 
     init(
         recipeProvider: RecipeProvider,
@@ -79,6 +103,7 @@ private struct SignedInRoot: View {
         self.recipeProvider = recipeProvider
         self.auth = auth
         self.subscriptions = subscriptions
+        _reminders = StateObject(wrappedValue: PlanReminderModel(userId: userID, isPro: { [weak subscriptions] in subscriptions?.isProUnlocked ?? false }))
         _cookingPreferences = StateObject(wrappedValue: CookingPreferencesModel(
             userScope: userID,
             legacyCompletion: legacyCompletion
@@ -87,22 +112,27 @@ private struct SignedInRoot: View {
 
     var body: some View {
         Group {
-            if cookingPreferences.hasCompletedOnboarding {
+            switch OnboardingRouter.route(
+                isSignedIn: true, hasSeenValue: true,
+                hasCompletedOnboarding: cookingPreferences.hasCompletedOnboarding, skippedQuiz: skippedQuiz
+            ) {
+            case .quiz:
+                OnboardingView(auth: auth)
+            default:
                 MainTabView(
                     recipeProvider: recipeProvider,
                     auth: auth,
                     subscriptions: subscriptions
                 )
-            } else {
-                OnboardingView(auth: auth)
             }
         }
         .environmentObject(auth)
         .environmentObject(cookingPreferences)
+        .environmentObject(reminders)
     }
 }
 
-#Preview("Onboarding") {
+#Preview("First run") {
     RootView(
         recipeProvider: MockRecipeProvider(),
         auth: AuthModel(),

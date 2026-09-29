@@ -1,37 +1,29 @@
 import RecipeKit
 import SwiftUI
 
-/// First-run onboarding (sign-in stays first, in `RootView`):
-///   Value screen → People → Diet → Food mood → Appliances → Store → Budget
-/// The quiz screens live in `PlanQuizFlow`; this view owns the Value screen, the
-/// hand-off to the quiz, and finishing (save answers → main app, which
-/// opens Plan on a Budget and generates the first week).
+/// Signed-in first-run quiz. The order is launch → Value → Sign in → quiz; the
+/// Value screen is hosted by `RootView` before sign-in, so this view is only the
+/// quiz (People onward) and finishing it (save answers → main app, which opens
+/// Plan on a Budget and generates the first week).
 struct OnboardingView: View {
     @ObservedObject var auth: AuthModel
     @EnvironmentObject private var preferences: CookingPreferencesModel
     @EnvironmentObject private var subscriptions: SubscriptionService
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     @StateObject private var sync: SyncCoordinator
-
-    /// Created on the first Continue (needs the preferences environment object) and
-    /// kept, so Back to the Value screen and forward again keeps the answers.
     @State private var quiz: PlanQuizModel?
-    @State private var showingQuiz = false
 
-    init(auth: AuthModel, startInQuiz: Bool = false) {
+    init(auth: AuthModel) {
         self.auth = auth
         let userID = auth.currentUser?.id ?? "unknown"
         _sync = StateObject(wrappedValue: SyncCoordinator(userId: userID, tokenProvider: { try await auth.validAccessToken() }))
-        _showingQuiz = State(initialValue: startInQuiz)
     }
 
     var body: some View {
         ZStack {
-            if showingQuiz, let quiz {
-                PlanQuizFlow(model: quiz, onExit: leaveQuiz, onFinish: finish)
-            } else {
-                valueScreen
+            if let quiz {
+                // First step has no Back: there's no screen before it now.
+                PlanQuizFlow(model: quiz, onExit: nil, onFinish: finish)
             }
         }
         .foregroundStyle(Color.textPrimary)
@@ -41,79 +33,21 @@ struct OnboardingView: View {
             // finished onboarding elsewhere, the model flips and the main app opens.
             preferences.attachSync(sync)
             sync.triggerSync()
-            if showingQuiz && quiz == nil { quiz = makeQuiz() }
-        }
-    }
-
-    // MARK: Value screen
-
-    private var valueScreen: some View {
-        OnboardingValueScreen()
-            .safeAreaInset(edge: .top, spacing: 0) { valueHeader }
-            .safeAreaInset(edge: .bottom, spacing: 0) {
-                OnboardingPrimaryButton(title: "Continue", action: startQuiz)
-                    .padding(.horizontal, 24)
-                    .padding(.top, 12)
-                    .padding(.bottom, 10)
-                    .background(Color.creamTint)
+            if quiz == nil {
+                quiz = PlanQuizModel(session: .onboarding(from: preferences.preferences, deviceCountry: GroceryCountry.guessFromLocale()))
             }
-    }
-
-    private var valueHeader: some View {
-        HStack {
-            PlatterMark(size: 36)
-                .accessibilityLabel("Platter")
-            Spacer()
-            // Skipping leaves the plan answers unset; Plan on a Budget then runs the
-            // Mood → Appliances → Store → Budget setup the first time it's opened.
-            Button("Skip", action: skip)
-                .font(.subheadline.weight(.medium))
-                .foregroundStyle(Color.textSecondary)
-                .frame(minWidth: 44, minHeight: 44)
-                .accessibilityHint("Finishes onboarding without answering the questions")
         }
-        .padding(.horizontal, 24)
-        .padding(.top, 6)
-        .padding(.bottom, 4)
-        .background(Color.creamTint)
-    }
-
-    // MARK: Actions
-
-    private func makeQuiz() -> PlanQuizModel {
-        PlanQuizModel(session: .onboarding(from: preferences.preferences, deviceCountry: GroceryCountry.guessFromLocale()))
-    }
-
-    private func startQuiz() {
-        if quiz == nil { quiz = makeQuiz() }
-        withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.28)) { showingQuiz = true }
-    }
-
-    private func leaveQuiz() {
-        withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.28)) { showingQuiz = false }
     }
 
     /// "Build my week": save every answer, then let the main app generate the week.
     private func finish(_ answers: CookingPreferences) {
         preferences.save(answers)
         preferences.requestPlanBuild()
-        finishOnboarding()
-    }
-
-    private func skip() {
-        finishOnboarding()
-    }
-
-    private func finishOnboarding() {
         sync.triggerSync()
         // No paywall here: the free week comes first, and the Platter Pro teaser
         // follows its reveal. Still mark the session so the periodic app-open
         // paywall doesn't land on top of that first plan.
         subscriptions.markOnboardingPaywallShown()
-        completeOnboarding()
-    }
-
-    private func completeOnboarding() {
         preferences.completeOnboarding()
     }
 }

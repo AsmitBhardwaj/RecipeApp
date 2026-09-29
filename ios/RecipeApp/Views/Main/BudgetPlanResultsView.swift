@@ -226,6 +226,8 @@ struct BudgetResultsView: View {
                         .offset(y: index < shownCards ? 0 : 14)
                     }
                 }
+                PlanReminderCard()
+                    .opacity(shownCards >= model.dinnerCount ? 1 : 0)
             }
             .padding(.horizontal, 24)
             .padding(.top, 4)
@@ -327,6 +329,11 @@ struct BudgetResultsView: View {
                         .padding(.horizontal, 14)
                         .frame(height: 36)
                         .background(Color.planSelectedTint, in: Capsule())
+                        // Day-6 reminder tap (Pro): a brief sage ring draws the eye here.
+                        .overlay(Capsule().strokeBorder(Color.accentColor, lineWidth: 2)
+                            .opacity(model.highlightNewPlan ? 1 : 0))
+                        .scaleEffect(model.highlightNewPlan ? 1.06 : 1)
+                        .animation(.easeInOut(duration: 0.35), value: model.highlightNewPlan)
                         .frame(minHeight: 44)          // keep a 44pt tap target
                         .contentShape(Rectangle())
                 }

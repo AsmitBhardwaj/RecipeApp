@@ -34,6 +34,10 @@ struct MainTabView: View {
     @EnvironmentObject private var subscriptions: SubscriptionService
     /// Plan-quiz answers (synced); also carries the "build the first week" launch flag.
     @EnvironmentObject private var cookingPreferences: CookingPreferencesModel
+    /// Day-6 plan reminder (re-armed on foreground / Pro change) and the router that
+    /// carries a tapped reminder to Meal Plan → Plan on a Budget.
+    @EnvironmentObject private var reminders: PlanReminderModel
+    @EnvironmentObject private var reminderRouter: PlanReminderRouter
     /// Periodic app-open paywall presentation.
     @State private var showingAppOpenPaywall = false
     /// True for the current foreground activation if it was started by a
@@ -110,6 +114,9 @@ struct MainTabView: View {
         .tint(Color.accentColor)
         .task {
             cookingPreferences.attachSync(sync)
+            finishSkippedOnboardingIfNeeded()
+            // A reminder tapped during a cold launch: land on Plan on a Budget.
+            if reminderRouter.isPending(for: userScope) { selectedTab = .mealPlan }
             // Onboarding just built plan answers: land on Plan on a Budget.
             if cookingPreferences.pendingPlanBuild { selectedTab = .mealPlan }
             jobs.reconcile()
@@ -119,6 +126,7 @@ struct MainTabView: View {
         .onChange(of: scenePhase) { _, phase in
             switch phase {
             case .active:
+                Task { await reminders.refresh() }
                 jobs.reconcile()
                 sync.triggerSync()
                 Task { await evaluateAppOpenPaywall() }
@@ -128,6 +136,13 @@ struct MainTabView: View {
             default:
                 break
             }
+        }
+        .onChange(of: reminderRouter.pendingUserId) { _, _ in
+            if reminderRouter.isPending(for: userScope) { selectedTab = .mealPlan }
+        }
+        // Pro flips the pending reminder between one-shot and weekly repeat.
+        .onChange(of: subscriptions.isProUnlocked) { _, _ in
+            Task { await reminders.refresh() }
         }
         // Launched via `recipeapp://` (Share Extension "Open RecipeApp"): bring
         // the user to the Recipes tab so the just-submitted job's processing card
@@ -200,6 +215,20 @@ struct MainTabView: View {
         .animation(.spring(response: 0.4, dampingFraction: 0.85), value: claimSummary)
     }
 
+    /// Value's Skip (before sign-in): finish onboarding with the plan answers unset;
+    /// Plan on a Budget runs its setup flow the first time it's opened. Done here,
+    /// after sync is attached, so the completion flag syncs.
+    private func finishSkippedOnboardingIfNeeded() {
+        let flow = OnboardingFlowStore()
+        guard flow.skippedQuiz else { return }
+        if !cookingPreferences.hasCompletedOnboarding {
+            cookingPreferences.completeOnboarding()
+            // Same as finishing the quiz: no app-open paywall over the first session.
+            subscriptions.markOnboardingPaywallShown()
+        }
+        flow.clearSkip()
+    }
+
     /// Decide whether to show the periodic app-open paywall. Ensures the account's
     /// server entitlement is resolved first (no flash for Pro), then applies the
     /// frequency cap and skip conditions (see `PaywallCadence`).
@@ -233,4 +262,6 @@ struct MainTabView: View {
     )
     .environmentObject(SubscriptionService())
     .environmentObject(CookingPreferencesModel(userScope: "preview"))
+    .environmentObject(PlanReminderModel(userId: "preview", isPro: { false }))
+    .environmentObject(PlanReminderRouter.shared)
 }

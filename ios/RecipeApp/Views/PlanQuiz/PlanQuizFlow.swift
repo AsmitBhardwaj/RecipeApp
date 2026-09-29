@@ -25,7 +25,7 @@ final class PlanQuizModel: ObservableObject {
 struct PlanQuizFlow: View {
     @ObservedObject var model: PlanQuizModel
     /// Back on the first screen: leave the flow (to the intro screen, or dismiss).
-    let onExit: () -> Void
+    let onExit: (() -> Void)?
     /// Continue on the last screen, with the finished draft.
     let onFinish: (CookingPreferences) -> Void
 
@@ -53,6 +53,7 @@ struct PlanQuizFlow: View {
             continueTitle: continueTitle,
             canContinue: session.canContinue,
             onBack: goBack,
+            showsBack: !(session.index == 0 && onExit == nil),
             onContinue: goForward
         ) {
             content
@@ -77,7 +78,7 @@ struct PlanQuizFlow: View {
 
     private func goBack() {
         var next = model.session
-        guard next.back() else { onExit(); return }
+        guard next.back() else { onExit?(); return }
         withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.28)) { model.session = next }
     }
 
