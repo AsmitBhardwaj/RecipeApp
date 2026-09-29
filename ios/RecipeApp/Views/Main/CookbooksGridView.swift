@@ -98,6 +98,9 @@ struct CookbooksGridView: View {
         } message: {
             Text("Name your new cookbook.")
         }
+        .navigationDestination(for: Cookbook.self) { cookbook in
+            RecipeListView(jobs: jobs, cookbooks: cookbooks, cookbook: cookbook)
+        }
         .navigationDestination(for: Recipe.self) { recipe in
             RecipeDetailView(recipe: recipe, cookbooks: cookbooks, userScope: userScope)
         }
@@ -362,9 +365,10 @@ struct CookbooksGridView: View {
         } else {
             LazyVGrid(columns: columns, alignment: .leading, spacing: Theme.Spacing.xl) {
                 ForEach(filteredCookbooks) { cookbook in
-                    NavigationLink {
-                        RecipeListView(jobs: jobs, cookbooks: cookbooks, cookbook: cookbook)
-                    } label: {
+                    // Value-based (destination registered below) — never the
+                    // destination-closure form, which can't be mixed with the
+                    // value-based recipe links in the same stack.
+                    NavigationLink(value: cookbook) {
                         CookbookCard(
                             cookbook: cookbook,
                             recipes: recipes(in: cookbook),

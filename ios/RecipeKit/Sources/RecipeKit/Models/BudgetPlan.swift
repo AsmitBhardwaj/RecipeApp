@@ -22,6 +22,26 @@ public struct CostEstimate: Codable, Hashable, Sendable {
     }
 }
 
+/// Pexels attribution for a meal's stock photo. Every field is optional so a
+/// partial payload still decodes.
+public struct PhotoCredit: Codable, Hashable, Sendable {
+    public let photographer: String?
+    public let photographerUrl: String?
+    public let pexelsUrl: String?
+
+    public init(photographer: String? = nil, photographerUrl: String? = nil, pexelsUrl: String? = nil) {
+        self.photographer = photographer
+        self.photographerUrl = photographerUrl
+        self.pexelsUrl = pexelsUrl
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case photographer
+        case photographerUrl = "photographer_url"
+        case pexelsUrl = "pexels_url"
+    }
+}
+
 /// One recipe in a budget plan: the recipe body plus its per-user estimated cost
 /// and a short health signal.
 public struct PlannedRecipe: Codable, Identifiable, Hashable {
@@ -32,14 +52,21 @@ public struct PlannedRecipe: Codable, Identifiable, Hashable {
     /// from a v1.0 server response, so it decodes to `[]`. Use `equipmentLabels`
     /// for display — `no_cook` is never an appliance.
     public let equipmentUsed: [String]
+    /// Stock photo for the meal and its Pexels credit. Both absent from an older
+    /// server response, so they decode to nil (callers fall back to the tile).
+    public let imageUrl: String?
+    public let photoCredit: PhotoCredit?
 
     public var id: String { recipe.recipeId }
 
-    public init(recipe: Recipe, estimatedCost: CostEstimate, healthSignal: String, equipmentUsed: [String] = []) {
+    public init(recipe: Recipe, estimatedCost: CostEstimate, healthSignal: String, equipmentUsed: [String] = [],
+                imageUrl: String? = nil, photoCredit: PhotoCredit? = nil) {
         self.recipe = recipe
         self.estimatedCost = estimatedCost
         self.healthSignal = healthSignal
         self.equipmentUsed = equipmentUsed
+        self.imageUrl = imageUrl
+        self.photoCredit = photoCredit
     }
 
     enum CodingKeys: String, CodingKey {
@@ -47,6 +74,8 @@ public struct PlannedRecipe: Codable, Identifiable, Hashable {
         case estimatedCost = "estimated_cost"
         case healthSignal = "health_signal"
         case equipmentUsed = "equipment_used"
+        case imageUrl = "image_url"
+        case photoCredit = "photo_credit"
     }
 
     public init(from decoder: Decoder) throws {
@@ -55,6 +84,13 @@ public struct PlannedRecipe: Codable, Identifiable, Hashable {
         estimatedCost = try c.decode(CostEstimate.self, forKey: .estimatedCost)
         healthSignal = try c.decodeIfPresent(String.self, forKey: .healthSignal) ?? ""
         equipmentUsed = try c.decodeIfPresent([String].self, forKey: .equipmentUsed) ?? []
+        imageUrl = try c.decodeIfPresent(String.self, forKey: .imageUrl)
+        photoCredit = try c.decodeIfPresent(PhotoCredit.self, forKey: .photoCredit)
+    }
+
+    /// The meal's photo: the plan-level `image_url`, else the recipe's own.
+    public var photoURL: String? {
+        [imageUrl, recipe.imageUrl].lazy.compactMap { $0 }.first { !$0.isEmpty }
     }
 
     /// Display labels for `equipmentUsed`, de-duplicated and in server order.

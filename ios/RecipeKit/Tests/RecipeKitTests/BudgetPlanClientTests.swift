@@ -63,6 +63,30 @@ final class BudgetPlanClientTests: XCTestCase {
         """
     }
 
+    // MARK: Meal photos
+
+    func testMealPhotoAndCreditDecode() throws {
+        let json = mealJSON.replacingOccurrences(
+            of: "\"equipment_used\":[\"stovetop\"]",
+            with: "\"equipment_used\":[\"stovetop\"],\"image_url\":\"https://images.pexels.com/x.jpg\",\"photo_credit\":{\"photographer\":\"Ana\",\"photographer_url\":\"https://pexels.com/@ana\",\"pexels_url\":\"https://pexels.com/photo/1\"}"
+        )
+        let meal = try JSONDecoder().decode(PlannedRecipe.self, from: Data(json.utf8))
+        XCTAssertEqual(meal.photoURL, "https://images.pexels.com/x.jpg")
+        XCTAssertEqual(meal.photoCredit?.photographer, "Ana")
+        XCTAssertEqual(meal.photoCredit?.pexelsUrl, "https://pexels.com/photo/1")
+        // Survives the saved-plan round trip (encode → decode).
+        let again = try JSONDecoder().decode(PlannedRecipe.self, from: JSONEncoder().encode(meal))
+        XCTAssertEqual(again.photoCredit, meal.photoCredit)
+        XCTAssertEqual(again.imageUrl, meal.imageUrl)
+    }
+
+    func testMealWithoutPhotoFieldsStillDecodes() throws {
+        let meal = try JSONDecoder().decode(PlannedRecipe.self, from: Data(mealJSON.utf8))
+        XCTAssertNil(meal.imageUrl)
+        XCTAssertNil(meal.photoCredit)
+        XCTAssertNil(meal.photoURL)
+    }
+
     // MARK: Request shape
 
     func testUnconfiguredRequestStaysV10Shaped() async {

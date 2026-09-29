@@ -32,11 +32,42 @@ extension FoodSticker {
 
 /// A rounded tile tinted by food category, with the sticker on top when the art
 /// exists (until it lands, the tint alone shows).
+/// A remote plan photo that fades in once loaded. Shows `placeholder` until then
+/// and on failure. Uses AsyncImage, i.e. the app's existing URLCache-backed loading.
+struct PlanPhoto<Placeholder: View>: View {
+    let url: String
+    @ViewBuilder var placeholder: () -> Placeholder
+
+    var body: some View {
+        AsyncImage(url: URL(string: url), transaction: Transaction(animation: .easeIn(duration: 0.3))) { phase in
+            switch phase {
+            case .success(let image):
+                image.resizable().scaledToFill().transition(.opacity)
+            default:
+                placeholder()
+            }
+        }
+    }
+}
+
 struct DinnerTile: View {
     let category: FoodSticker
     var size: CGFloat = 64
+    /// Stock photo; when set (and loaded) it replaces the tinted tile + sticker.
+    var photoURL: String? = nil
 
     var body: some View {
+        if let photoURL, !photoURL.isEmpty {
+            PlanPhoto(url: photoURL) { tile }
+                .frame(width: size, height: size)
+                .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                .accessibilityHidden(true)
+        } else {
+            tile
+        }
+    }
+
+    private var tile: some View {
         RoundedRectangle(cornerRadius: 16, style: .continuous)
             .fill(category.tileTint)
             .frame(width: size, height: size)

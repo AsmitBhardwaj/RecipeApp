@@ -468,7 +468,7 @@ private struct DinnerCard: View {
     var body: some View {
         Button(action: onTap) {
             HStack(alignment: .top, spacing: 14) {
-                DinnerTile(category: category)
+                DinnerTile(category: category, photoURL: planned.photoURL)
                 VStack(alignment: .leading, spacing: 8) {
                     Text(planned.recipe.title)
                         .font(.system(size: 17, weight: .semibold))
@@ -559,7 +559,7 @@ private struct DinnerSheet: View {
             get: { model.showTeaser && model.selectedMealIndex != nil },
             set: { if !$0 { model.teaserClosed(isPro: subscriptions.isProUnlocked) } }
         )) {
-            PaywallTeaserView(budget: Int(model.budgetValue.rounded()), dinners: model.dinnerCount) { model.teaserClosed(isPro: $0) }
+            PaywallTeaserView(budget: Int(model.budgetValue.rounded()), dinners: model.dinnerCount, photoURLs: model.recipes.compactMap(\.photoURL)) { model.teaserClosed(isPro: $0) }
                 .environmentObject(subscriptions)
         }
         .fullScreenCover(isPresented: $cooking) {
@@ -569,11 +569,44 @@ private struct DinnerSheet: View {
         }
     }
 
+    /// Full-bleed 16:9 photo with rounded bottom corners and a Pexels credit.
+    private func heroPhoto(_ url: String, credit: PhotoCredit?) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Color.clear
+                .aspectRatio(16 / 9, contentMode: .fit)
+                .overlay { PlanPhoto(url: url) { Color.textSecondary.opacity(0.08) } }
+                .clipShape(UnevenRoundedRectangle(bottomLeadingRadius: 20, bottomTrailingRadius: 20, style: .continuous))
+                .accessibilityHidden(true)
+            if let credit, credit.photographer != nil || credit.pexelsUrl != nil {
+                photoCaption(credit)
+            }
+        }
+        // Bleed past the content's 24pt side padding to the sheet edges.
+        .padding(.horizontal, -24)
+    }
+
+    private func photoCaption(_ credit: PhotoCredit) -> some View {
+        let text = "Photo: \(credit.photographer ?? "Unknown") / Pexels"
+        return Group {
+            if let link = credit.pexelsUrl.flatMap(URL.init(string:)) {
+                Link(text, destination: link)
+            } else {
+                Text(text)
+            }
+        }
+        .font(.system(size: 12))
+        .foregroundStyle(Color.textSecondary)
+        .padding(.horizontal, 24)
+    }
+
     private func content(_ planned: PlannedRecipe, index: Int) -> some View {
         let recipe = planned.recipe
         let swapping = model.swappingIndex == index
         return ScrollView {
             VStack(alignment: .leading, spacing: 18) {
+                if let photo = planned.photoURL, !photo.isEmpty {
+                    heroPhoto(photo, credit: planned.photoCredit)
+                }
                 HStack(alignment: .center, spacing: 14) {
                     FoodStickerView(mealName: recipe.title, size: 72)
                     Text(recipe.title)
@@ -621,7 +654,7 @@ private struct DinnerSheet: View {
                 }
             }
             .padding(.horizontal, 24)
-            .padding(.top, 28)
+            .padding(.top, planned.photoURL?.isEmpty == false ? 0 : 28)
             .padding(.bottom, 24)
             .frame(maxWidth: .infinity, alignment: .leading)
         }

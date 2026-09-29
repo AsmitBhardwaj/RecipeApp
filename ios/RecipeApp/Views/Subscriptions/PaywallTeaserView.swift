@@ -22,6 +22,8 @@ struct PaywallTeaserView: View {
     /// generic copy.
     var budget: Int? = nil
     var dinners: Int? = nil
+    /// The current plan's dinner photos (blurred in the preview rows); empty → sticker tiles.
+    var photoURLs: [String] = []
     /// Called when the paywall is dismissed (close or purchase); the flag is
     /// whether Pro is now unlocked.
     let onClose: (_ isPro: Bool) -> Void
@@ -69,7 +71,7 @@ struct PaywallTeaserView: View {
                     .padding(.top, 10)
                     .accessibilitySortPriority(2)
 
-                NextWeekPreview(budget: budget, dinners: dinners)
+                NextWeekPreview(budget: budget, dinners: dinners, photoURLs: photoURLs)
                     .padding(.top, 20)
                     .padding(.horizontal, 6)
 
@@ -173,6 +175,7 @@ struct PaywallTeaserView: View {
 private struct NextWeekPreview: View {
     let budget: Int?
     let dinners: Int?
+    let photoURLs: [String]
 
     private static let categories: [FoodSticker] = [.pasta, .curry, .salad]
 
@@ -206,9 +209,10 @@ private struct NextWeekPreview: View {
                         .foregroundStyle(Color.textSecondary)
                 }
                 VStack(spacing: 8) {
-                    ForEach(Array(Self.categories.enumerated()), id: \.offset) { _, category in
+                    ForEach(Array(Self.categories.enumerated()), id: \.offset) { index, category in
                         HStack(spacing: 12) {
-                            DinnerTile(category: category, size: 40)
+                            DinnerTile(category: category, size: 40,
+                                       photoURL: photoURLs.indices.contains(index) ? photoURLs[index] : nil)
                             VStack(alignment: .leading, spacing: 7) {
                                 Capsule().fill(Color(hex: "D9D6CF")).frame(height: 10)
                                 Capsule().fill(Color(hex: "E8E6E1")).frame(width: 90, height: 8)
