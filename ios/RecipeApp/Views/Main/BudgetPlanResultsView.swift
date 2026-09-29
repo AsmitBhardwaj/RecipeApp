@@ -55,7 +55,7 @@ struct FoodStickerView: View {
 struct BudgetResultsView: View {
     @ObservedObject var model: BudgetPlanModel
     var userScope: String?
-    var onSaved: () -> Void
+    var onOpenMealPlan: () -> Void
     @EnvironmentObject private var subscriptions: SubscriptionService
 
     var body: some View {
@@ -86,6 +86,22 @@ struct BudgetResultsView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .safeAreaInset(edge: .bottom) { bottomBar }
+        .overlay(alignment: .top) {
+            if model.showFreeSavedToast {
+                Text("Your free week is saved to your recipes")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(Color.white)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 12)
+                    .background(Color.textPrimary.opacity(0.92), in: Capsule())
+                    .padding(.top, 8)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+                    .accessibilityAddTraits(.isStaticText)
+                    .onAppear { UIAccessibility.post(notification: .announcement, argument: "Your free week is saved to your recipes") }
+            }
+        }
+        .animation(.easeInOut(duration: 0.3), value: model.showFreeSavedToast)
+        .onAppear { model.refreshAddedState() }
         .sheet(isPresented: $model.showGrocery) {
             BudgetGroceryListView(
                 recipes: model.recipes.map(\.recipe),
@@ -105,10 +121,23 @@ struct BudgetResultsView: View {
 
     private var header: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text("Your week")
-                .font(.editorialTitle(size: 32, relativeTo: .largeTitle))
-                .foregroundStyle(Color.textPrimary)
-                .accessibilityAddTraits(.isHeader)
+            HStack(alignment: .firstTextBaseline) {
+                Text("Your week")
+                    .font(.editorialTitle(size: 32, relativeTo: .largeTitle))
+                    .foregroundStyle(Color.textPrimary)
+                    .accessibilityAddTraits(.isHeader)
+                Spacer(minLength: 8)
+                Button { model.newPlan() } label: {
+                    Label("New plan", systemImage: "plus")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(Color.accentColor)
+                        .frame(minHeight: 44)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("New plan")
+                .accessibilityHint(model.swapsRemaining != nil ? "Opens Platter Pro" : "Starts a new plan")
+            }
             Text(subtitle)
                 .font(.system(size: 14))
                 .foregroundStyle(Color.textSecondary)
@@ -156,18 +185,20 @@ struct BudgetResultsView: View {
             .accessibilityHint("Shows the ingredients to buy for this plan")
 
             Button {
-                model.usePlan()
-                onSaved()
+                if model.weekAdded { onOpenMealPlan() } else { model.addWeekToMealPlan() }
             } label: {
-                Text("Use this plan")
+                Text(model.weekAdded ? "Added to Meal Plan ✓" : "Add week to Meal Plan")
                     .font(.system(size: 17, weight: .semibold))
                     .foregroundStyle(Color.white)
+                    .multilineTextAlignment(.center)
+                    .minimumScaleFactor(0.8)
+                    .lineLimit(2)
                     .frame(maxWidth: .infinity, minHeight: 56)
                     .background(Color.accentColor, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
             }
             .buttonStyle(.plain)
-            .accessibilityLabel("Use this plan")
-            .accessibilityHint("Adds these dinners to your meal plan")
+            .accessibilityLabel(model.weekAdded ? "Added to Meal Plan" : "Add week to Meal Plan")
+            .accessibilityHint(model.weekAdded ? "Opens your Meal Plan" : "Adds these dinners to open days in your Meal Plan")
         }
         .padding(.horizontal, 24)
         .padding(.vertical, 12)
@@ -327,6 +358,7 @@ private struct DinnerSheet: View {
         }
         .background(Color.appBackground)
         .presentationDragIndicator(.visible)
+        .onAppear { model.refreshAddedState() }
         // Paywall from inside the sheet (the root can't present over it).
         .sheet(isPresented: Binding(
             get: { model.showPaywall && model.selectedMealIndex != nil },
@@ -451,6 +483,24 @@ private struct DinnerSheet: View {
             .buttonStyle(.plain)
             .disabled(model.isSwapping)
             .accessibilityLabel(swapping ? "Swapping this dinner" : "Swap this dinner")
+
+            let added = model.isAdded(planned.id)
+            Button {
+                model.addDinnerToMealPlan(at: index)
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: added ? "checkmark" : "calendar.badge.plus")
+                        .accessibilityHidden(true)
+                    Text(added ? "Added ✓" : "Add to Meal Plan")
+                }
+                .font(.system(size: 17, weight: .semibold))
+                .foregroundStyle(Color.accentColor)
+                .frame(maxWidth: .infinity, minHeight: 56)
+                .background(Color.planSelectedTint, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+            }
+            .buttonStyle(.plain)
+            .disabled(added || swapping)
+            .accessibilityLabel(added ? "Added to Meal Plan" : "Add to Meal Plan")
 
             if !planned.recipe.instructions.isEmpty {
                 Button { cooking = true } label: {

@@ -60,6 +60,26 @@ final class CookbooksModel: ObservableObject, SyncRefreshable {
         return cookbook
     }
 
+    /// The cookbook with this name (case-insensitive), if any.
+    func cookbook(named name: String) -> Cookbook? {
+        let wanted = name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return cookbooks.first { $0.name.lowercased() == wanted }
+    }
+
+    /// The existing cookbook with this name, or a newly created one — so callers
+    /// (the auto-saved "Budget plan") never create a duplicate.
+    @discardableResult
+    func ensureCookbook(named name: String) -> Cookbook? {
+        cookbook(named: name) ?? createCookbook(named: name)
+    }
+
+    /// Add a recipe to one cookbook, leaving its other memberships alone. Idempotent.
+    func addRecipe(_ recipeId: String, to cookbookId: String) {
+        let current = cookbookIds(for: recipeId)
+        guard !current.contains(cookbookId) else { return }
+        setCookbooks(for: recipeId, to: current.union([cookbookId]))
+    }
+
     func rename(_ cookbook: Cookbook, to name: String) {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }

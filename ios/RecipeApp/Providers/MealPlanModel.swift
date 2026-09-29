@@ -93,6 +93,26 @@ final class MealPlanModel: ObservableObject, SyncRefreshable {
         reload()
     }
 
+    // MARK: - Budget-plan placement
+
+    /// Whether a recipe is assigned anywhere in the plan (any week, any slot).
+    func containsRecipe(_ recipeId: String) -> Bool {
+        store.all().contains { $0.recipeId == recipeId }
+    }
+
+    /// Place dinners on the next open days starting today, one per day. A day that
+    /// already has a dinner is skipped, so nothing the user planned is stacked on
+    /// or displaced. Returns the days used, in order.
+    @discardableResult
+    func addDinners(_ recipes: [Recipe], from start: Date = Date()) -> [Date] {
+        let occupied = Set(store.all().filter { $0.mealSlot == .dinner }.map(\.dayKey))
+        let days = MealPlanScheduler.nextOpenDays(
+            count: recipes.count, from: start, occupiedDinnerDayKeys: occupied, calendar: calendar
+        )
+        for (recipe, day) in zip(recipes, days) { add(recipe: recipe, to: day, slot: .dinner) }
+        return days
+    }
+
     // MARK: - Mutations
 
     func add(recipe: Recipe, to date: Date, slot: MealSlot) {

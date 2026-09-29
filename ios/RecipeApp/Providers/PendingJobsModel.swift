@@ -395,6 +395,20 @@ final class PendingJobsModel: ObservableObject, SyncRefreshable {
         sync?.record(.library, itemId: recipe.recipeId, payload: nil, deleted: true)
     }
 
+    /// Save a recipe that didn't come from an extraction job (e.g. a free Plan on
+    /// a Budget dinner) into the library, the same way `handleComplete` does: in
+    /// the list, the on-device cache, and a `.library` sync record. Idempotent —
+    /// saving a recipe already in the library changes nothing (no duplicates, no
+    /// reordering).
+    func saveToLibrary(_ recipe: Recipe) {
+        guard !recipes.contains(where: { $0.recipeId == recipe.recipeId }) else { return }
+        recipes.insert(recipe, at: 0)
+        recipeStore.upsert(recipe)
+        let iso = ISO8601DateFormatter().string(from: Date())
+        sync?.record(.library, itemId: recipe.recipeId,
+                     payload: SyncCodec.encode(LibraryPayload(recipeId: recipe.recipeId, savedAt: iso)))
+    }
+
     /// Dismiss the one-time failure alert. The failed card stays in the list for
     /// detailed review.
     func clearFailureAlert() {

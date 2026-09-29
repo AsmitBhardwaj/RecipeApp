@@ -157,7 +157,7 @@ struct RecipeApp: App {
                     generate: { _, _, _, _, _ in Self.sampleBudgetPlan(free: mode != "budgetPro") },
                     swap: { _, index in Self.sampleSwap(index: index, free: mode != "budgetPro") },
                     commit: { _ in },
-                    onSaved: {},
+                    onOpenMealPlan: {},
                     autoGenerate: mode == "budgetResults"
                 )
                 .environmentObject(CookingPreferencesModel(userScope: "preview"))

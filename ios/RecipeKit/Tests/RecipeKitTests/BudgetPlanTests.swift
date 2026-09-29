@@ -321,3 +321,77 @@ final class BudgetPlanCardTextTests: XCTestCase {
         XCTAssertEqual(planned(prep: 5, cook: 5, total: 75, equipment: []).timeLabel, "1 hr 15 min")
     }
 }
+
+final class BudgetPlanPersistenceTests: XCTestCase {
+    private func defaults() -> UserDefaults { UserDefaults(suiteName: "savedplan-\(UUID().uuidString)")! }
+
+    private func plan() -> SavedBudgetPlan {
+        let recipe = Recipe(
+            recipeId: "r1", canonicalVideoId: "budget:r1", title: "Lentil Soup",
+            servings: Servings(amount: 2, unit: nil), prepTimeMinutes: nil, cookTimeMinutes: 20,
+            totalTimeMinutes: nil, ingredients: [Ingredient(quantity: 1, unit: "cup", name: "lentils", notes: nil)],
+            instructions: [], confidence: nil, sourceType: .generated, imageUrl: nil, imageSource: .none, transcript: nil
+        )
+        return SavedBudgetPlan(
+            planId: "p1",
+            recipes: [PlannedRecipe(recipe: recipe, estimatedCost: CostEstimate(amount: 7), healthSignal: "hs", equipmentUsed: ["no_cook"])],
+            total: 7, budget: 75, swapsRemaining: 2, isFree: true, householdSize: 3, regionLabel: "Canada"
+        )
+    }
+
+    func testRoundTripPreservesEverything() {
+        let d = defaults()
+        let store = SavedBudgetPlanStore(defaults: d, userScope: "u1")
+        XCTAssertNil(store.load())
+        store.save(plan())
+        let loaded = store.load()
+        XCTAssertEqual(loaded?.planId, "p1")
+        XCTAssertEqual(loaded?.swapsRemaining, 2)
+        XCTAssertEqual(loaded?.recipes.first?.equipmentUsed, ["no_cook"])
+        XCTAssertEqual(loaded?.recipes.first?.recipe.ingredients.first?.name, "lentils")
+        XCTAssertEqual(loaded?.householdSize, 3)
+        XCTAssertEqual(loaded?.regionLabel, "Canada")
+    }
+
+    func testPlansAreAccountScopedAndClearable() {
+        let d = defaults()
+        SavedBudgetPlanStore(defaults: d, userScope: "a").save(plan())
+        XCTAssertNil(SavedBudgetPlanStore(defaults: d, userScope: "b").load())
+        SavedBudgetPlanStore(defaults: d, userScope: "a").clear()
+        XCTAssertNil(SavedBudgetPlanStore(defaults: d, userScope: "a").load())
+    }
+
+    func testProPlanNilSwapsRoundTrips() {
+        let d = defaults()
+        var p = plan(); p.swapsRemaining = nil; p.isFree = false
+        SavedBudgetPlanStore(defaults: d).save(p)
+        XCTAssertNil(SavedBudgetPlanStore(defaults: d).load()?.swapsRemaining)
+    }
+
+    func testEraserRemovesSavedPlan() {
+        let d = defaults()
+        SavedBudgetPlanStore(defaults: d, userScope: "u").save(plan())
+        AccountDataEraser.erase(userId: "u", defaults: d)
+        XCTAssertNil(SavedBudgetPlanStore(defaults: d, userScope: "u").load())
+    }
+}
+
+final class MealPlanSchedulerTests: XCTestCase {
+    private var cal: Calendar { var c = Calendar(identifier: .gregorian); c.timeZone = TimeZone(identifier: "UTC")!; return c }
+    private var start: Date { cal.date(from: DateComponents(year: 2026, month: 9, day: 28, hour: 15))! }
+
+    func testEmptyPlanUsesConsecutiveDaysFromStart() {
+        let days = MealPlanScheduler.nextOpenDays(count: 3, from: start, occupiedDinnerDayKeys: [], calendar: cal)
+        XCTAssertEqual(days.map { MealPlanScheduler.dayKey(for: $0, calendar: cal) }, ["2026-09-28", "2026-09-29", "2026-09-30"])
+    }
+
+    func testSkipsDaysThatAlreadyHaveADinner() {
+        let days = MealPlanScheduler.nextOpenDays(
+            count: 3, from: start, occupiedDinnerDayKeys: ["2026-09-28", "2026-09-30"], calendar: cal)
+        XCTAssertEqual(days.map { MealPlanScheduler.dayKey(for: $0, calendar: cal) }, ["2026-09-29", "2026-10-01", "2026-10-02"])
+    }
+
+    func testZeroCount() {
+        XCTAssertTrue(MealPlanScheduler.nextOpenDays(count: 0, from: start, occupiedDinnerDayKeys: [], calendar: cal).isEmpty)
+    }
+}

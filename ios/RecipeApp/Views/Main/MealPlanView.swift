@@ -171,21 +171,28 @@ struct MealPlanView: View {
                 return try await sync.budgetSwap(planID: planID, mealIndex: index)
             },
             commit: { recipes in commitBudgetRecipes(recipes) },
-            onSaved: { mode = .thisWeek }
+            addDinner: { planned in commitBudgetRecipes([planned]) },
+            isInMealPlan: { plan.containsRecipe($0) },
+            savedPlanStore: SavedBudgetPlanStore(userScope: userScope),
+            onFreePlanGenerated: { budgetLibrary.savePlan($0) },
+            onMealSwapped: { budgetLibrary.replace($0, with: $1) },
+            onOpenMealPlan: { mode = .thisWeek }
         )
     }
 
-    /// Commit accepted budget recipes into the existing meal_plan collection: one
-    /// dinner per day starting today. Also persists each recipe body locally so it
-    /// can be opened / aggregated later (the plan entry only snapshots title+image).
+    private var budgetLibrary: BudgetPlanLibrary {
+        BudgetPlanLibrary(jobs: jobs, cookbooks: cookbooks, mealPlan: plan)
+    }
+
+    /// Add budget dinners to the meal plan: one per day starting today, skipping
+    /// any day that already has a dinner (previously each recipe was added on
+    /// today+index regardless, stacking onto days with dinners). Also persists each
+    /// recipe body locally so it can be opened / aggregated later (the plan entry
+    /// only snapshots title+image).
     private func commitBudgetRecipes(_ recipes: [PlannedRecipe]) {
         let store = RecipeStore(userScope: userScope)
-        let today = Calendar.current.startOfDay(for: Date())
-        for (index, planned) in recipes.enumerated() {
-            let date = Calendar.current.date(byAdding: .day, value: index, to: today) ?? today
-            plan.add(recipe: planned.recipe, to: date, slot: .dinner)
-            store.upsert(planned.recipe)
-        }
+        plan.addDinners(recipes.map(\.recipe))
+        for planned in recipes { store.upsert(planned.recipe) }
     }
 
     private var dayList: some View {

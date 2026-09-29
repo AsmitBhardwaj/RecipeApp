@@ -55,8 +55,14 @@ final class BudgetPlanModel: ObservableObject {
     @Published var selectedMealIndex: Int?
     @Published var showGrocery = false
 
+    /// The dinners already in the Meal Plan (derived from the plan itself, so it
+    /// survives relaunch and reflects removals on the next refresh).
+    @Published private(set) var addedIDs: Set<String> = []
+    /// One-time "free week saved" toast, shown right after a free plan generates.
+    @Published private(set) var showFreeSavedToast = false
+
     /// Shown in "Estimated for <label> shoppers" until Stage 2 supplies a store.
-    let regionLabel: String?
+    private(set) var regionLabel: String?
 
     private let dietaryPreferences: [DietaryPreference]
     private let pantryNames: () -> [String]
@@ -64,6 +70,14 @@ final class BudgetPlanModel: ObservableObject {
     private let generate: Generate
     private let swap: Swap
     private let commit: (_ recipes: [PlannedRecipe]) -> Void
+    private let addDinnerToMealPlan: (_ recipe: PlannedRecipe) -> Void
+    private let isInMealPlan: (_ recipeId: String) -> Bool
+    private let savedPlanStore: SavedBudgetPlanStore?
+    private let onFreePlanGenerated: (_ recipes: [Recipe]) -> Void
+    private let onMealSwapped: (_ old: Recipe, _ new: Recipe) -> Void
+    private var toastTask: Task<Void, Never>?
+    /// Set when "New plan" opened the paywall, so a purchase continues to setup.
+    private var newPlanPending = false
 
     private let budgetStep = 5
 
@@ -76,7 +90,12 @@ final class BudgetPlanModel: ObservableObject {
         options: @escaping () -> BudgetPlanOptions = { .none },
         generate: @escaping Generate,
         swap: @escaping Swap,
-        commit: @escaping (_ recipes: [PlannedRecipe]) -> Void
+        commit: @escaping (_ recipes: [PlannedRecipe]) -> Void,
+        addDinner: @escaping (_ recipe: PlannedRecipe) -> Void = { _ in },
+        isInMealPlan: @escaping (_ recipeId: String) -> Bool = { _ in false },
+        savedPlanStore: SavedBudgetPlanStore? = nil,
+        onFreePlanGenerated: @escaping (_ recipes: [Recipe]) -> Void = { _ in },
+        onMealSwapped: @escaping (_ old: Recipe, _ new: Recipe) -> Void = { _, _ in }
     ) {
         let hs = max(1, min(householdSize, 12))
         self.householdSize = hs
@@ -87,8 +106,38 @@ final class BudgetPlanModel: ObservableObject {
         self.generate = generate
         self.swap = swap
         self.commit = commit
+        self.addDinnerToMealPlan = addDinner
+        self.isInMealPlan = isInMealPlan
+        self.savedPlanStore = savedPlanStore
+        self.onFreePlanGenerated = onFreePlanGenerated
+        self.onMealSwapped = onMealSwapped
         // Never start below the per-person minimum.
         self.budget = BudgetMath.reconciled(currentBudget: budget, householdSize: hs)
+        restoreSavedPlan()
+    }
+
+    // MARK: Persistence
+
+    /// Reopening Plan on a Budget shows the saved "Your week" instead of setup.
+    private func restoreSavedPlan() {
+        guard let saved = savedPlanStore?.load(), !saved.recipes.isEmpty else { return }
+        householdSize = max(1, min(saved.householdSize, 12))
+        regionLabel = saved.regionLabel
+        apply(BudgetPlanResponse(
+            recipes: saved.recipes, currency: saved.currency, budget: saved.budget, minBudget: 0,
+            regionalMultiplier: 1, planId: saved.planId, isFree: saved.isFree, swapsRemaining: saved.swapsRemaining
+        ))
+        total = saved.total   // the saved total already reflects any swaps
+        phase = .results
+    }
+
+    private func persist() {
+        guard let response, !recipes.isEmpty else { return }
+        savedPlanStore?.save(SavedBudgetPlan(
+            planId: planID, recipes: recipes, total: total, budget: response.budget, currency: response.currency,
+            swapsRemaining: swapsRemaining, isFree: response.isFree,
+            householdSize: householdSize, regionLabel: regionLabel
+        ))
     }
 
     // Budget stepper (block 1 + 2).
@@ -151,6 +200,13 @@ final class BudgetPlanModel: ObservableObject {
             }
             apply(resp)
             phase = .results
+            persist()
+            if resp.isFree {
+                // The free plan is the account's only one: keep its recipes in the
+                // library so it can never be lost, and say so once.
+                onFreePlanGenerated(recipes.map(\.recipe))
+                flashFreeSavedToast()
+            }
         } catch BudgetPlanError.proRequired, BudgetPlanError.freePlanUsed {
             // The server decides who may generate; both mean "show the paywall".
             showPaywall = true
@@ -175,6 +231,7 @@ final class BudgetPlanModel: ObservableObject {
         swappingIndex = nil
         swapFailure = nil
         selectedMealIndex = nil
+        refreshAddedState()
     }
 
     // MARK: Derived (results)
@@ -201,13 +258,18 @@ final class BudgetPlanModel: ObservableObject {
         do {
             let result = try await swap(planID, index)
             guard recipes.indices.contains(result.mealIndex) else { return }
+            let old = recipes[result.mealIndex].recipe
             withAnimation(.easeInOut(duration: 0.35)) {
                 recipes[result.mealIndex] = result.meal
                 total = result.planTotal
                 swapsRemaining = result.swapsRemaining
             }
+            if response?.isFree == true { onMealSwapped(old, result.meal.recipe) }
+            persist()
+            refreshAddedState()
         } catch BudgetPlanError.freeSwapsUsed {
             swapsRemaining = 0
+            persist()
             showPaywall = true
         } catch BudgetPlanError.proRequired, BudgetPlanError.freePlanUsed {
             showPaywall = true
@@ -227,9 +289,65 @@ final class BudgetPlanModel: ObservableObject {
 
     var groceryPantryNames: [String] { pantryNames() }
 
-    /// "Use this plan": commits every dinner (there are no per-dinner toggles now).
-    func usePlan() { commit(recipes) }
+    // MARK: Meal Plan (always the user's choice)
+
+    /// Every dinner is already in the Meal Plan.
+    var weekAdded: Bool { !recipes.isEmpty && recipes.allSatisfy { addedIDs.contains($0.id) } }
+    func isAdded(_ id: String) -> Bool { addedIDs.contains(id) }
+
+    /// Re-derive which dinners are in the Meal Plan (also picks up removals made
+    /// on the Meal Plan tab).
+    func refreshAddedState() {
+        addedIDs = Set(recipes.map(\.id).filter(isInMealPlan))
+    }
+
+    /// "Add week to Meal Plan": adds only the dinners not already there, each onto
+    /// the next open day (never over an existing dinner).
+    func addWeekToMealPlan() {
+        let missing = recipes.filter { !addedIDs.contains($0.id) }
+        guard !missing.isEmpty else { return }
+        commit(missing)
+        refreshAddedState()
+    }
+
+    /// Add one dinner to the next open day.
+    func addDinnerToMealPlan(at index: Int) {
+        guard recipes.indices.contains(index), !addedIDs.contains(recipes[index].id) else { return }
+        addDinnerToMealPlan(recipes[index])
+        refreshAddedState()
+    }
+
+    // MARK: New plan
+
+    /// Pro (or any non-free plan): back to setup. A free plan's account has used
+    /// its one plan, so go straight to the paywall — no generate call just to get
+    /// a 403. If they subscribe from it, `paywallDismissed` continues to setup.
+    func newPlan() {
+        if response?.isFree == true {
+            newPlanPending = true
+            showPaywall = true
+        } else {
+            startOver()
+        }
+    }
+
+    func paywallDismissed(isPro: Bool) {
+        showPaywall = false
+        if newPlanPending && isPro { startOver() }
+        newPlanPending = false
+    }
+
     func startOver() { phase = .setup }
+
+    private func flashFreeSavedToast() {
+        showFreeSavedToast = true
+        toastTask?.cancel()
+        toastTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 3_500_000_000)
+            guard !Task.isCancelled else { return }
+            self?.showFreeSavedToast = false
+        }
+    }
 }
 
 private extension BudgetPlanError {
@@ -251,7 +369,7 @@ private extension BudgetPlanError {
 /// a `@StateObject` in the parent can't capture at init.
 struct BudgetPlanContainer: View {
     @StateObject private var model: BudgetPlanModel
-    private let onSaved: () -> Void
+    private let onOpenMealPlan: () -> Void
     private let userScope: String?
     /// DEBUG/QA only: auto-run generation on appear so the results state can be
     /// screenshotted. Always false in production.
@@ -268,7 +386,12 @@ struct BudgetPlanContainer: View {
         generate: @escaping BudgetPlanModel.Generate,
         swap: @escaping BudgetPlanModel.Swap,
         commit: @escaping (_ recipes: [PlannedRecipe]) -> Void,
-        onSaved: @escaping () -> Void,
+        addDinner: @escaping (_ recipe: PlannedRecipe) -> Void = { _ in },
+        isInMealPlan: @escaping (_ recipeId: String) -> Bool = { _ in false },
+        savedPlanStore: SavedBudgetPlanStore? = nil,
+        onFreePlanGenerated: @escaping (_ recipes: [Recipe]) -> Void = { _ in },
+        onMealSwapped: @escaping (_ old: Recipe, _ new: Recipe) -> Void = { _, _ in },
+        onOpenMealPlan: @escaping () -> Void,
         autoGenerate: Bool = false
     ) {
         _model = StateObject(wrappedValue: BudgetPlanModel(
@@ -279,15 +402,20 @@ struct BudgetPlanContainer: View {
             options: options,
             generate: generate,
             swap: swap,
-            commit: commit
+            commit: commit,
+            addDinner: addDinner,
+            isInMealPlan: isInMealPlan,
+            savedPlanStore: savedPlanStore,
+            onFreePlanGenerated: onFreePlanGenerated,
+            onMealSwapped: onMealSwapped
         ))
-        self.onSaved = onSaved
+        self.onOpenMealPlan = onOpenMealPlan
         self.userScope = userScope
         self.autoGenerate = autoGenerate
     }
 
     var body: some View {
-        BudgetPlanView(model: model, userScope: userScope, onSaved: onSaved)
+        BudgetPlanView(model: model, userScope: userScope, onOpenMealPlan: onOpenMealPlan)
             .task {
                 if autoGenerate && !didAutoGenerate {
                     didAutoGenerate = true
@@ -303,15 +431,15 @@ struct BudgetPlanView: View {
     @ObservedObject var model: BudgetPlanModel
     @EnvironmentObject private var subscriptions: SubscriptionService
     var userScope: String? = nil
-    /// Called after "Use this plan" so the tab returns to "This Week".
-    var onSaved: () -> Void = {}
+    /// Opens the Meal Plan tab ("Added to Meal Plan ✓").
+    var onOpenMealPlan: () -> Void = {}
 
     var body: some View {
         Group {
             switch model.phase {
             case .setup: BudgetSetupView(model: model)
             case .generating: BudgetGeneratingView()
-            case .results: BudgetResultsView(model: model, userScope: userScope, onSaved: onSaved)
+            case .results: BudgetResultsView(model: model, userScope: userScope, onOpenMealPlan: onOpenMealPlan)
             case .failed(let message): failedState(message)
             }
         }
@@ -320,7 +448,7 @@ struct BudgetPlanView: View {
         .sheet(isPresented: Binding(
             get: { model.showPaywall && model.selectedMealIndex == nil },
             set: { if !$0 { model.showPaywall = false } }
-        )) {
+        ), onDismiss: { model.paywallDismissed(isPro: subscriptions.isProUnlocked) }) {
             PlatterProPaywallView().environmentObject(subscriptions)
         }
     }
