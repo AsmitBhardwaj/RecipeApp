@@ -36,7 +36,8 @@ public struct BudgetPlanClient {
         dietaryPreferences: [String],
         pantryItems: [String],
         country: String?,
-        areaType: String?
+        areaType: String?,
+        options: BudgetPlanOptions = .none
     ) async throws -> BudgetPlanResponse {
         var request = try await makeRequest("v1/meal-plan/budget", method: "POST")
         request.httpBody = try JSONEncoder().encode(RequestBody(
@@ -46,9 +47,28 @@ public struct BudgetPlanClient {
             dietaryPreferences: dietaryPreferences,
             pantryItems: pantryItems,
             country: country,
-            areaType: areaType
+            areaType: areaType,
+            storeTier: options.storeTier,
+            appliances: options.appliances,
+            foodMoods: options.foodMoods
         ))
-        return try await send(request)
+        return try await send(request, as: BudgetPlanResponse.self)
+    }
+
+    /// Replace one dinner in a stored plan. 409 `plan_changed` (a concurrent swap)
+    /// is retried once here; a second 409 surfaces as `.planChanged`.
+    public func swap(planID: String, mealIndex: Int) async throws -> BudgetSwapResponse {
+        do {
+            return try await swapOnce(planID: planID, mealIndex: mealIndex)
+        } catch BudgetPlanError.planChanged {
+            return try await swapOnce(planID: planID, mealIndex: mealIndex)
+        }
+    }
+
+    private func swapOnce(planID: String, mealIndex: Int) async throws -> BudgetSwapResponse {
+        var request = try await makeRequest("v1/meal-plan/budget/\(planID)/swap", method: "POST")
+        request.httpBody = try JSONEncoder().encode(["meal_index": mealIndex])
+        return try await send(request, as: BudgetSwapResponse.self)
     }
 
     // MARK: - Plumbing (mirrors PantrySuggestionsClient)
@@ -65,7 +85,7 @@ public struct BudgetPlanClient {
         return request
     }
 
-    private func send(_ request: URLRequest) async throws -> BudgetPlanResponse {
+    private func send<T: Decodable>(_ request: URLRequest, as type: T.Type) async throws -> T {
         let data: Data
         let response: URLResponse
         do {
@@ -81,8 +101,21 @@ public struct BudgetPlanClient {
             throw BudgetPlanError.invalidResponse("non-HTTP response")
         }
         // Map the server's coded errors to typed cases the UI acts on.
+        // 403 pro_required always means paywall; `reason: free_plan_used` just says why.
         if http.statusCode == 403, decodeErrorCode(data) == "pro_required" {
-            throw BudgetPlanError.proRequired
+            throw decodeReason(data) == "free_plan_used" ? BudgetPlanError.freePlanUsed : BudgetPlanError.proRequired
+        }
+        if http.statusCode == 402, decodeErrorCode(data) == "free_swaps_used" {
+            throw BudgetPlanError.freeSwapsUsed
+        }
+        if http.statusCode == 409, decodeErrorCode(data) == "plan_changed" {
+            throw BudgetPlanError.planChanged
+        }
+        // Only the swap path treats these as "try again"; on generation they stay
+        // a generic failure (see `.http`).
+        if http.statusCode == 502, request.url?.path.hasSuffix("/swap") == true,
+           ["swap_constraint_unmet", "appliance_constraint_unmet"].contains(decodeErrorCode(data) ?? "") {
+            throw BudgetPlanError.constraintUnmet
         }
         if http.statusCode == 400, decodeErrorCode(data) == "budget_below_minimum" {
             throw BudgetPlanError.belowMinimum(minBudget: decodeMinBudget(data) ?? 0)
@@ -97,7 +130,7 @@ public struct BudgetPlanClient {
             throw BudgetPlanError.http(http.statusCode)
         }
         do {
-            return try JSONDecoder().decode(BudgetPlanResponse.self, from: data)
+            return try JSONDecoder().decode(T.self, from: data)
         } catch {
             throw BudgetPlanError.invalidResponse("could not decode response: \(error)")
         }
@@ -107,6 +140,10 @@ public struct BudgetPlanClient {
 
     private func decodeErrorCode(_ data: Data) -> String? {
         (try? JSONDecoder().decode(ErrorEnvelope.self, from: data))?.detail.errorCode
+    }
+
+    private func decodeReason(_ data: Data) -> String? {
+        (try? JSONDecoder().decode(ErrorEnvelope.self, from: data))?.detail.reason
     }
 
     private func decodeMinBudget(_ data: Data) -> Int? {
@@ -128,9 +165,16 @@ private struct RequestBody: Encodable {
     let pantryItems: [String]
     let country: String?
     let areaType: String?
+    // v1.1 fields: nil is omitted by the synthesized encoder, keeping an
+    // unconfigured request v1.0-shaped.
+    let storeTier: String?
+    let appliances: [String]?
+    let foodMoods: [String]?
 
     enum CodingKeys: String, CodingKey {
-        case budget, currency, country
+        case budget, currency, country, appliances
+        case storeTier = "store_tier"
+        case foodMoods = "food_moods"
         case householdSize = "household_size"
         case dietaryPreferences = "dietary_preferences"
         case pantryItems = "pantry_items"
@@ -142,10 +186,12 @@ private struct ErrorEnvelope: Decodable {
     let detail: Detail
     struct Detail: Decodable {
         let errorCode: String?
+        let reason: String?
         let minBudget: Int?
         let maxBudget: Int?
         enum CodingKeys: String, CodingKey {
             case errorCode = "error_code"
+            case reason
             case minBudget = "min_budget"
             case maxBudget = "max_budget"
         }

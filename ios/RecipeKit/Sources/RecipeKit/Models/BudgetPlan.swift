@@ -28,19 +28,75 @@ public struct PlannedRecipe: Codable, Identifiable, Hashable {
     public let recipe: Recipe
     public let estimatedCost: CostEstimate
     public let healthSignal: String
+    /// Raw equipment values the dinner needs (`stovetop`, …, or `no_cook`). Absent
+    /// from a v1.0 server response, so it decodes to `[]`. Use `equipmentLabels`
+    /// for display — `no_cook` is never an appliance.
+    public let equipmentUsed: [String]
 
     public var id: String { recipe.recipeId }
 
-    public init(recipe: Recipe, estimatedCost: CostEstimate, healthSignal: String) {
+    public init(recipe: Recipe, estimatedCost: CostEstimate, healthSignal: String, equipmentUsed: [String] = []) {
         self.recipe = recipe
         self.estimatedCost = estimatedCost
         self.healthSignal = healthSignal
+        self.equipmentUsed = equipmentUsed
     }
 
     enum CodingKeys: String, CodingKey {
         case recipe
         case estimatedCost = "estimated_cost"
         case healthSignal = "health_signal"
+        case equipmentUsed = "equipment_used"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        recipe = try c.decode(Recipe.self, forKey: .recipe)
+        estimatedCost = try c.decode(CostEstimate.self, forKey: .estimatedCost)
+        healthSignal = try c.decodeIfPresent(String.self, forKey: .healthSignal) ?? ""
+        equipmentUsed = try c.decodeIfPresent([String].self, forKey: .equipmentUsed) ?? []
+    }
+
+    /// Display labels for `equipmentUsed`, de-duplicated and in server order.
+    public var equipmentLabels: [String] { BudgetEquipment.labels(for: equipmentUsed) }
+
+    /// "No cooking", or the appliance names joined by " + " (empty when unknown).
+    public var equipmentSummary: String { BudgetEquipment.summary(for: equipmentUsed) }
+}
+
+/// Display rules for the server's `equipment_used` values.
+public enum BudgetEquipment {
+    public static let noCook = "no_cook"
+
+    public static func label(for raw: String) -> String {
+        switch raw {
+        case noCook: return "No cooking"
+        case "stovetop": return "Stovetop"
+        case "oven": return "Oven"
+        case "microwave": return "Microwave"
+        case "air_fryer": return "Air fryer"
+        case "slow_cooker": return "Slow cooker"
+        case "rice_cooker": return "Rice cooker"
+        case "blender": return "Blender"
+        case "kettle": return "Kettle"
+        default:
+            let words = raw.replacingOccurrences(of: "_", with: " ")
+            return words.prefix(1).uppercased() + words.dropFirst()
+        }
+    }
+
+    /// `no_cook` alongside real appliances is dropped (it can't be both); a lone
+    /// `no_cook` renders as "No cooking".
+    public static func labels(for raw: [String]) -> [String] {
+        var seen = Set<String>()
+        let unique = raw.filter { seen.insert($0).inserted }
+        let appliances = unique.filter { $0 != noCook }
+        if appliances.isEmpty { return unique.isEmpty ? [] : [label(for: noCook)] }
+        return appliances.map(label(for:))
+    }
+
+    public static func summary(for raw: [String]) -> String {
+        labels(for: raw).joined(separator: " + ")
     }
 }
 
@@ -50,20 +106,102 @@ public struct BudgetPlanResponse: Codable {
     public let budget: Double
     public let minBudget: Int
     public let regionalMultiplier: Double
+    /// Ledger id for the swap endpoint (nil from a v1.0 server).
+    public let planId: String?
+    /// True when this plan consumed the account's one free plan.
+    public let isFree: Bool
+    /// Swaps left on this plan; nil = unlimited (Pro). Always server-supplied —
+    /// the client never counts swaps.
+    public let swapsRemaining: Int?
 
-    public init(recipes: [PlannedRecipe], currency: String, budget: Double, minBudget: Int, regionalMultiplier: Double) {
+    public init(
+        recipes: [PlannedRecipe], currency: String, budget: Double, minBudget: Int, regionalMultiplier: Double,
+        planId: String? = nil, isFree: Bool = false, swapsRemaining: Int? = nil
+    ) {
         self.recipes = recipes
         self.currency = currency
         self.budget = budget
         self.minBudget = minBudget
         self.regionalMultiplier = regionalMultiplier
+        self.planId = planId
+        self.isFree = isFree
+        self.swapsRemaining = swapsRemaining
     }
 
     enum CodingKeys: String, CodingKey {
         case recipes, currency, budget
         case minBudget = "min_budget"
         case regionalMultiplier = "regional_multiplier"
+        case planId = "plan_id"
+        case isFree = "is_free"
+        case swapsRemaining = "swaps_remaining"
     }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        recipes = try c.decode([PlannedRecipe].self, forKey: .recipes)
+        currency = try c.decode(String.self, forKey: .currency)
+        budget = try c.decode(Double.self, forKey: .budget)
+        minBudget = try c.decode(Int.self, forKey: .minBudget)
+        regionalMultiplier = try c.decode(Double.self, forKey: .regionalMultiplier)
+        planId = try c.decodeIfPresent(String.self, forKey: .planId)
+        isFree = try c.decodeIfPresent(Bool.self, forKey: .isFree) ?? false
+        swapsRemaining = try c.decodeIfPresent(Int.self, forKey: .swapsRemaining)
+    }
+
+    /// Sum of the dinners' estimated costs (the plan total before any swap).
+    public var total: Double { recipes.reduce(0) { $0 + $1.estimatedCost.amount } }
+}
+
+/// POST /v1/meal-plan/budget/{plan_id}/swap
+public struct BudgetSwapResponse: Codable {
+    public let planId: String
+    public let mealIndex: Int
+    public let meal: PlannedRecipe
+    public let planTotal: Double
+    public let currency: String
+    public let budget: Double
+    public let swapsUsed: Int
+    public let swapsRemaining: Int?
+
+    public init(
+        planId: String, mealIndex: Int, meal: PlannedRecipe, planTotal: Double,
+        currency: String = "USD", budget: Double, swapsUsed: Int, swapsRemaining: Int?
+    ) {
+        self.planId = planId
+        self.mealIndex = mealIndex
+        self.meal = meal
+        self.planTotal = planTotal
+        self.currency = currency
+        self.budget = budget
+        self.swapsUsed = swapsUsed
+        self.swapsRemaining = swapsRemaining
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case meal, currency, budget
+        case planId = "plan_id"
+        case mealIndex = "meal_index"
+        case planTotal = "plan_total"
+        case swapsUsed = "swaps_used"
+        case swapsRemaining = "swaps_remaining"
+    }
+}
+
+/// Optional v1.1 request fields. Each is sent only when set, so an unconfigured
+/// request stays v1.0-shaped.
+public struct BudgetPlanOptions: Equatable, Sendable {
+    public var storeTier: String?
+    public var appliances: [String]?
+    public var foodMoods: [String]?
+
+    public init(storeTier: String? = nil, appliances: [String]? = nil, foodMoods: [String]? = nil) {
+        self.storeTier = storeTier
+        self.appliances = appliances
+        self.foodMoods = foodMoods
+    }
+
+    public static let none = BudgetPlanOptions()
 }
 
 /// Typed failures the budget-plan endpoint can surface, each mapping to a
@@ -71,6 +209,16 @@ public struct BudgetPlanResponse: Codable {
 public enum BudgetPlanError: Error, Equatable {
     /// 403 — the server rejected a non-Pro caller. The UI shows the paywall.
     case proRequired
+    /// 403 pro_required with reason "free_plan_used" — the free plan is spent.
+    /// Also opens the paywall; kept distinct so Stage 3 can tailor the copy.
+    case freePlanUsed
+    /// 402 free_swaps_used — this free plan is out of swaps. Opens the paywall.
+    case freeSwapsUsed
+    /// 409 plan_changed — a concurrent swap won; retry once.
+    case planChanged
+    /// 502 swap_constraint_unmet / appliance_constraint_unmet — nothing was
+    /// consumed; the user can just try again.
+    case constraintUnmet
     /// 400 — budget below the per-person minimum; carries the server's minimum so
     /// the client can correct the stepper.
     case belowMinimum(minBudget: Int)
@@ -89,8 +237,14 @@ public enum BudgetPlanError: Error, Equatable {
 
     public var userMessage: String {
         switch self {
-        case .proRequired:
+        case .proRequired, .freePlanUsed:
             return "Plan on a Budget is a Platter Pro feature."
+        case .freeSwapsUsed:
+            return "You've used your free swaps for this plan."
+        case .planChanged:
+            return "This plan just changed. Please try again."
+        case .constraintUnmet:
+            return "Couldn't find a swap that fits — try again."
         case .spendCapReached:
             return RecipeProviderError.spendCapMessage
         case .belowMinimum(let minBudget):

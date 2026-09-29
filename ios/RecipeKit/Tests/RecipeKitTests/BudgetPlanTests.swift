@@ -156,3 +156,168 @@ final class BudgetPlanTests: XCTestCase {
         XCTAssertEqual(resp.regionalMultiplier, 1.35, accuracy: 0.001)
     }
 }
+
+// MARK: - Stage 1: swap / equipment / sticker / pantry matcher
+
+final class BudgetPlanStage1Tests: XCTestCase {
+
+    private func decode<T: Decodable>(_ json: String, as: T.Type = T.self) throws -> T {
+        try JSONDecoder().decode(T.self, from: Data(json.utf8))
+    }
+
+    private let recipeJSON = """
+    {"recipe_id":"r1","canonical_video_id":"budget:r1","title":"Egg Fried Rice",
+     "servings":{"amount":2,"unit":null},"prep_time_minutes":null,"cook_time_minutes":15,
+     "total_time_minutes":15,"ingredients":[],"instructions":[],"confidence":null,
+     "source_type":"generated","image_url":null,"image_source":"none","transcript":null}
+    """
+
+    func testV10ResponseStillDecodes() throws {
+        let json = """
+        {"recipes":[{"recipe":\(recipeJSON),"estimated_cost":{"amount":6,"currency":"USD","basis":"x"},"health_signal":"ok"}],
+         "currency":"USD","budget":75,"min_budget":50,"regional_multiplier":1.0}
+        """
+        let resp: BudgetPlanResponse = try decode(json)
+        XCTAssertNil(resp.planId)
+        XCTAssertFalse(resp.isFree)
+        XCTAssertNil(resp.swapsRemaining)
+        XCTAssertEqual(resp.recipes[0].equipmentUsed, [])
+        XCTAssertEqual(resp.total, 6)
+    }
+
+    func testV11ResponseDecodesFreePlanFields() throws {
+        let json = """
+        {"recipes":[{"recipe":\(recipeJSON),"estimated_cost":{"amount":6,"currency":"USD","basis":"x"},
+                     "health_signal":"ok","equipment_used":["stovetop","no_cook"]}],
+         "currency":"USD","budget":75,"min_budget":50,"regional_multiplier":1.0,
+         "plan_id":"p1","is_free":true,"swaps_remaining":3}
+        """
+        let resp: BudgetPlanResponse = try decode(json)
+        XCTAssertEqual(resp.planId, "p1")
+        XCTAssertTrue(resp.isFree)
+        XCTAssertEqual(resp.swapsRemaining, 3)
+        XCTAssertEqual(resp.recipes[0].equipmentLabels, ["Stovetop"])
+    }
+
+    func testSwapResponseDecodesNullSwapsRemainingForPro() throws {
+        let json = """
+        {"plan_id":"p1","meal_index":2,"meal":{"recipe":\(recipeJSON),"estimated_cost":{"amount":7,"currency":"USD","basis":"x"},"equipment_used":["oven"]},
+         "plan_total":41.5,"currency":"USD","budget":75,"swaps_used":1,"swaps_remaining":null}
+        """
+        let resp: BudgetSwapResponse = try decode(json)
+        XCTAssertEqual(resp.mealIndex, 2)
+        XCTAssertEqual(resp.planTotal, 41.5)
+        XCTAssertNil(resp.swapsRemaining)
+        XCTAssertEqual(resp.meal.healthSignal, "")
+    }
+
+    func testNoCookRendersAsNoCookingNeverAnAppliance() {
+        XCTAssertEqual(BudgetEquipment.summary(for: ["no_cook"]), "No cooking")
+        XCTAssertEqual(BudgetEquipment.labels(for: ["no_cook", "oven"]), ["Oven"])
+        XCTAssertEqual(BudgetEquipment.summary(for: ["stovetop", "air_fryer", "stovetop"]), "Stovetop + Air fryer")
+        XCTAssertEqual(BudgetEquipment.summary(for: []), "")
+    }
+
+    // MARK: Sticker mapper
+
+    func testStickerMapping() {
+        let cases: [(String, FoodSticker)] = [
+            ("Chickpea & Spinach Curry", .curry),
+            ("Chicken Tikka Masala", .curry),          // curry beats chicken
+            ("Beef Tacos", .tacos),
+            ("Veggie Pasta Bake", .pasta),
+            ("Spaghetti Carbonara", .pasta),
+            ("Egg Fried Rice", .riceBowl),
+            ("Chicken Ramen", .noodles),                // noodles beat chicken
+            ("Sesame Peanut Noodles", .noodles),
+            ("Lentil Soup", .soup),
+            ("Greek Salad", .salad),
+            ("Garlic Butter Shrimp", .seafood),
+            ("Lemon Herb Chicken Thighs", .chicken),
+            ("Shakshuka", .generic),
+            ("", .generic),
+        ]
+        for (name, expected) in cases {
+            XCTAssertEqual(FoodSticker.category(forMealName: name), expected, name)
+        }
+    }
+
+    func testStickerMatchesWholeWordsOnly() {
+        // "dal" must not fire inside "Randall's"; "cod" not inside "Coddled".
+        XCTAssertEqual(FoodSticker.category(forMealName: "Randall's Special"), .generic)
+        XCTAssertEqual(FoodSticker.category(forMealName: "Coddled Eggs"), .generic)
+    }
+
+    func testStickerAssetNames() {
+        XCTAssertEqual(FoodSticker.riceBowl.assetName, "sticker_food_rice_bowl")
+        XCTAssertEqual(FoodSticker.generic.assetName, "sticker_food_generic")
+    }
+
+    // MARK: Pantry matcher
+
+    private func item(_ name: String, unit: String? = nil, qty: Double? = 1) -> GroceryLineItem {
+        GroceryLineItem(name: name, quantity: qty, unit: unit, category: .other, sources: [])
+    }
+
+    func testNormalizeSingularizes() {
+        XCTAssertEqual(GroceryPantryMatcher.normalize("  Eggs "), "egg")
+        XCTAssertEqual(GroceryPantryMatcher.normalize("Tomatoes"), "tomato")
+        XCTAssertEqual(GroceryPantryMatcher.normalize("Berries"), "berry")
+        XCTAssertEqual(GroceryPantryMatcher.normalize("Hummus"), "hummus")
+    }
+
+    func testMatchIsWordBoundary() {
+        XCTAssertTrue(GroceryPantryMatcher.matches(ingredient: "large eggs", pantry: "egg"))
+        XCTAssertTrue(GroceryPantryMatcher.matches(ingredient: "Egg", pantry: "Eggs"))
+        XCTAssertTrue(GroceryPantryMatcher.matches(ingredient: "roma tomatoes", pantry: "tomato"))
+        XCTAssertFalse(GroceryPantryMatcher.matches(ingredient: "eggplant", pantry: "egg"))
+        XCTAssertFalse(GroceryPantryMatcher.matches(ingredient: "licorice", pantry: "rice"))
+        XCTAssertFalse(GroceryPantryMatcher.matches(ingredient: "salt", pantry: ""))
+    }
+
+    func testMultiWordPantryNeedsContiguousWords() {
+        XCTAssertTrue(GroceryPantryMatcher.matches(ingredient: "extra virgin olive oil", pantry: "olive oil"))
+        XCTAssertFalse(GroceryPantryMatcher.matches(ingredient: "oil for olive garnish", pantry: "olive oil"))
+    }
+
+    func testSplitMovesMatchesAndNeverDeletes() {
+        let items = [item("eggs"), item("spinach"), item("eggplant"), item("tomatoes")]
+        let split = GroceryPantryMatcher.split(items: items, pantryNames: ["Egg", "Tomato", "Milk"])
+        XCTAssertEqual(split.inPantry.map(\.name), ["eggs", "tomatoes"])
+        XCTAssertEqual(split.toBuy.map(\.name), ["spinach", "eggplant"])
+        XCTAssertEqual(split.toBuy.count + split.inPantry.count, items.count)
+        XCTAssertEqual(split.matchedPantryNames, ["Egg", "Tomato"])   // Milk didn't match
+    }
+
+    func testEmptyPantryMatchesNothing() {
+        let split = GroceryPantryMatcher.split(items: [item("eggs")], pantryNames: [" ", ""])
+        XCTAssertTrue(split.inPantry.isEmpty)
+        XCTAssertEqual(split.toBuy.count, 1)
+    }
+}
+
+final class BudgetPlanCardTextTests: XCTestCase {
+    private func planned(prep: Double?, cook: Double?, total: Double?, equipment: [String]) -> PlannedRecipe {
+        let recipe = Recipe(
+            recipeId: "r", canonicalVideoId: "budget:r", title: "T",
+            servings: Servings(amount: 2, unit: nil), prepTimeMinutes: prep,
+            cookTimeMinutes: cook, totalTimeMinutes: total, ingredients: [], instructions: [],
+            confidence: nil, sourceType: .generated, imageUrl: nil, imageSource: .none, transcript: nil
+        )
+        return PlannedRecipe(recipe: recipe, estimatedCost: CostEstimate(amount: 7.6), healthSignal: "", equipmentUsed: equipment)
+    }
+
+    func testCardDetailFull() {
+        XCTAssertEqual(planned(prep: 10, cook: 20, total: nil, equipment: ["stovetop", "oven"]).cardDetail,
+                       "$8 · 30 min · Stovetop + Oven")
+    }
+
+    func testCardDetailNoCookAndMissingTime() {
+        XCTAssertEqual(planned(prep: nil, cook: nil, total: nil, equipment: ["no_cook"]).cardDetail, "$8 · No cooking")
+        XCTAssertEqual(planned(prep: nil, cook: nil, total: nil, equipment: []).cardDetail, "$8")
+    }
+
+    func testTotalTimeWinsOverParts() {
+        XCTAssertEqual(planned(prep: 5, cook: 5, total: 75, equipment: []).timeLabel, "1 hr 15 min")
+    }
+}
