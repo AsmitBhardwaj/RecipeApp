@@ -197,6 +197,19 @@ budget_plans = Table(
     Index("ix_budget_plans_user_created", "user_id", "created_at"),
 )
 
+# Pexels search results keyed by the normalized photo query (app/pipeline/photos.py),
+# so a repeated dish never re-calls the API. `result_json` is the photo dict, or the
+# literal "none" marker for a query with no result (negative entries expire after
+# config.PHOTO_NEGATIVE_CACHE_DAYS). New table → created by `create_all`, no
+# Postgres column migration (same pattern as budget_plans).
+photo_cache = Table(
+    "photo_cache",
+    metadata,
+    Column("query_key", String, primary_key=True),
+    Column("result_json", Text, nullable=False),
+    Column("created_at", Text, nullable=False),
+)
+
 feedback = Table(
     "feedback",
     metadata,
@@ -718,6 +731,26 @@ def update_budget_plan_after_swap(plan_id: str, plan_json: str, expected_swaps_u
             .values(plan_json=plan_json, swaps_used=expected_swaps_used + 1)
         )
         return result.rowcount == 1
+
+
+def get_photo_cache(query_key: str) -> Optional[dict]:
+    with _get_engine().begin() as conn:
+        row = conn.execute(
+            select(photo_cache).where(photo_cache.c.query_key == query_key)
+        ).mappings().fetchone()
+    return dict(row) if row else None
+
+
+def save_photo_cache(query_key: str, result_json: str, created_at: str) -> None:
+    stmt = _insert(photo_cache).values(
+        query_key=query_key, result_json=result_json, created_at=created_at
+    )
+    stmt = stmt.on_conflict_do_update(
+        index_elements=["query_key"],
+        set_={"result_json": stmt.excluded.result_json, "created_at": stmt.excluded.created_at},
+    )
+    with _get_engine().begin() as conn:
+        conn.execute(stmt)
 
 
 def sum_llm_cost_by_account(

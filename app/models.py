@@ -235,6 +235,17 @@ class Recipe(BaseModel):
     #   health_signal          — a short human string, e.g. "High protein, low sugar".
     baseline_cost_estimate: Optional[CostEstimate] = None
     health_signal: Optional[str] = None
+    # Pexels attribution when `image_source == "stock_photo"` (budget-plan meals).
+    # Additive + nullable → lives in the `data` JSON blob, no migration.
+    photo_credit: Optional[PhotoCredit] = None
+
+
+class PhotoCredit(BaseModel):
+    """Pexels attribution for a stock photo (shown as "Photo: <name> / Pexels")."""
+
+    photographer: Optional[str] = None
+    photographer_url: Optional[str] = None
+    pexels_url: Optional[str] = None
 
 
 class Job(BaseModel):

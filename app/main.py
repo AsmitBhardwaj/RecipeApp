@@ -286,7 +286,13 @@ def health_ready() -> JSONResponse:
         )
     return JSONResponse(
         status_code=200,
-        content={"status": "ok", "model": config.OPENAI_MODEL, **db_status},
+        content={
+            "status": "ok",
+            "model": config.OPENAI_MODEL,
+            **db_status,
+            # Whether plan photos can be fetched. Never the key itself.
+            "photos": "configured" if config.PEXELS_API_KEY else "missing",
+        },
     )
 
 

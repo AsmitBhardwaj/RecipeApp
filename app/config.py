@@ -9,6 +9,10 @@ load_dotenv()
 
 OPENAI_API_KEY: str | None = os.getenv("OPENAI_API_KEY")
 PEXELS_API_KEY: str | None = os.getenv("PEXELS_API_KEY")
+# Plan-photo lookups (app/pipeline/photos.py): hard in-process cap on Pexels API
+# calls per rolling hour (Pexels free tier is 200/hour), and the negative-cache TTL.
+PEXELS_MAX_CALLS_PER_HOUR: int = int(os.getenv("PEXELS_MAX_CALLS_PER_HOUR", "150"))
+PHOTO_NEGATIVE_CACHE_DAYS: int = int(os.getenv("PHOTO_NEGATIVE_CACHE_DAYS", "7"))
 
 # "mini" tier, not the flagship — this reformat-caption-into-JSON task does not
 # need a frontier model, and cost matters (see CLAUDE.md §7). Set OPENAI_MODEL
