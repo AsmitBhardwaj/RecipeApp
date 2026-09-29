@@ -32,6 +32,8 @@ struct MainTabView: View {
     /// The app-wide entitlement service (injected at the app root). Drives the
     /// app-open paywall decision (free vs Pro, server-resolved, in-progress states).
     @EnvironmentObject private var subscriptions: SubscriptionService
+    /// Plan-quiz answers (synced); also carries the "build the first week" launch flag.
+    @EnvironmentObject private var cookingPreferences: CookingPreferencesModel
     /// Periodic app-open paywall presentation.
     @State private var showingAppOpenPaywall = false
     /// True for the current foreground activation if it was started by a
@@ -86,7 +88,8 @@ struct MainTabView: View {
             .tag(Tab.recipes)
 
             NavigationStack {
-                MealPlanView(jobs: jobs, cookbooks: cookbooks, userScope: userScope, sync: sync)
+                MealPlanView(jobs: jobs, cookbooks: cookbooks, userScope: userScope, sync: sync,
+                             launchBudget: cookingPreferences.pendingPlanBuild)
             }
             .tabItem {
                 Label("Meal Plan", systemImage: "calendar")
@@ -106,6 +109,9 @@ struct MainTabView: View {
         // muted inactive colour comes from TabBarAppearance (UIKit) at launch.
         .tint(Color.accentColor)
         .task {
+            cookingPreferences.attachSync(sync)
+            // Onboarding just built plan answers: land on Plan on a Budget.
+            if cookingPreferences.pendingPlanBuild { selectedTab = .mealPlan }
             jobs.reconcile()
             sync.triggerSync()  // pull remote changes + flush outbox on launch/sign-in
             await evaluateAppOpenPaywall()
@@ -226,4 +232,5 @@ struct MainTabView: View {
         subscriptions: SubscriptionService()
     )
     .environmentObject(SubscriptionService())
+    .environmentObject(CookingPreferencesModel(userScope: "preview"))
 }

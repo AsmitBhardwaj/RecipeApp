@@ -28,10 +28,14 @@ struct MealPlanView: View {
     private let sync: SyncCoordinator?
 
     /// This Week (manual) vs Plan on a Budget (generated).
-    @State private var mode: PlanMode = .thisWeek
+    @State private var mode: PlanMode
     private enum PlanMode: String, CaseIterable { case thisWeek = "This Week", budget = "Plan on a Budget" }
 
-    init(jobs: PendingJobsModel, cookbooks: CookbooksModel, userScope: String? = nil, sync: SyncCoordinator? = nil) {
+    /// `launchBudget`: open on Plan on a Budget (right after onboarding, which
+    /// builds the first week).
+    init(jobs: PendingJobsModel, cookbooks: CookbooksModel, userScope: String? = nil, sync: SyncCoordinator? = nil,
+         launchBudget: Bool = false) {
+        _mode = State(initialValue: launchBudget ? .budget : .thisWeek)
         self.jobs = jobs
         self.cookbooks = cookbooks
         self.userScope = userScope
@@ -149,7 +153,7 @@ struct MealPlanView: View {
         BudgetPlanContainer(
             householdSize: cookingPreferences.householdSize,
             dietary: Array(cookingPreferences.dietaryPreferences),
-            regionLabel: cookingPreferences.country.flatMap { Locale.current.localizedString(forRegionCode: $0) },
+            regionLabel: cookingPreferences.preferences.store?.shopperLabel,
             userScope: userScope,
             pantryNames: { pantry.items.map(\.name) },
             generate: { budget, household, dietary, pantryItems, options in
@@ -161,8 +165,8 @@ struct MealPlanView: View {
                     // multiplier; either unset falls back to 1.0 server-side.
                     country: cookingPreferences.country,
                     areaType: cookingPreferences.areaType?.apiValue,
-                    // store_tier / appliances / food_moods: empty until Stage 2
-                    // collects them, so the request stays v1.0-shaped.
+                    // store_tier / appliances / food_moods come from the quiz
+                    // answers (see BudgetPlanModel.generate(using:)).
                     options: options
                 )
             },
@@ -176,7 +180,12 @@ struct MealPlanView: View {
             savedPlanStore: SavedBudgetPlanStore(userScope: userScope),
             onFreePlanGenerated: { budgetLibrary.savePlan($0) },
             onMealSwapped: { budgetLibrary.replace($0, with: $1) },
-            onOpenMealPlan: { mode = .thisWeek }
+            onOpenMealPlan: { mode = .thisWeek },
+            launchPending: cookingPreferences.pendingPlanBuild,
+            onLaunch: { model in
+                cookingPreferences.consumePlanBuildRequest()
+                Task { await model.generate(using: cookingPreferences.preferences) }
+            }
         )
     }
 

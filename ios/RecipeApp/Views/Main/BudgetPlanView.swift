@@ -4,6 +4,8 @@
 //
 //  "Plan on a Budget" — a mode inside the Meal Plan tab (docs/budget-meal-planning.md).
 //  Setup → Generating → Results ("Your week", see BudgetPlanResultsView.swift).
+//  Setup is the quiz's Mood → Appliances → Store → Budget screens (PlanQuizFlow),
+//  presented full-screen; the answers live in CookingPreferences.
 //  The server decides who may generate (a free account gets one plan; Pro is
 //  unlimited), so there is no client-side Pro lock: a 403 pro_required opens the
 //  paywall. Budget math (per-person minimum, raise-only) mirrors the server via
@@ -61,10 +63,13 @@ final class BudgetPlanModel: ObservableObject {
     /// One-time "free week saved" toast, shown right after a free plan generates.
     @Published private(set) var showFreeSavedToast = false
 
-    /// Shown in "Estimated for <label> shoppers" until Stage 2 supplies a store.
+    /// The store name in "Estimated for <store> shoppers" (nil for "Other").
     private(set) var regionLabel: String?
 
-    private let dietaryPreferences: [DietaryPreference]
+    private var dietaryPreferences: [DietaryPreference]
+    /// Request options taken from the quiz answers (store tier, appliances, moods);
+    /// when nil the injected `options` closure is used.
+    private var optionsOverride: BudgetPlanOptions?
     private let pantryNames: () -> [String]
     private let options: () -> BudgetPlanOptions
     private let generate: Generate
@@ -188,12 +193,25 @@ final class BudgetPlanModel: ObservableObject {
         budgetInputMessage = nil
     }
 
+    /// Generate from the quiz answers: household, diet, moods, appliances, store
+    /// tier and budget. The answers are already saved; this only feeds the request
+    /// (the country and area type are read from the preferences by the caller).
+    func generate(using prefs: CookingPreferences) async {
+        householdSize = max(1, min(prefs.householdSize, 12))
+        dietaryPreferences = Array(prefs.dietaryPreferences)
+        regionLabel = prefs.store?.shopperLabel
+        optionsOverride = prefs.planOptions
+        if let chosen = prefs.weeklyBudget { budget = chosen }
+        budgetInputMessage = nil
+        await generatePlan()
+    }
+
     func generatePlan() async {
         phase = .generating
         let dietary = dietaryPreferences.filter { $0 != .noRestrictions }.map(\.displayName)
         let pantry = useKitchen ? pantryNames() : []
         do {
-            let resp = try await generate(budget, householdSize, dietary, pantry, options())
+            let resp = try await generate(budget, householdSize, dietary, pantry, optionsOverride ?? options())
             guard !resp.recipes.isEmpty else {
                 phase = .failed("We couldn't build a plan this time. Please try again.")
                 return
@@ -339,6 +357,9 @@ final class BudgetPlanModel: ObservableObject {
 
     func startOver() { phase = .setup }
 
+    /// The quiz was dismissed without building: back to the plan on screen, if any.
+    func cancelSetup() { phase = recipes.isEmpty ? .setup : .results }
+
     private func flashFreeSavedToast() {
         showFreeSavedToast = true
         toastTask?.cancel()
@@ -375,6 +396,11 @@ struct BudgetPlanContainer: View {
     /// screenshotted. Always false in production.
     private let autoGenerate: Bool
     @State private var didAutoGenerate = false
+    /// Right after onboarding: build the first week from the quiz answers as soon
+    /// as the tab opens (showing the loading state, never the quiz again).
+    private let launchPending: Bool
+    private let onLaunch: (BudgetPlanModel) -> Void
+    @State private var didLaunch = false
 
     init(
         householdSize: Int,
@@ -392,9 +418,11 @@ struct BudgetPlanContainer: View {
         onFreePlanGenerated: @escaping (_ recipes: [Recipe]) -> Void = { _ in },
         onMealSwapped: @escaping (_ old: Recipe, _ new: Recipe) -> Void = { _, _ in },
         onOpenMealPlan: @escaping () -> Void,
-        autoGenerate: Bool = false
+        autoGenerate: Bool = false,
+        launchPending: Bool = false,
+        onLaunch: @escaping (BudgetPlanModel) -> Void = { _ in }
     ) {
-        _model = StateObject(wrappedValue: BudgetPlanModel(
+        let built = BudgetPlanModel(
             householdSize: householdSize,
             dietaryPreferences: dietary,
             regionLabel: regionLabel,
@@ -408,15 +436,25 @@ struct BudgetPlanContainer: View {
             savedPlanStore: savedPlanStore,
             onFreePlanGenerated: onFreePlanGenerated,
             onMealSwapped: onMealSwapped
-        ))
+        )
+        // Straight to the loading state: the quiz must not flash before the launch
+        // generation starts.
+        if launchPending { built.phase = .generating }
+        _model = StateObject(wrappedValue: built)
         self.onOpenMealPlan = onOpenMealPlan
         self.userScope = userScope
         self.autoGenerate = autoGenerate
+        self.launchPending = launchPending
+        self.onLaunch = onLaunch
     }
 
     var body: some View {
         BudgetPlanView(model: model, userScope: userScope, onOpenMealPlan: onOpenMealPlan)
             .task {
+                if launchPending && !didLaunch {
+                    didLaunch = true
+                    onLaunch(model)
+                }
                 if autoGenerate && !didAutoGenerate {
                     didAutoGenerate = true
                     await model.generatePlan()
@@ -441,14 +479,18 @@ struct BudgetPlanContainer: View {
 struct BudgetPlanView: View {
     @ObservedObject var model: BudgetPlanModel
     @EnvironmentObject private var subscriptions: SubscriptionService
+    @EnvironmentObject private var cookingPreferences: CookingPreferencesModel
     var userScope: String? = nil
     /// Opens the Meal Plan tab ("Added to Meal Plan ✓").
     var onOpenMealPlan: () -> Void = {}
 
+    @State private var quiz: PlanQuizModel?
+    @State private var showingQuiz = false
+
     var body: some View {
         Group {
             switch model.phase {
-            case .setup: BudgetSetupView(model: model)
+            case .setup: BudgetSetupLanding(onStart: openQuiz)
             case .generating: BudgetGeneratingView()
             case .results: BudgetResultsView(model: model, userScope: userScope, onOpenMealPlan: onOpenMealPlan)
             case .failed(let message): failedState(message)
@@ -462,6 +504,43 @@ struct BudgetPlanView: View {
         ), onDismiss: { model.paywallDismissed(isPro: subscriptions.isProUnlocked) }) {
             PlatterProPaywallView().environmentObject(subscriptions)
         }
+        // Setup runs as a full-screen quiz: the first time Plan on a Budget opens
+        // with no saved plan (existing users answer Mood → Appliances → Store →
+        // Budget once), after "New plan", and after "Change my answers".
+        .fullScreenCover(isPresented: $showingQuiz) {
+            if let quiz {
+                PlanQuizFlow(model: quiz, onExit: cancelQuiz, onFinish: buildWeek)
+            }
+        }
+        .onAppear { if model.phase == .setup && !model.showPaywall { openQuiz() } }
+        .onChange(of: model.phase) { _, phase in
+            // A paywall bounce (generating → setup while the paywall opens) must not
+            // stack the quiz on top of it.
+            if phase == .setup && !model.showPaywall { openQuiz() }
+        }
+    }
+
+    /// Existing answers are pre-filled; the budget pre-fills from the last one used.
+    private func openQuiz() {
+        guard !showingQuiz else { return }
+        let lastBudget = SavedBudgetPlanStore(userScope: userScope).load().map { Int($0.budget.rounded()) }
+        quiz = PlanQuizModel(session: .planSetup(
+            from: cookingPreferences.preferences,
+            deviceCountry: GroceryCountry.guessFromLocale(),
+            lastBudget: lastBudget
+        ))
+        showingQuiz = true
+    }
+
+    private func cancelQuiz() {
+        showingQuiz = false
+        model.cancelSetup()
+    }
+
+    private func buildWeek(_ answers: CookingPreferences) {
+        cookingPreferences.save(answers)
+        showingQuiz = false
+        Task { await model.generate(using: cookingPreferences.preferences) }
     }
 
     private func failedState(_ message: String) -> some View {
@@ -474,11 +553,11 @@ struct BudgetPlanView: View {
                 .font(.subheadline)
                 .foregroundStyle(Color.textSecondary)
                 .multilineTextAlignment(.center)
-            Button("Try Again") { Task { await model.generatePlan() } }
+            Button("Try Again") { Task { await model.generate(using: cookingPreferences.preferences) } }
                 .font(.headline)
                 .foregroundStyle(Color.accentColor)
                 .frame(minHeight: 44)
-            Button("Change budget") { model.startOver() }
+            Button("Change my answers") { model.startOver() }
                 .font(.subheadline)
                 .foregroundStyle(Color.textSecondary)
                 .frame(minHeight: 44)
@@ -488,154 +567,35 @@ struct BudgetPlanView: View {
     }
 }
 
-// MARK: - Setup
+// MARK: - Setup landing
 
-private struct BudgetSetupView: View {
-    @ObservedObject var model: BudgetPlanModel
-    @State private var budgetText: String
-    @FocusState private var isBudgetFocused: Bool
-
-    init(model: BudgetPlanModel) {
-        self.model = model
-        _budgetText = State(initialValue: String(model.budget))
-    }
+/// Shown behind the quiz, and after it's dismissed without building a week.
+private struct BudgetSetupLanding: View {
+    let onStart: () -> Void
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 24) {
-                VStack(alignment: .leading, spacing: -4) {
-                    Text("Plan on a")
-                        .font(.editorialTitle(size: 32, relativeTo: .largeTitle))
-                    Text("budget.")
-                        .font(.scriptAccent(size: 38, relativeTo: .largeTitle))
-                        .foregroundStyle(Color.accentColor)
-                }
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Plan on a budget")
+                .font(.editorialTitle(size: 32, relativeTo: .largeTitle))
+                .accessibilityAddTraits(.isHeader)
+            Text("Answer a few questions and we'll build a week of dinners around your budget, kitchen and store.")
+                .font(.system(size: 16))
+                .foregroundStyle(Color.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
-                .accessibilityElement(children: .combine)
-                .accessibilityLabel("Plan on a budget")
-
-                budgetField
-                householdField
-                kitchenToggle
-
-                Button {
-                    if commitBudgetText() {
-                        Task { await model.generatePlan() }
-                    }
-                } label: {
-                    Text("Generate Plan")
-                        .font(.system(size: 17, weight: .semibold))
-                        .foregroundStyle(Color.white)
-                        .frame(maxWidth: .infinity, minHeight: 56)
-                        .background(Color.accentColor, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-                }
-                .buttonStyle(.plain)
-                .padding(.top, 4)
+            Button(action: onStart) {
+                Text("Plan my week")
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .frame(maxWidth: .infinity, minHeight: 56)
+                    .background(Color.accentColor, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
             }
-            .padding(.horizontal, 24)
+            .buttonStyle(.plain)
             .padding(.top, 8)
-            .padding(.bottom, Theme.Spacing.tabBarClearance)
-            .frame(maxWidth: .infinity, alignment: .leading)
+            Spacer(minLength: 0)
         }
-    }
-
-    private var budgetField: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Weekly budget")
-                .font(.system(size: 16, weight: .semibold))
-            HStack(spacing: 16) {
-                stepperButton("minus", enabled: model.canDecrementBudget) { model.decrementBudget() }
-                    .accessibilityLabel("Decrease budget")
-                HStack(spacing: 1) {
-                    Text("$")
-                        .accessibilityHidden(true)
-                    TextField("Budget", text: $budgetText)
-                        .keyboardType(.decimalPad)
-                        .focused($isBudgetFocused)
-                        .multilineTextAlignment(.leading)
-                        .frame(width: 70)
-                        .onSubmit { commitBudgetText() }
-                        .accessibilityLabel("Weekly budget")
-                        .accessibilityValue("$\(model.budget)")
-                }
-                .font(.system(size: 28, weight: .bold))
-                .monospacedDigit()
-                .frame(minWidth: 90)
-                stepperButton("plus", enabled: model.canIncrementBudget) { model.incrementBudget() }
-                    .accessibilityLabel("Increase budget")
-                Spacer()
-            }
-            Text(model.budgetInputMessage ?? model.minimumCaption)
-                .font(.system(size: 13))
-                .foregroundStyle(model.budgetInputMessage == nil ? Color.textSecondary : Color.orange)
-                .accessibilityLabel(model.budgetInputMessage ?? model.minimumCaption)
-        }
-        .onChange(of: model.budget) { _, newValue in
-            budgetText = String(newValue)
-        }
-        .onChange(of: isBudgetFocused) { _, focused in
-            if !focused { commitBudgetText() }
-        }
-        .toolbar {
-            ToolbarItemGroup(placement: .keyboard) {
-                Spacer()
-                Button("Done") { isBudgetFocused = false }
-            }
-        }
-    }
-
-    @discardableResult
-    private func commitBudgetText() -> Bool {
-        let accepted = model.setBudget(from: budgetText)
-        budgetText = String(model.budget)
-        return accepted
-    }
-
-    private var householdField: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Household size")
-                .font(.system(size: 16, weight: .semibold))
-            HStack(spacing: 16) {
-                stepperButton("minus", enabled: model.householdSize > 1) { model.setHousehold(model.householdSize - 1) }
-                    .accessibilityLabel("Decrease household size")
-                Text("\(model.householdSize)")
-                    .font(.system(size: 28, weight: .bold))
-                    .monospacedDigit()
-                    .frame(minWidth: 90)
-                    .accessibilityLabel("\(model.householdSize) people")
-                stepperButton("plus", enabled: model.householdSize < 12) { model.setHousehold(model.householdSize + 1) }
-                    .accessibilityLabel("Increase household size")
-                Spacer()
-            }
-        }
-    }
-
-    private var kitchenToggle: some View {
-        Toggle(isOn: $model.useKitchen) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Use what's in my Kitchen")
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(Color.textPrimary)
-                Text("Prefer recipes that use ingredients you already have.")
-                    .font(.system(size: 13))
-                    .foregroundStyle(Color.textSecondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-        }
-        .tint(Color.accentColor)
-        .accessibilityLabel("Use what's in my Kitchen")
-    }
-
-    private func stepperButton(_ icon: String, enabled: Bool, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Image(systemName: icon)
-                .font(.system(size: 17, weight: .semibold))
-                .foregroundStyle(enabled ? Color.white : Color.textSecondary)
-                .frame(width: 44, height: 44)
-                .background(enabled ? Color.accentColor : Color.hairline, in: Circle())
-        }
-        .buttonStyle(.plain)
-        .disabled(!enabled)
+        .padding(.horizontal, 24)
+        .padding(.top, 8)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 }
 

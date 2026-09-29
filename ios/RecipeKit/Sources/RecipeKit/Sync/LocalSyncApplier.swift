@@ -21,6 +21,7 @@ public final class LocalSyncApplier {
     private let cookbookStore: CookbookStore
     private let membershipStore: CookbookMembershipStore
     private let pantryStore: PantryStore
+    private let preferencesStore: CookingPreferencesStore
     private let metadata: SyncMetadataStore
 
     /// Recipe ids referenced by pulled library entries whose bodies aren't local
@@ -41,6 +42,7 @@ public final class LocalSyncApplier {
         self.cookbookStore = CookbookStore(suiteName: suiteName, userScope: userId)
         self.membershipStore = CookbookMembershipStore(suiteName: suiteName, userScope: userId)
         self.pantryStore = PantryStore(suiteName: suiteName, userScope: userId)
+        self.preferencesStore = CookingPreferencesStore(suiteName: suiteName, userScope: userId)
         self.metadata = SyncMetadataStore(userId: userId, suiteName: suiteName)
     }
 
@@ -52,6 +54,7 @@ public final class LocalSyncApplier {
         self.cookbookStore = CookbookStore(defaults: defaults, userScope: userId)
         self.membershipStore = CookbookMembershipStore(defaults: defaults, userScope: userId)
         self.pantryStore = PantryStore(defaults: defaults, userScope: userId)
+        self.preferencesStore = CookingPreferencesStore(defaults: defaults, userScope: userId)
         self.metadata = SyncMetadataStore(userId: userId, defaults: defaults)
     }
 
@@ -68,6 +71,7 @@ public final class LocalSyncApplier {
         case .cookbookMembership: applyMembership(change)
         case .library: applyLibrary(change)
         case .pantryItems: applyPantryItems(change)
+        case .cookingPreferences: applyCookingPreferences(change)
         }
         metadata.setUpdatedAt(change.collection, change.itemId, change.updatedAt)
         appliedRevision &+= 1
@@ -98,6 +102,16 @@ public final class LocalSyncApplier {
         }
         guard !change.deleted, let item = SyncCodec.decode(PantryItem.self, from: change.payload) else { return }
         pantryStore.upsert(item)
+    }
+
+    /// The whole preferences record is one item. Onboarding completion never
+    /// regresses: if this device already finished onboarding, a remote copy that
+    /// says otherwise can't undo it (a reinstall, by contrast, adopts the remote
+    /// "completed" and skips the quiz).
+    private func applyCookingPreferences(_ change: SyncChange) {
+        guard !change.deleted, var remote = SyncCodec.decode(CookingPreferences.self, from: change.payload) else { return }
+        if preferencesStore.load()?.hasCompletedOnboarding == true { remote.hasCompletedOnboarding = true }
+        preferencesStore.save(remote)
     }
 
     private func applyCookbook(_ change: SyncChange) {

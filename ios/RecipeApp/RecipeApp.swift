@@ -140,14 +140,11 @@ struct RecipeApp: App {
                 }
                 .environmentObject(CookingPreferencesModel(userScope: "preview"))
             )
-        case "onboardingPrefs", "onboardingRegion":
-            // Screenshot harness for the onboarding preferences (Screen 4) and the
-            // new grocery-region (Screen 5) steps, jumped to directly.
-            let startPage = mode == "onboardingRegion" ? 4 : 3
-            inner = AnyView(
-                OnboardingView(auth: auth, initialPage: startPage)
-                    .environmentObject(CookingPreferencesModel(userScope: "preview"))
-            )
+        case "quizPeople", "quizDiet", "quizMood", "quizAppliances", "quizStore", "quizBudget", "quizSetup":
+            // Screenshot harness for the plan quiz: jumps straight to a step
+            // (`quizSetup` = the 4-step existing-user flow). Answers are seeded so
+            // every earlier step is valid.
+            inner = AnyView(QuizPreviewHarness(mode: mode))
         case "budgetFree", "budgetPro", "budgetResults":
             inner = AnyView(NavigationStack {
                 BudgetPlanContainer(
@@ -227,3 +224,29 @@ struct RecipeApp: App {
     }
     #endif
 }
+
+#if DEBUG
+/// Hosts a `PlanQuizFlow` at a chosen step for the `-gatePreview quiz*` screenshots.
+private struct QuizPreviewHarness: View {
+    @StateObject private var model: PlanQuizModel
+
+    init(mode: String) {
+        let seeded = CookingPreferences(
+            householdSize: 2, appliances: [.stovetop, .oven], storeName: "Aldi", hasCompletedOnboarding: true
+        )
+        var session: PlanQuizSession = mode == "quizSetup"
+            ? .planSetup(from: CookingPreferences(hasCompletedOnboarding: true), deviceCountry: "US")
+            : .onboarding(from: seeded, deviceCountry: "US")
+        let target: PlanQuizStep? = [
+            "quizPeople": .people, "quizDiet": .diet, "quizMood": .mood,
+            "quizAppliances": .appliances, "quizStore": .store, "quizBudget": .budget,
+        ][mode]
+        if let target { while session.step != target && session.advance() {} }
+        _model = StateObject(wrappedValue: PlanQuizModel(session: session))
+    }
+
+    var body: some View {
+        PlanQuizFlow(model: model, onExit: {}, onFinish: { _ in })
+    }
+}
+#endif

@@ -14,7 +14,7 @@ import RecipeKit
 // MARK: - Palette / shared bits
 
 /// Tints from the plan design spec, layered on the app's own sage accent.
-private extension Color {
+extension Color {
     static let planSelectedTint = Color(hex: "EEF3EC")
 }
 
@@ -280,8 +280,8 @@ struct BudgetResultsView: View {
         }
     }
 
-    /// "Estimated for <store name> shoppers · <N> people". Until the store
-    /// picker exists (Stage 2) this uses the region label.
+    /// "Estimated for <store name> shoppers · <N> people" (the store from the quiz;
+    /// "Other" has no name to show, so it reads "your area").
     private var subtitle: String {
         let people = model.householdSize == 1 ? "1 person" : "\(model.householdSize) people"
         let who = model.regionLabel.map { "\($0) shoppers" } ?? "your area"

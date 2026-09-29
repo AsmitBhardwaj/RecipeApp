@@ -22,6 +22,7 @@ struct AccountView: View {
     @State private var deleteError: String?
     @State private var showPaywall = false
     @State private var showingCountryPicker = false
+    @State private var showingPlanPreferences = false
 
     /// Drives the single "Dark Mode" switch. The stored preference keeps three
     /// states so first launch (`.system`) follows the OS; the toggle only ever
@@ -140,6 +141,24 @@ struct AccountView: View {
                             }
                             .accessibilityLabel("Where you live, \(cookingPreferences.areaType?.displayName ?? "Not set")")
                             .accessibilityHint("Adjusts budgets for a city, suburb, or rural area")
+
+                            SettingsDivider()
+                            Button {
+                                showingPlanPreferences = true
+                            } label: {
+                                SettingsRowContent(icon: "slider.horizontal.3", title: "Plan preferences") {
+                                    HStack(spacing: Theme.Spacing.sm) {
+                                        Text(cookingPreferences.needsPlanSetup ? "Not set up" : "")
+                                            .font(.subheadline)
+                                            .foregroundStyle(Color.textSecondary)
+                                            .lineLimit(1)
+                                        SettingsChevron()
+                                    }
+                                }
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("Plan preferences")
+                            .accessibilityHint("Edit people, diet, food mood, appliances, store and weekly budget")
                         }
                     }
 
@@ -221,6 +240,9 @@ struct AccountView: View {
         .sheet(isPresented: $showPaywall) {
             PlatterProPaywallView()
                 .environmentObject(subscriptions)
+        }
+        .sheet(isPresented: $showingPlanPreferences) {
+            PlanPreferencesEditorView()
         }
         .sheet(isPresented: $showingCountryPicker) {
             CountryPickerSheet(selection: countryBinding)
